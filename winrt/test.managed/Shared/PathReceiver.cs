@@ -6,7 +6,7 @@ using Microsoft.VisualStudio.TestPlatform.UnitTestFramework;
 using Microsoft.Graphics.Canvas;
 using Microsoft.Graphics.Canvas.Geometry;
 
-#if WINDOWS_UAP
+#if WINDOWS_UWP
 using System.Numerics;
 #else
 using Microsoft.Graphics.Canvas.Numerics;
@@ -17,7 +17,6 @@ namespace test.managed
     [TestClass]
     public class PathReceiver
     {
-
         private class MyGeometryStreamReader : ICanvasPathReceiver
         {
             bool wasBeginFigureCalled;
@@ -78,8 +77,6 @@ namespace test.managed
             }
         }
 
-        // TODO: reenable VerifySendPathTo test for UAP when fix for DevDiv:1166515 is flighted
-#if !WINDOWS_UAP
         [TestMethod]
         public void VerifySendPathTo()
         {
@@ -110,6 +107,5 @@ namespace test.managed
 
             myStreamReader.Verify();
         }
-#endif
     }
 }
