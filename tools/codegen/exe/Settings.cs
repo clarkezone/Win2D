@@ -2,12 +2,8 @@
 //
 // Licensed under the MIT License. See LICENSE.txt in the project root for license information.
 
-using System.Diagnostics;
-using System.Xml.Serialization;
 using System.Collections.Generic;
-using System.Text;
-using System.IO;
-using System;
+using System.Xml.Serialization;
 
 namespace CodeGen
 {
@@ -134,11 +130,20 @@ namespace CodeGen
                 [XmlAttributeAttribute]
                 public string WinVer;
 
+                [XmlAttributeAttribute]
+                public string IsSupportedCheck;
+
                 [XmlElement("Input")]
                 public List<EffectProperty> Inputs { get; set; }
 
                 [XmlElement("Property")]
                 public List<EffectProperty> Properties { get; set; }
+
+                [XmlElement]
+                public List<string> CustomStaticMethodIdl { get; set; }
+
+                [XmlElement]
+                public List<string> CustomStaticMethodDecl { get; set; }
             }
 
             public class Namespace

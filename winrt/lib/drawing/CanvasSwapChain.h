@@ -13,20 +13,13 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
     using namespace ABI::Windows::UI;
     using namespace WinRTDirectX;
 
-    class CanvasSwapChainManager;
-
     class CanvasSwapChainFactory
-        : public ActivationFactory<
-        ICanvasSwapChainFactory,
-        ICanvasSwapChainStatics,
-        CloakedIid<ICanvasDeviceResourceWithDpiFactoryNative>> ,
-        public PerApplicationManager<CanvasSwapChainFactory, CanvasSwapChainManager>
+        : public AgileActivationFactory<ICanvasSwapChainFactory, ICanvasSwapChainStatics>
+        , private LifespanTracker<CanvasSwapChainFactory>
     {
         InspectableClassStatic(RuntimeClass_Microsoft_Graphics_Canvas_CanvasSwapChain, BaseTrust);
 
     public:
-        CanvasSwapChainFactory();
-
         //
         // ICanvasSwapChainFactory
         //
@@ -78,47 +71,49 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             DirectXPixelFormat format,
             int32_t bufferCount,
             ICanvasSwapChain** swapChain);
-
-        //
-        // ICanvasDeviceResourceWithDpiFactoryNative
-        //
-
-        IFACEMETHOD(GetOrCreate)(
-            ICanvasDevice* device,
-            IUnknown* resource,
-            float dpi,
-            IInspectable** wrapper) override;
     };
 
-    struct CanvasSwapChainTraits
-    {
-        typedef IDXGISwapChain1 resource_t;
-        typedef CanvasSwapChain wrapper_t;
-        typedef ICanvasSwapChain wrapper_interface_t;
-        typedef CanvasSwapChainManager manager_t;
 
-        // IDXGISwapChain1 is used here, rather than IDXGISwapChain2, since
-        // IDXGISwapChain2 is not supported on all platforms and swap chains (ie
-        // a CoreWindow swap chain on Phone doesn't implement IDXGISwapChain2).
-    };
+    class DefaultCanvasSwapChainAdapter;
 
-    class ICanvasSwapChainAdapter
+    class CanvasSwapChainAdapter : public Singleton<CanvasSwapChainAdapter, DefaultCanvasSwapChainAdapter>
     {
     public:
-        virtual ~ICanvasSwapChainAdapter() = default;
+        virtual ~CanvasSwapChainAdapter() = default;
 
         virtual void Sleep(DWORD timeInMs) = 0;
     };
 
+    class DefaultCanvasSwapChainAdapter : public CanvasSwapChainAdapter
+    {
+    public:
+        virtual void Sleep(DWORD timeInMs) override
+        {
+            ::Sleep(timeInMs);
+        }
+    };
+
+
+    // IDXGISwapChain1 is used here, rather than IDXGISwapChain2, since
+    // IDXGISwapChain2 is not supported on all platforms and swap chains (ie
+    // a CoreWindow swap chain on Phone doesn't implement IDXGISwapChain2).
+
     class CanvasSwapChain : RESOURCE_WRAPPER_RUNTIME_CLASS(
-        CanvasSwapChainTraits,
-        IClosable)
+        IDXGISwapChain1,
+        CanvasSwapChain,
+        ICanvasSwapChain,
+        ICanvasResourceCreator,
+        ICanvasResourceCreatorWithDpi,
+        CloakedIid<ICanvasResourceWrapperWithDevice>,
+        CloakedIid<ICanvasResourceWrapperWithDpi>)
     {
         InspectableClass(RuntimeClass_Microsoft_Graphics_Canvas_CanvasSwapChain, BaseTrust);
 
         ClosablePtr<ICanvasDevice> m_device;
+        bool m_isCoreWindowSwapChain;
         float m_dpi;
-        std::shared_ptr<ICanvasSwapChainAdapter> m_adapter;
+        std::shared_ptr<CanvasSwapChainAdapter> m_adapter;
+        std::shared_ptr<bool> m_hasActiveDrawingSession;
 
     public:
         static DirectXPixelFormat const DefaultPixelFormat = PIXEL_FORMAT(B8G8R8A8UIntNormalized);
@@ -126,10 +121,37 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         static CanvasAlphaMode const DefaultCompositionAlphaMode = CanvasAlphaMode::Premultiplied;
         static CanvasAlphaMode const DefaultCoreWindowAlphaMode = CanvasAlphaMode::Ignore;
 
+        static ComPtr<CanvasSwapChain> CreateNew(
+            ICanvasDevice* device,
+            float width,
+            float height,
+            float dpi,
+            DirectXPixelFormat format,
+            int32_t bufferCount,
+            CanvasAlphaMode alphaMode);
+
+        static ComPtr<CanvasSwapChain> CreateNew(
+            ICanvasDevice* device,
+            ICoreWindow* coreWindow,
+            float dpi);
+
+        static ComPtr<CanvasSwapChain> CreateNew(
+            ICanvasDevice* device,
+            ICoreWindow* coreWindow,
+            float width,
+            float height,
+            float dpi,
+            DirectXPixelFormat format,
+            int32_t bufferCount);
+
         CanvasSwapChain(
             ICanvasDevice* device,
-            std::shared_ptr<CanvasSwapChainManager> swapChainManager,
-            std::shared_ptr<ICanvasSwapChainAdapter> swapChainAdapter,
+            IDXGISwapChain1* dxgiSwapChain,
+            float dpi,
+            bool isCoreWindowSwapChain);
+
+        CanvasSwapChain(
+            ICanvasDevice* device,
             IDXGISwapChain1* dxgiSwapChain,
             float dpi);
 
@@ -186,47 +208,26 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         IFACEMETHOD(Close)() override;
 
     private:
-        DXGI_SWAP_CHAIN_DESC1 GetResourceDescription(); // Expected to be called from exception boundary.
+        D2DResourceLock GetResourceLock();
 
-    };
-    
-    class CanvasSwapChainManager : public ResourceManager<CanvasSwapChainTraits>
-    {
-    protected:
-        std::shared_ptr<ICanvasSwapChainAdapter> m_adapter;
+        DXGI_SWAP_CHAIN_DESC1 GetSwapChainDesc(D2DResourceLock const& lock);
 
-    public:
-        CanvasSwapChainManager();
+        DXGI_MATRIX_3X2_F GetMatrixInternal(
+            D2DResourceLock const& lock, 
+            ComPtr<IDXGISwapChain2> const& swapChain);
 
-        virtual ~CanvasSwapChainManager() = default;
+        void SetMatrixInternal(
+            D2DResourceLock const& lock, 
+            ComPtr<IDXGISwapChain2> const& resource, 
+            DXGI_MATRIX_3X2_F* transform);
 
-        ComPtr<CanvasSwapChain> CreateNew(
-            ICanvasDevice* device,
-            float width,
-            float height,
-            float dpi,
-            DirectXPixelFormat format,
-            int32_t bufferCount,
-            CanvasAlphaMode alphaMode);
-
-        ComPtr<CanvasSwapChain> CreateNew(
-            ICanvasDevice* device,
-            ICoreWindow* coreWindow,
-            float dpi);
-
-        ComPtr<CanvasSwapChain> CreateNew(
-            ICanvasDevice* device,
-            ICoreWindow* coreWindow,
-            float width,
-            float height,
-            float dpi,
-            DirectXPixelFormat format,
+        void ResizeBuffersImpl(
+            D2DResourceLock const& lock,
+            float newWidth,
+            float newHeight,
+            float newDpi,
+            DirectXPixelFormat newFormat,
             int32_t bufferCount);
-
-        virtual ComPtr<CanvasSwapChain> CreateWrapper(
-            ICanvasDevice* device,
-            IDXGISwapChain1* resource,
-            float dpi);
     };
 
 }}}}

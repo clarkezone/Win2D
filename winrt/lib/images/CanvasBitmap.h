@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "PolymorphicBitmapmanager.h"
-#include "TextureUtilities.h"
+#include "ScopedBitmapMappedPixelAccess.h"
+#include "WicAdapter.h"
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 {
@@ -16,61 +16,64 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
     using namespace ABI::Windows::Foundation;
     using namespace ABI::Windows::Storage::Streams;
     using namespace ABI::Windows::Storage;
+    using namespace ABI::Windows::UI;
 
-    class CanvasBitmapManager;
+#if WINVER > _WIN32_WINNT_WINBLUE
+    using ABI::Windows::Graphics::Imaging::ISoftwareBitmap;
+#endif
 
-    class ICanvasBitmapResourceCreationAdapter
+    GUID GetGUIDForFileFormat(CanvasBitmapFileFormat fileFormat);
+
+    struct WicBitmapSource
+    {
+        ComPtr<IWICBitmapSource> Source;
+        WICBitmapTransformOptions Transform;
+        bool Indexed;
+    };
+
+    class DefaultBitmapAdapter;
+
+    class CanvasBitmapAdapter : public Singleton<CanvasBitmapAdapter, DefaultBitmapAdapter>
     {
     public:
-        virtual ~ICanvasBitmapResourceCreationAdapter() = default;
+        virtual ~CanvasBitmapAdapter() = default;
 
-        virtual ComPtr<IWICBitmapSource> CreateWICFormatConverter(HSTRING fileName) = 0;
-        virtual ComPtr<IWICBitmapSource> CreateWICFormatConverter(IStream* fileStream) = 0;
+        virtual WicBitmapSource CreateWicBitmapSource(HSTRING fileName, bool tryEnableIndexing = false) = 0;
+        virtual WicBitmapSource CreateWicBitmapSource(IStream* fileStream, bool tryEnableIndexing = false) = 0;
 
-        virtual void SaveLockedMemoryToFile(
-            HSTRING fileName,
-            CanvasBitmapFileFormat fileFormat,
-            float quality,
-            unsigned int width,
-            unsigned int height,
-            float dpiX,
-            float dpiY,
-            ScopedBitmapMappedPixelAccess* bitmapLock) = 0;
-
-        virtual void SaveLockedMemoryToStream(
-            IRandomAccessStream* stream,
-            CanvasBitmapFileFormat fileFormat,
-            float quality,
-            unsigned int width,
-            unsigned int height,
-            float dpiX,
-            float dpiY,
-            ScopedBitmapMappedPixelAccess* bitmapLock) = 0;
+        virtual ComPtr<IWICBitmapSource> CreateFlipRotator(
+            ComPtr<IWICBitmapSource> const& source,
+            WICBitmapTransformOptions transformOptions) = 0;
     };
-    
 
-    [uuid(4684FA78-C721-4531-8CCE-BEA927F95E5D)]
-    class ICanvasBitmapInternal : public IUnknown
+
+    class DefaultBitmapAdapter : public CanvasBitmapAdapter
+    {
+        std::shared_ptr<WicAdapter> m_wicAdapter;
+
+    public:
+        DefaultBitmapAdapter();
+
+        virtual WicBitmapSource CreateWicBitmapSource(HSTRING fileName, bool tryEnableIndexing) override;
+        virtual WicBitmapSource CreateWicBitmapSource(IStream* fileStream, bool tryEnableIndexing) override;
+
+        virtual ComPtr<IWICBitmapSource> CreateFlipRotator(
+            ComPtr<IWICBitmapSource> const& source,
+            WICBitmapTransformOptions transformOptions) override;
+    };
+
+
+    class __declspec(uuid("4684FA78-C721-4531-8CCE-BEA927F95E5D"))
+    ICanvasBitmapInternal : public IUnknown
     {
     public:
         virtual ComPtr<ID2D1Bitmap1> const& GetD2DBitmap() = 0;
     };
 
-    class ICanvasBitmapAdapter
-    {
-    public:
-        virtual ~ICanvasBitmapAdapter() = default;
-
-        virtual ComPtr<IRandomAccessStreamReference> CreateRandomAccessStreamFromUri(IUriRuntimeClass* uri) = 0;
-        virtual ComPtr<IAsyncOperation<StorageFile*>> GetFileFromPathAsync(HSTRING path) = 0;
-    };
 
     class CanvasBitmapFactory :
-        public ActivationFactory<
-            ICanvasBitmapFactory, 
-            ICanvasBitmapStatics,
-            CloakedIid<ICanvasDeviceResourceFactoryNative>>,
-        public PerApplicationPolymorphicBitmapManager
+        public AgileActivationFactory<ICanvasBitmapFactory, ICanvasBitmapStatics>,
+        private LifespanTracker<CanvasBitmapFactory>
     {
         InspectableClassStatic(RuntimeClass_Microsoft_Graphics_Canvas_CanvasBitmap, BaseTrust);
 
@@ -127,6 +130,33 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             CanvasAlphaMode alpha,
             ICanvasBitmap** canvasBitmap) override;
 
+        IFACEMETHOD(CreateFromBytesWithBuffer)(
+            ICanvasResourceCreator* resourceCreator,
+            IBuffer* buffer,
+            int32_t widthInPixels,
+            int32_t heightInPixels,
+            DirectXPixelFormat format,
+            ICanvasBitmap** canvasBitmap) override;
+
+        IFACEMETHOD(CreateFromBytesWithBufferAndDpi)(
+            ICanvasResourceCreator* resourceCreator,
+            IBuffer* buffer,
+            int32_t widthInPixels,
+            int32_t heightInPixels,
+            DirectXPixelFormat format,
+            float dpi,
+            ICanvasBitmap** canvasBitmap) override;
+
+        IFACEMETHOD(CreateFromBytesWithBufferAndDpiAndAlpha)(
+            ICanvasResourceCreator* resourceCreator,
+            IBuffer* buffer,
+            int32_t widthInPixels,
+            int32_t heightInPixels,
+            DirectXPixelFormat format,
+            float dpi,
+            CanvasAlphaMode alpha,
+            ICanvasBitmap** canvasBitmap) override;
+
         IFACEMETHOD(CreateFromColors)(
             ICanvasResourceCreator* resourceCreator,
             uint32_t colorCount,
@@ -153,6 +183,13 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             float dpi,
             CanvasAlphaMode alpha,
             ICanvasBitmap** canvasBitmap) override;
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+        IFACEMETHOD(CreateFromSoftwareBitmap)(
+            ICanvasResourceCreator* resourceCreator,
+            ISoftwareBitmap* sourceBitmap,
+            ICanvasBitmap** canvasBitmap) override;
+#endif        
 
         IFACEMETHOD(LoadAsyncFromHstring)(
             ICanvasResourceCreator* resourceCreator,
@@ -208,39 +245,47 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             CanvasAlphaMode alpha,
             ABI::Windows::Foundation::IAsyncOperation<CanvasBitmap*>** canvasBitmapAsyncOperation) override;
 
-        //
-        // ICanvasDeviceResourceFactoryNative
-        //
-        
-        IFACEMETHOD(GetOrCreate)(
-            ICanvasDevice* device,
-            IUnknown* resource,
-            IInspectable** wrapper) override;
+    private:
+        HRESULT CreateFromDirect3D11SurfaceImpl(
+            ICanvasResourceCreator* resourceCreator,
+            IDirect3DSurface* surface,
+            float dpi,
+            CanvasAlphaMode const* requestedAlpha,
+            ICanvasBitmap** canvasBitmap);
     };
 
+
     void GetPixelBytesImpl(
+        ComPtr<ICanvasDevice> const& device,
         ComPtr<ID2D1Bitmap1> const& d2dBitmap,
         D2D1_RECT_U const& subRectangle,
         uint32_t* valueCount,
         uint8_t** valueElements);
 
+    void GetPixelBytesImpl(
+        ComPtr<ICanvasDevice> const& device,
+        ComPtr<ID2D1Bitmap1> const& d2dBitmap,
+        D2D1_RECT_U const& subRectangle,
+        IBuffer* buffer);
+
     void GetPixelColorsImpl(
+        ComPtr<ICanvasDevice> const& device,
         ComPtr<ID2D1Bitmap1> const& d2dBitmap,
         D2D1_RECT_U const& subRectangle,
         uint32_t* valueCount,
         Color **valueElements);
 
     void SaveBitmapToFileImpl(
+        ComPtr<ID2D1Device> const& d2dDevice,
         ComPtr<ID2D1Bitmap1> const& d2dBitmap,
-        ICanvasBitmapResourceCreationAdapter* adapter,
         HSTRING rawfileName,
         CanvasBitmapFileFormat fileFormat,
         float quality,
         IAsyncAction **resultAsyncAction);
 
     void SaveBitmapToStreamImpl(
+        ComPtr<ID2D1Device> const& d2dDevice,
         ComPtr<ID2D1Bitmap1> const& d2dBitmap,
-        ICanvasBitmapResourceCreationAdapter* adapter,
         ComPtr<IRandomAccessStream> const& stream,
         CanvasBitmapFileFormat fileFormat,
         float quality,
@@ -252,44 +297,53 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         uint32_t valueCount,
         uint8_t* valueElements);
 
+    void SetPixelBytesImpl(
+        ComPtr<ID2D1Bitmap1> const& d2dBitmap,
+        D2D1_RECT_U const& subRectangle,
+        IBuffer* buffer);
+
     void SetPixelColorsImpl(
         ComPtr<ID2D1Bitmap1> const& d2dBitmap,
         D2D1_RECT_U const& subRectangle,
         uint32_t valueCount,
         Color *valueElements);
 
-    HRESULT CopyPixelsFromBitmapImpl(
+    void CopyPixelsFromBitmapImpl(
         ICanvasBitmap* to,
         ICanvasBitmap* from,
-        int32_t* destX = nullptr,
-        int32_t* destY = nullptr,
-        int32_t* sourceRectLeft = nullptr,
-        int32_t* sourceRectTop = nullptr,
-        int32_t* sourceRectWidth = nullptr,
-        int32_t* sourceRectHeight = nullptr);
+        D2D1_POINT_2U const& destPoint,
+        D2D1_RECT_U const* sourceRect);
+
 
     struct CanvasBitmapTraits
     {
         typedef ID2D1Bitmap1 resource_t;
         typedef CanvasBitmap wrapper_t;
         typedef ICanvasBitmap wrapper_interface_t;
-        typedef CanvasBitmapManager manager_t;
     };
 
 
     template<typename TRAITS>
     class CanvasBitmapImpl 
         : public Implements<
-        RuntimeClassFlags<WinRtClassicComMix>,
-        ICanvasBitmap,
-        ICanvasImage,
-        IGraphicsEffectSource,
-        IDirect3DSurface,
-        CloakedIid<ICanvasImageInternal>,
-        CloakedIid<ICanvasBitmapInternal>,
-        CloakedIid<IDirect3DDxgiInterfaceAccess>,
-        ChainInterfaces<MixIn<CanvasBitmapImpl<TRAITS>, ResourceWrapper<TRAITS>>, ABI::Windows::Foundation::IClosable, CloakedIid<ICanvasResourceWrapperNative>>>
-        , public ResourceWrapper<TRAITS>
+            RuntimeClassFlags<WinRtClassicComMix>,
+            ICanvasBitmap,
+            ICanvasImage,
+            IGraphicsEffectSource,
+            IDirect3DSurface,
+            Implements<
+                RuntimeClassFlags<WinRtClassicComMix>,
+                ICanvasResourceCreator,
+                ICanvasResourceCreatorWithDpi,
+                CloakedIid<ICanvasImageInternal>,
+                CloakedIid<ICanvasBitmapInternal>,
+                CloakedIid<IDirect3DDxgiInterfaceAccess>,
+                CloakedIid<ICanvasResourceWrapperWithDevice>>,
+            ChainInterfaces<
+                MixIn<CanvasBitmapImpl<TRAITS>, ResourceWrapper<typename TRAITS::resource_t, typename TRAITS::wrapper_t, typename TRAITS::wrapper_interface_t>>,
+                ABI::Windows::Foundation::IClosable,
+                CloakedIid<ICanvasResourceWrapperNative>>>
+        , public ResourceWrapper<typename TRAITS::resource_t, typename TRAITS::wrapper_t, typename TRAITS::wrapper_interface_t>
     {
         float m_dpi;
 
@@ -297,10 +351,9 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         ComPtr<ICanvasDevice> m_device;
 
         CanvasBitmapImpl(
-            std::shared_ptr<typename TRAITS::manager_t> manager, 
-            ID2D1Bitmap1* resource,
-            ICanvasDevice* device)
-            : ResourceWrapper(manager, resource)
+            ICanvasDevice* device,
+            ID2D1Bitmap1* resource)
+            : ResourceWrapper(resource)
             , m_device(device)
             , m_dpi(GetDpi(resource))
         {}
@@ -438,17 +491,12 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         }
 
         // ICanvasImageInternal
-        ComPtr<ID2D1Image> GetD2DImage(ID2D1DeviceContext*) override
+        virtual ComPtr<ID2D1Image> GetD2DImage(ICanvasDevice*, ID2D1DeviceContext*, GetImageFlags, float /*targetDpi*/, float* realizedDpi) override
         {
+            if (realizedDpi)
+                *realizedDpi = m_dpi;
+
             return GetResource();
-        }
-
-        ICanvasImageInternal::RealizedEffectNode GetRealizedEffectNode(ID2D1DeviceContext* deviceContext, float targetDpi) override
-        {
-            UNREFERENCED_PARAMETER(deviceContext);
-            UNREFERENCED_PARAMETER(targetDpi);
-
-            return RealizedEffectNode{ GetResource(), m_dpi, 0 };
         }
 
         // ICanvasBitmapInternal
@@ -505,12 +553,10 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
                     CheckInPointer(rawfileName);
                     CheckAndClearOutPointer(resultAsyncAction);
 
-                    auto& d2dBitmap = GetResource();
-
                     SaveBitmapToFileImpl(
-                        d2dBitmap.Get(), 
-                        Manager()->GetAdapter(),
-                        rawfileName, 
+                        GetWrappedResource<ID2D1Device>(m_device),
+                        GetResource(),
+                        rawfileName,
                         fileFormat,
                         quality,
                         resultAsyncAction);
@@ -541,11 +587,9 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
                     CheckInPointer(stream);
                     CheckAndClearOutPointer(asyncAction);
 
-                    auto& d2dBitmap = GetResource();
-
                     SaveBitmapToStreamImpl(
-                        d2dBitmap.Get(), 
-                        Manager()->GetAdapter(),
+                        GetWrappedResource<ID2D1Device>(m_device),
+                        GetResource(),
                         stream,
                         fileFormat,
                         quality,
@@ -563,6 +607,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
                     auto& d2dBitmap = GetResource();
 
                     GetPixelBytesImpl(
+                        m_device,
                         d2dBitmap,
                         GetResourceBitmapExtents(d2dBitmap),
                         valueCount, 
@@ -584,10 +629,47 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
                     auto& d2dBitmap = GetResource();
 
                     GetPixelBytesImpl(
+                        m_device,
                         d2dBitmap,
                         ToD2DRectU(left, top, width, height),
                         valueCount, 
                         valueElements);
+                });
+        }
+
+        IFACEMETHODIMP GetPixelBytesWithBuffer(
+            IBuffer* buffer) override
+        {
+            return ExceptionBoundary(
+                [&]
+                {
+                    auto& d2dBitmap = GetResource();
+
+                    GetPixelBytesImpl(
+                        m_device,
+                        d2dBitmap,
+                        GetResourceBitmapExtents(d2dBitmap),
+                        buffer);
+                });
+        }
+
+        IFACEMETHODIMP GetPixelBytesWithBufferAndSubrectangle(
+            IBuffer* buffer,
+            int32_t left,
+            int32_t top,
+            int32_t width,
+            int32_t height) override
+        {
+            return ExceptionBoundary(
+                [&]
+                {
+                    auto& d2dBitmap = GetResource();
+
+                    GetPixelBytesImpl(
+                        m_device,
+                        d2dBitmap,
+                        ToD2DRectU(left, top, width, height),
+                        buffer);
                 });
         }
 
@@ -601,6 +683,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
                     auto& d2dBitmap = GetResource();
 
                     GetPixelColorsImpl(
+                        m_device,
                         d2dBitmap,
                         GetResourceBitmapExtents(d2dBitmap),
                         valueCount, 
@@ -622,6 +705,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
                     auto& d2dBitmap = GetResource();
 
                     GetPixelColorsImpl(
+                        m_device,
                         d2dBitmap,
                         ToD2DRectU(left, top, width, height),
                         valueCount, 
@@ -667,6 +751,40 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
                 });
         }
 
+        IFACEMETHODIMP SetPixelBytesWithBuffer(
+            IBuffer* buffer) override
+        {
+            return ExceptionBoundary(
+                [&]
+                {
+                    auto& d2dBitmap = GetResource();
+
+                    SetPixelBytesImpl(
+                        d2dBitmap,
+                        GetResourceBitmapExtents(d2dBitmap),
+                        buffer);
+                });
+        }
+
+        IFACEMETHODIMP SetPixelBytesWithBufferAndSubrectangle(
+            IBuffer* buffer,
+            int32_t left,
+            int32_t top,
+            int32_t width,
+            int32_t height) override
+        {
+            return ExceptionBoundary(
+                [&]
+                {
+                    auto& d2dBitmap = GetResource();
+
+                    SetPixelBytesImpl(
+                        d2dBitmap,
+                        ToD2DRectU(left, top, width, height),
+                        buffer);
+                });
+        }
+
         IFACEMETHODIMP SetPixelColors(
             uint32_t valueCount,
             ABI::Windows::UI::Color* valueElements) override
@@ -706,26 +824,28 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         }
 
         IFACEMETHODIMP GetBounds(
-            ICanvasDrawingSession *drawingSession,
-            Rect *bounds) override
+            ICanvasResourceCreator* resourceCreator,
+            Rect* bounds) override
         {
-            return GetImageBoundsImpl(this, drawingSession, nullptr, bounds);
+            return GetImageBoundsImpl(this, resourceCreator, nullptr, bounds);
         }
 
         IFACEMETHODIMP GetBoundsWithTransform(
-            ICanvasDrawingSession *drawingSession,
+            ICanvasResourceCreator* resourceCreator,
             Numerics::Matrix3x2 transform,
-            Rect *bounds) override
+            Rect* bounds) override
         {
-            return GetImageBoundsImpl(this, drawingSession, &transform, bounds);
+            return GetImageBoundsImpl(this, resourceCreator, &transform, bounds);
         }
 
         IFACEMETHODIMP CopyPixelsFromBitmap(
             ICanvasBitmap* otherBitmap)
         {
-            return CopyPixelsFromBitmapImpl(
-                this,
-                otherBitmap);
+            return ExceptionBoundary(
+                [&]
+                {
+                    CopyPixelsFromBitmapImpl(this, otherBitmap, D2D1_POINT_2U{ 0, 0 }, nullptr);
+                });
         }
 
         IFACEMETHODIMP CopyPixelsFromBitmapWithDestPoint(
@@ -733,11 +853,11 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             int32_t destX,
             int32_t destY)
         {
-            return CopyPixelsFromBitmapImpl(
-                this,
-                otherBitmap,
-                &destX,
-                &destY);
+            return ExceptionBoundary(
+                [&]
+                {
+                    CopyPixelsFromBitmapImpl(this, otherBitmap, ToD2DPointU(destX, destY), nullptr);
+                });
         }
 
         IFACEMETHODIMP CopyPixelsFromBitmapWithDestPointAndSourceRect(
@@ -749,20 +869,17 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             int32_t sourceRectWidth,
             int32_t sourceRectHeight)
         {      
-            return CopyPixelsFromBitmapImpl(
-                this, 
-                otherBitmap, 
-                &destX, 
-                &destY, 
-                &sourceRectLeft, 
-                &sourceRectTop, 
-                &sourceRectWidth, 
-                &sourceRectHeight);
+            return ExceptionBoundary(
+                [&]
+                {
+                    auto sourceRect = ToD2DRectU(sourceRectLeft, sourceRectTop, sourceRectWidth, sourceRectHeight);
+
+                    CopyPixelsFromBitmapImpl(this, otherBitmap, ToD2DPointU(destX, destY), &sourceRect);
+                });
         }
 
     private:
-
-        D2D1_RECT_U GetResourceBitmapExtents(ComPtr<ID2D1Bitmap1> const d2dBitmap)
+        static D2D1_RECT_U GetResourceBitmapExtents(ComPtr<ID2D1Bitmap1> const& d2dBitmap)
         {
             const D2D1_SIZE_U size = d2dBitmap->GetPixelSize();
             return D2D1::RectU(0, 0, size.width, size.height);
@@ -779,43 +896,29 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         InspectableClass(RuntimeClass_Microsoft_Graphics_Canvas_CanvasBitmap, BaseTrust);
 
     public:
-        CanvasBitmap(
-            std::shared_ptr<CanvasBitmapManager> manager,
-            ID2D1Bitmap1* bitmap,
-            ICanvasDevice* device);
-    };
-
-
-    class CanvasBitmapManager : public ResourceManager<CanvasBitmapTraits>
-    {
-        std::shared_ptr<ICanvasBitmapResourceCreationAdapter> m_adapter;
-
-    public:
-        CanvasBitmapManager(std::shared_ptr<ICanvasBitmapResourceCreationAdapter> adapter);
-
-        ComPtr<CanvasBitmap> CreateNew(
-            ICanvasDevice* canvasDevice, 
+        static ComPtr<CanvasBitmap> CreateNew(
+            ICanvasDevice* canvasDevice,
             HSTRING fileName,
             float dpi,
             CanvasAlphaMode alpha);
 
-        ComPtr<CanvasBitmap> CreateNew(
+        static ComPtr<CanvasBitmap> CreateNew(
             ICanvasDevice* canvasDevice,
             IStream* fileStream,
             float dpi,
             CanvasAlphaMode alpha);
 
-        ComPtr<CanvasBitmap> CreateNew(
+        static ComPtr<CanvasBitmap> CreateNew(
             ICanvasDevice* device,
             uint32_t byteCount,
             BYTE* bytes,
             int32_t widthInPixels,
             int32_t heightInPixels,
-            DirectXPixelFormat format,
             float dpi,
+            DirectXPixelFormat format,
             CanvasAlphaMode alpha);
 
-        ComPtr<CanvasBitmap> CreateNew(
+        static ComPtr<CanvasBitmap> CreateNew(
             ICanvasDevice* device,
             uint32_t colorCount,
             Color* colors,
@@ -824,10 +927,23 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             float dpi,
             CanvasAlphaMode alpha);
 
-        ComPtr<CanvasBitmap> CreateWrapper(
+#if WINVER > _WIN32_WINNT_WINBLUE
+
+        static ComPtr<CanvasBitmap> CreateNew(
+            ICanvasDevice* device,
+            ISoftwareBitmap* sourceBitmap);
+
+#endif
+
+        CanvasBitmap(
             ICanvasDevice* device,
             ID2D1Bitmap1* bitmap);
 
-        ICanvasBitmapResourceCreationAdapter* GetAdapter();
+        // Customize the behavior of ResourceWrapper::GetOuterInspectable. The default doesn't
+        // work for CanvasBitmap because this type directly implements no interfaces at all,
+        // picking everything up from the CanvasBitmapImpl mixin. Therefore its outer IInspectable
+        // belongs directly to the RuntimeClass, which is not at the same address as ICanvasBitmap.
+        typedef RuntimeClass outer_inspectable_t;
     };
+
 }}}}

@@ -1,7 +1,7 @@
 # Win2D
 
 Win2D is an easy-to-use Windows Runtime API for immediate mode 2D graphics
-rendering with GPU acceleration. It is available to C# and C++ developers
+rendering with GPU acceleration. It is available to C#, C++ and VB developers
 writing Windows apps for Windows 8.1, Windows Phone 8.1 and Windows 10. It
 utilizes the power of Direct2D, and integrates seamlessly with XAML and
 CoreWindow.
@@ -15,15 +15,11 @@ CoreWindow.
 ##### How to use it
 - [Documentation](http://microsoft.github.io/Win2D)
 - [Sample code](http://github.com/Microsoft/Win2D-samples) -
-    *also available in the Store for
-    [Windows](http://apps.microsoft.com/windows/en-us/app/win2d-example-gallery/b668cfe1-e280-4c1e-adc1-09b7981ab084) and
-    [Phone](http://www.windowsphone.com/en-us/store/app/win2d-example-gallery/8797b9cb-1443-475f-9a43-dd959de6fcc1)*
+    *also available in the [Store](https://www.microsoft.com/store/apps/9NBLGGGXWT9F)*
 
 ##### More info
-- [Features](http://github.com/Microsoft/Win2D/wiki/Features) - *what's implemented so far*
-- [Backlog](http://github.com/Microsoft/Win2D/wiki/Backlog) - *what we plan to add next*
-- [Team blog](http://blogs.msdn.com/b/win2d)
 - [Report a bug or ask a question](http://github.com/Microsoft/Win2D/issues)
+- [Team blog](http://blogs.msdn.com/b/win2d)
 - [License](http://opensource.org/licenses/MIT)
 - [Contributing](http://github.com/Microsoft/Win2D/blob/master/CONTRIBUTING.md)
 
@@ -44,6 +40,21 @@ void canvasControl_Draw(CanvasControl sender, CanvasDrawEventArgs args)
     args.DrawingSession.DrawText("Hello, world!", 100, 100, Colors.Yellow);
 }
 ```
+or C++/CX:
+```cpp
+void MainPage::CanvasControl_Draw(CanvasControl^ sender, CanvasDrawEventArgs^ args)
+{
+    args->DrawingSession->DrawEllipse(155, 115, 80, 30, Colors::Black, 3);
+    args->DrawingSession->DrawText("Hello, world!", 100, 100, Colors::Yellow);
+}
+```
+or VB:
+```vb
+Sub canvasControl_Draw(sender As CanvasControl, args As CanvasDrawEventArgs)
+    args.DrawingSession.DrawEllipse(155, 115, 80, 30, Colors.Black, 3)
+    args.DrawingSession.DrawText("Hello, world!", 100, 100, Colors.Yellow)
+End Sub
+```
 
 ## Using Win2D
 
@@ -53,7 +64,7 @@ Studio, add the Win2D NuGet package to your project, and get started using the A
 ## Building Win2D from source
 
 ##### Requirements
-- Recommended: Visual Studio 2015
+- Recommended: Visual Studio 2015 with Update 3 and Universal Windows App Development Tools 1.4.1
 - Visual Studio 2013 Update 5 is also supported (for Windows 8.1 or Windows Phone 8.1 development only)
 
 ##### Clone Repository
@@ -79,3 +90,8 @@ Studio, add the Win2D NuGet package to your project, and get started using the A
 
 Locally built versions of Win2D are marked as prerelease, so you must change the 'Stable 
 Only' setting to 'Include Prerelease' when adding them to your project.
+
+---
+This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
+For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact
+[opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.

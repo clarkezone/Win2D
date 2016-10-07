@@ -69,6 +69,19 @@ namespace Microsoft
             }
 
             template<>
+            inline std::wstring ToString<D2D_SIZE_U>(D2D_SIZE_U const& value)
+            {
+                wchar_t buf[256];
+                ThrowIfFailed(StringCchPrintf(
+                    buf,
+                    _countof(buf),
+                    L"D2D_SIZE_U{%u,%u}",
+                    value.width,
+                    value.height));
+                return buf;
+            }
+
+            template<>
             inline std::wstring ToString<D2D1_ROUNDED_RECT>(D2D1_ROUNDED_RECT const& roundedRect)
             {
                 wchar_t buf[256];
@@ -174,6 +187,7 @@ namespace Microsoft
             TO_STRING(ID2D1DeviceContext1);
             TO_STRING(ID2D1Factory);
             TO_STRING(IDWriteTextFormat);
+            TO_STRING(IDWriteTextFormat1);
             TO_STRING(IDXGIDevice3);
             TO_STRING(IDirect3DDevice);
             TO_STRING(IInspectable);
@@ -193,6 +207,12 @@ namespace Microsoft
             TO_STRING(IDWriteTextLayout);
             TO_STRING(IDispatchedHandler);
             TO_STRING(IAsyncAction);
+            TO_STRING(IDWriteInlineObject);
+            TO_STRING(ID2D1TransformNode);
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+            TO_STRING(ID2D1GradientMesh);
+#endif
 
 #undef TO_STRING
 
@@ -343,6 +363,21 @@ namespace Microsoft
             }
 
             template<>
+            inline std::wstring ToString<DWRITE_MATRIX>(DWRITE_MATRIX const& value)
+            {
+                wchar_t buf[256];
+                ThrowIfFailed(StringCchPrintf(
+                    buf,
+                    _countof(buf),
+                    L"DWRITE_MATRIX{m11=%f,m12=%f,m21=%f,m22=%f,dx=%f,dy=%f}",
+                    value.m11, value.m12,
+                    value.m21, value.m22,
+                    value.dx, value.dy));
+
+                return buf;
+            }
+
+            template<>
             inline std::wstring ToString<ABI::Windows::Foundation::Rect>(ABI::Windows::Foundation::Rect const& value)
             {
                 wchar_t buf[256];
@@ -363,7 +398,7 @@ namespace Microsoft
                 ThrowIfFailed(StringCchPrintf(
                     buf,
                     _countof(buf),
-                    L"D2D1_POINT_2U{X=%f,Y=%f}",
+                    L"D2D1_POINT_2U{X=%u,Y=%u}",
                     value.x, value.y));
 
                 return buf;
@@ -376,7 +411,7 @@ namespace Microsoft
                 ThrowIfFailed(StringCchPrintf(
                     buf,
                     _countof(buf),
-                    L"D2D1_RECT_U{l=%f,t=%f,r=%f,b=%f}",
+                    L"D2D1_RECT_U{l=%u,t=%u,r=%u,b=%u}",
                     value.left, value.top, value.right, value.bottom));
 
                 return buf;
@@ -409,6 +444,19 @@ namespace Microsoft
             }
 
             template<>
+            inline std::wstring ToString<Numerics::Vector4>(Numerics::Vector4 const& value)
+            {
+                wchar_t buf[256];
+                ThrowIfFailed(StringCchPrintf(
+                    buf,
+                    _countof(buf),
+                    L"Vector4{X=%f,Y=%f,Z=%f,W=%f}",
+                    value.X, value.Y, value.Z, value.W));
+
+                return buf;
+            }
+
+            template<>
             inline std::wstring ToString<D2D1_TRIANGLE>(D2D1_TRIANGLE const& value)
             {
                 wchar_t buf[256];
@@ -420,6 +468,24 @@ namespace Microsoft
                     ToString(value.point2).c_str(),
                     ToString(value.point3).c_str()));
 
+                return buf;
+            }
+
+            template<>
+            inline std::wstring ToString<std::vector<BYTE>>(std::vector<BYTE> const& value)
+            {
+                return L"std::vector<BYTE>";
+            }
+
+            template<>
+            inline std::wstring ToString<unsigned short>(unsigned short const& value)
+            {
+                wchar_t buf[256];
+                ThrowIfFailed(StringCchPrintf(
+                    buf,
+                    _countof(buf),
+                    L"{%hu}", 
+                    value));
                 return buf;
             }
 
@@ -552,6 +618,25 @@ namespace Microsoft
                 END_ENUM(D2D1_FILL_MODE);
             }
 
+            ENUM_TO_STRING(D2D1_BUFFER_PRECISION)
+            {
+                ENUM_VALUE(D2D1_BUFFER_PRECISION_UNKNOWN);
+                ENUM_VALUE(D2D1_BUFFER_PRECISION_8BPC_UNORM);
+                ENUM_VALUE(D2D1_BUFFER_PRECISION_8BPC_UNORM_SRGB);
+                ENUM_VALUE(D2D1_BUFFER_PRECISION_16BPC_UNORM);
+                ENUM_VALUE(D2D1_BUFFER_PRECISION_16BPC_FLOAT);
+                ENUM_VALUE(D2D1_BUFFER_PRECISION_32BPC_FLOAT);
+                END_ENUM(D2D1_BUFFER_PRECISION);
+            }
+
+            ENUM_TO_STRING(SamplerCoordinateMapping)
+            {
+                ENUM_VALUE(SamplerCoordinateMapping_Unknown);
+                ENUM_VALUE(SamplerCoordinateMapping_OneToOne);
+                ENUM_VALUE(SamplerCoordinateMapping_Offset);
+                END_ENUM(SamplerCoordinateMapping);
+            }
+
             template<>
             inline std::wstring ToString<__int64>(__int64 const& value)
             {
@@ -578,6 +663,9 @@ namespace Microsoft
             {
                 ENUM_VALUE(DWRITE_LINE_SPACING_METHOD_DEFAULT);
                 ENUM_VALUE(DWRITE_LINE_SPACING_METHOD_UNIFORM);
+#if WINVER > _WIN32_WINNT_WINBLUE
+                ENUM_VALUE(DWRITE_LINE_SPACING_METHOD_PROPORTIONAL);
+#endif
                 END_ENUM(DWRITE_LINE_SPACING_METHOD);
             }
 
@@ -827,6 +915,24 @@ namespace Microsoft
                 END_ENUM(D2D1_INTERPOLATION_MODE);
             }
 
+            ENUM_TO_STRING(D2D1_BITMAP_INTERPOLATION_MODE)
+            {
+                ENUM_VALUE(D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR);
+                ENUM_VALUE(D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+                END_ENUM(D2D1_BITMAP_INTERPOLATION_MODE);
+            }
+            
+#if WINVER > _WIN32_WINNT_WINBLUE
+
+            ENUM_TO_STRING(D2D1_SPRITE_OPTIONS)
+            {
+                ENUM_VALUE(D2D1_SPRITE_OPTIONS_NONE);
+                ENUM_VALUE(D2D1_SPRITE_OPTIONS_CLAMP_TO_SOURCE_RECTANGLE);
+                END_ENUM(D2D1_SPRITE_OPTIONS);
+            }
+
+#endif
+
             ENUM_TO_STRING(CanvasAlphaMode)
             {
                 ENUM_VALUE(CanvasAlphaMode::Ignore);
@@ -941,6 +1047,35 @@ namespace Microsoft
                 END_ENUM(DWRITE_OPTICAL_ALIGNMENT);
             }
 
+            ENUM_TO_STRING(DWRITE_MEASURING_MODE)
+            {
+                ENUM_VALUE(DWRITE_MEASURING_MODE_NATURAL);
+                ENUM_VALUE(DWRITE_MEASURING_MODE_GDI_CLASSIC);
+                ENUM_VALUE(DWRITE_MEASURING_MODE_GDI_NATURAL);
+                END_ENUM(DWRITE_MEASURING_MODE);
+            }
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+            ENUM_TO_STRING(DWRITE_FONT_PROPERTY_ID)
+            {
+                ENUM_VALUE(DWRITE_FONT_PROPERTY_ID_NONE);
+                ENUM_VALUE(DWRITE_FONT_PROPERTY_ID_FAMILY_NAME);
+                ENUM_VALUE(DWRITE_FONT_PROPERTY_ID_PREFERRED_FAMILY_NAME);
+                ENUM_VALUE(DWRITE_FONT_PROPERTY_ID_FACE_NAME);
+                ENUM_VALUE(DWRITE_FONT_PROPERTY_ID_FULL_NAME);
+                ENUM_VALUE(DWRITE_FONT_PROPERTY_ID_WIN32_FAMILY_NAME);
+                ENUM_VALUE(DWRITE_FONT_PROPERTY_ID_POSTSCRIPT_NAME);
+                ENUM_VALUE(DWRITE_FONT_PROPERTY_ID_DESIGN_SCRIPT_LANGUAGE_TAG);
+                ENUM_VALUE(DWRITE_FONT_PROPERTY_ID_SUPPORTED_SCRIPT_LANGUAGE_TAG);
+                ENUM_VALUE(DWRITE_FONT_PROPERTY_ID_SEMANTIC_TAG);
+                ENUM_VALUE(DWRITE_FONT_PROPERTY_ID_WEIGHT);
+                ENUM_VALUE(DWRITE_FONT_PROPERTY_ID_STRETCH);
+                ENUM_VALUE(DWRITE_FONT_PROPERTY_ID_STYLE);
+                ENUM_VALUE(DWRITE_FONT_PROPERTY_ID_TOTAL);
+                END_ENUM(DWRITE_FONT_PROPERTY_ID);
+            }
+#endif
+
             ENUM_TO_STRING(CanvasFigureFill)
             {
                 ENUM_VALUE(CanvasFigureFill::Default);
@@ -984,6 +1119,415 @@ namespace Microsoft
                 END_ENUM(CanvasFigureLoop);
             }
 
+            ENUM_TO_STRING(CanvasTextRenderingMode)
+            {
+                ENUM_VALUE(CanvasTextRenderingMode::Default);
+                ENUM_VALUE(CanvasTextRenderingMode::Aliased);
+                ENUM_VALUE(CanvasTextRenderingMode::GdiClassic);
+                ENUM_VALUE(CanvasTextRenderingMode::GdiNatural);
+                ENUM_VALUE(CanvasTextRenderingMode::Natural);
+                ENUM_VALUE(CanvasTextRenderingMode::NaturalSymmetric);
+                ENUM_VALUE(CanvasTextRenderingMode::Outline);
+#if WINVER > _WIN32_WINNT_WINBLUE
+                ENUM_VALUE(CanvasTextRenderingMode::NaturalSymmetricDownsampled);
+#endif
+                END_ENUM(CanvasTextRenderingMode);
+            }
+
+            ENUM_TO_STRING(CanvasTextGridFit)
+            {
+                ENUM_VALUE(CanvasTextGridFit::Default);
+                ENUM_VALUE(CanvasTextGridFit::Disable);
+                ENUM_VALUE(CanvasTextGridFit::Enable);
+                END_ENUM(CanvasTextGridFit);
+            }
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+            ENUM_TO_STRING(CanvasGradientMeshPatchEdge)
+            {
+                ENUM_VALUE(CanvasGradientMeshPatchEdge::Aliased);
+                ENUM_VALUE(CanvasGradientMeshPatchEdge::Antialiased);
+                ENUM_VALUE(CanvasGradientMeshPatchEdge::AliasedAndInflated);
+                END_ENUM(CanvasGradientMeshPatchEdge);
+            }
+
+            template<>
+            inline std::wstring ToString<CanvasGradientMeshPatch>(CanvasGradientMeshPatch const& value)
+            {
+                return L"CanvasGradientMeshPatch";
+            }
+
+            template<>
+            inline std::wstring ToString<D2D1_GRADIENT_MESH_PATCH>(D2D1_GRADIENT_MESH_PATCH const& value)
+            {
+                return L"D2D1_GRADIENT_MESH_PATCH";
+            }
+
+            template<>
+            inline std::wstring ToString<DWRITE_FONT_PROPERTY>(DWRITE_FONT_PROPERTY const& value)
+            {
+                wchar_t buf[256];
+                ThrowIfFailed(StringCchPrintf(
+                    buf,
+                    _countof(buf),
+                    L"DWRITE_FONT_PROPERTY{%i,%s,%s}",
+                    value.propertyId,
+                    value.propertyValue,
+                    value.localeName));
+                return buf;
+            }
+
+            ENUM_TO_STRING(CanvasLineSpacingMode)
+            {
+                ENUM_VALUE(CanvasLineSpacingMode::Default);
+                ENUM_VALUE(CanvasLineSpacingMode::Uniform);
+                ENUM_VALUE(CanvasLineSpacingMode::Proportional);
+                END_ENUM(CanvasLineSpacingMode);
+            }
+#endif
+
+            ENUM_TO_STRING(CanvasTrimmingSign)
+            {
+                ENUM_VALUE(CanvasTrimmingSign::None);
+                ENUM_VALUE(CanvasTrimmingSign::Ellipsis);
+                END_ENUM(CanvasTrimmingSign);
+            }
+
+            ENUM_TO_STRING(DWRITE_OUTLINE_THRESHOLD)
+            {
+                ENUM_VALUE(DWRITE_OUTLINE_THRESHOLD_ANTIALIASED);
+                ENUM_VALUE(DWRITE_OUTLINE_THRESHOLD_ALIASED);
+                END_ENUM(DWRITE_OUTLINE_THRESHOLD);
+            }
+
+            ENUM_TO_STRING(DWRITE_NUMBER_SUBSTITUTION_METHOD)
+            {
+                ENUM_VALUE(DWRITE_NUMBER_SUBSTITUTION_METHOD_FROM_CULTURE);
+                ENUM_VALUE(DWRITE_NUMBER_SUBSTITUTION_METHOD_CONTEXTUAL);
+                ENUM_VALUE(DWRITE_NUMBER_SUBSTITUTION_METHOD_NONE);
+                ENUM_VALUE(DWRITE_NUMBER_SUBSTITUTION_METHOD_NATIONAL);
+                ENUM_VALUE(DWRITE_NUMBER_SUBSTITUTION_METHOD_TRADITIONAL);
+                END_ENUM(DWRITE_NUMBER_SUBSTITUTION_METHOD);
+            }
+
+            ENUM_TO_STRING(CanvasFontFileFormatType)
+            {
+                ENUM_VALUE(CanvasFontFileFormatType::Cff);
+                ENUM_VALUE(CanvasFontFileFormatType::TrueType);
+                ENUM_VALUE(CanvasFontFileFormatType::TrueTypeCollection);
+                ENUM_VALUE(CanvasFontFileFormatType::Type1);
+                ENUM_VALUE(CanvasFontFileFormatType::Vector);
+                ENUM_VALUE(CanvasFontFileFormatType::Bitmap);
+                ENUM_VALUE(CanvasFontFileFormatType::Unknown);
+                ENUM_VALUE(CanvasFontFileFormatType::RawCff);
+                END_ENUM(CanvasFontFileFormatType);
+            }
+
+            ENUM_TO_STRING(CanvasFontSimulations)
+            {
+                ENUM_VALUE(CanvasFontSimulations::None);
+                ENUM_VALUE(CanvasFontSimulations::Bold);
+                ENUM_VALUE(CanvasFontSimulations::Oblique);
+                END_ENUM(CanvasFontSimulations);
+            }
+
+            ENUM_TO_STRING(CanvasFontPropertyIdentifier)
+            {
+                ENUM_VALUE(CanvasFontPropertyIdentifier::None);
+                ENUM_VALUE(CanvasFontPropertyIdentifier::FamilyName);
+                ENUM_VALUE(CanvasFontPropertyIdentifier::PreferredFamilyName);
+                ENUM_VALUE(CanvasFontPropertyIdentifier::FaceName);
+                ENUM_VALUE(CanvasFontPropertyIdentifier::FullName);
+                ENUM_VALUE(CanvasFontPropertyIdentifier::Win32FamilyName);
+                ENUM_VALUE(CanvasFontPropertyIdentifier::PostscriptName);
+                ENUM_VALUE(CanvasFontPropertyIdentifier::DesignScriptLanguageTag);
+                ENUM_VALUE(CanvasFontPropertyIdentifier::SupportedScriptLanguageTag);
+                ENUM_VALUE(CanvasFontPropertyIdentifier::SemanticTag);
+                ENUM_VALUE(CanvasFontPropertyIdentifier::Weight);
+                ENUM_VALUE(CanvasFontPropertyIdentifier::Stretch);
+                ENUM_VALUE(CanvasFontPropertyIdentifier::Style);
+                ENUM_VALUE(CanvasFontPropertyIdentifier::Total);
+                END_ENUM(CanvasFontPropertyIdentifier);
+            }
+
+            ENUM_TO_STRING(DWRITE_INFORMATIONAL_STRING_ID)
+            {
+                ENUM_VALUE(DWRITE_INFORMATIONAL_STRING_NONE);
+                ENUM_VALUE(DWRITE_INFORMATIONAL_STRING_COPYRIGHT_NOTICE);
+                ENUM_VALUE(DWRITE_INFORMATIONAL_STRING_VERSION_STRINGS);
+                ENUM_VALUE(DWRITE_INFORMATIONAL_STRING_TRADEMARK);
+                ENUM_VALUE(DWRITE_INFORMATIONAL_STRING_MANUFACTURER);
+                ENUM_VALUE(DWRITE_INFORMATIONAL_STRING_DESIGNER);
+                ENUM_VALUE(DWRITE_INFORMATIONAL_STRING_DESIGNER_URL);
+                ENUM_VALUE(DWRITE_INFORMATIONAL_STRING_DESCRIPTION);
+                ENUM_VALUE(DWRITE_INFORMATIONAL_STRING_FONT_VENDOR_URL);
+                ENUM_VALUE(DWRITE_INFORMATIONAL_STRING_LICENSE_DESCRIPTION);
+                ENUM_VALUE(DWRITE_INFORMATIONAL_STRING_LICENSE_INFO_URL);
+                ENUM_VALUE(DWRITE_INFORMATIONAL_STRING_WIN32_FAMILY_NAMES);
+                ENUM_VALUE(DWRITE_INFORMATIONAL_STRING_WIN32_SUBFAMILY_NAMES);
+                ENUM_VALUE(DWRITE_INFORMATIONAL_STRING_PREFERRED_FAMILY_NAMES);
+                ENUM_VALUE(DWRITE_INFORMATIONAL_STRING_PREFERRED_SUBFAMILY_NAMES);
+                ENUM_VALUE(DWRITE_INFORMATIONAL_STRING_SAMPLE_TEXT);
+                ENUM_VALUE(DWRITE_INFORMATIONAL_STRING_FULL_NAME);
+                ENUM_VALUE(DWRITE_INFORMATIONAL_STRING_POSTSCRIPT_NAME);
+                ENUM_VALUE(DWRITE_INFORMATIONAL_STRING_POSTSCRIPT_CID_NAME);
+                END_ENUM(DWRITE_INFORMATIONAL_STRING_ID);
+            }
+
+            ENUM_TO_STRING(CanvasTextMeasuringMode)
+            {
+                ENUM_VALUE(CanvasTextMeasuringMode::Natural);
+                ENUM_VALUE(CanvasTextMeasuringMode::GdiNatural);
+                ENUM_VALUE(CanvasTextMeasuringMode::GdiClassic);
+                END_ENUM(CanvasTextMeasuringMode);
+            }
+
+            ENUM_TO_STRING(CanvasGlyphOrientation)
+            {
+                ENUM_VALUE(CanvasGlyphOrientation::Upright);
+                ENUM_VALUE(CanvasGlyphOrientation::Clockwise90Degrees);
+                ENUM_VALUE(CanvasGlyphOrientation::Clockwise180Degrees);
+                ENUM_VALUE(CanvasGlyphOrientation::Clockwise270Degrees);
+                END_ENUM(CanvasGlyphOrientation);
+            }
+
+            ENUM_TO_STRING(EffectBorderMode)
+            {
+                ENUM_VALUE(EffectBorderMode::Soft);
+                ENUM_VALUE(EffectBorderMode::Hard);
+                END_ENUM(EffectBorderMode);
+            }
+
+            ENUM_TO_STRING(DWRITE_FONT_FEATURE_TAG)
+            {
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_ALTERNATIVE_FRACTIONS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_PETITE_CAPITALS_FROM_CAPITALS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_SMALL_CAPITALS_FROM_CAPITALS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_CONTEXTUAL_ALTERNATES);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_CASE_SENSITIVE_FORMS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_GLYPH_COMPOSITION_DECOMPOSITION);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_CONTEXTUAL_LIGATURES);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_CAPITAL_SPACING);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_CONTEXTUAL_SWASH);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_CURSIVE_POSITIONING);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_DEFAULT);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_DISCRETIONARY_LIGATURES);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_EXPERT_FORMS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_FRACTIONS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_FULL_WIDTH);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_HALF_FORMS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_HALANT_FORMS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_ALTERNATE_HALF_WIDTH);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_HISTORICAL_FORMS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_HORIZONTAL_KANA_ALTERNATES);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_HISTORICAL_LIGATURES);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_HALF_WIDTH);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_HOJO_KANJI_FORMS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_JIS04_FORMS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_JIS78_FORMS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_JIS83_FORMS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_JIS90_FORMS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_KERNING);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_STANDARD_LIGATURES);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_LINING_FIGURES);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_LOCALIZED_FORMS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_MARK_POSITIONING);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_MATHEMATICAL_GREEK);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_MARK_TO_MARK_POSITIONING);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_ALTERNATE_ANNOTATION_FORMS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_NLC_KANJI_FORMS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_OLD_STYLE_FIGURES);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_ORDINALS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_PROPORTIONAL_ALTERNATE_WIDTH);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_PETITE_CAPITALS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_PROPORTIONAL_FIGURES);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_PROPORTIONAL_WIDTHS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_QUARTER_WIDTHS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_REQUIRED_LIGATURES);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_RUBY_NOTATION_FORMS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_STYLISTIC_ALTERNATES);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_SCIENTIFIC_INFERIORS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_SMALL_CAPITALS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_SIMPLIFIED_FORMS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_1);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_2);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_3);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_4);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_5);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_6);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_7);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_8);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_9);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_10);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_11);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_12);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_13);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_14);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_15);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_16);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_17);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_18);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_19);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_STYLISTIC_SET_20);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_SUBSCRIPT);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_SUPERSCRIPT);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_SWASH);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_TITLING);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_TRADITIONAL_NAME_FORMS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_TABULAR_FIGURES);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_TRADITIONAL_FORMS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_THIRD_WIDTHS);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_UNICASE);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_VERTICAL_WRITING);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_VERTICAL_ALTERNATES_AND_ROTATION);
+                ENUM_VALUE(DWRITE_FONT_FEATURE_TAG_SLASHED_ZERO);
+                END_ENUM(DWRITE_FONT_FEATURE_TAG);
+            }
+
+            ENUM_TO_STRING(CanvasTypographyFeatureName)
+            {
+                ENUM_VALUE(CanvasTypographyFeatureName::None);
+                ENUM_VALUE(CanvasTypographyFeatureName::Default);
+                ENUM_VALUE(CanvasTypographyFeatureName::VerticalWriting);
+                ENUM_VALUE(CanvasTypographyFeatureName::VerticalAlternatesAndRotation);
+                ENUM_VALUE(CanvasTypographyFeatureName::AlternativeFractions);
+                ENUM_VALUE(CanvasTypographyFeatureName::PetiteCapitalsFromCapitals);
+                ENUM_VALUE(CanvasTypographyFeatureName::SmallCapitalsFromCapitals);
+                ENUM_VALUE(CanvasTypographyFeatureName::ContextualAlternates);
+                ENUM_VALUE(CanvasTypographyFeatureName::CaseSensitiveForms);
+                ENUM_VALUE(CanvasTypographyFeatureName::GlyphCompositionDecomposition);
+                ENUM_VALUE(CanvasTypographyFeatureName::ContextualLigatures);
+                ENUM_VALUE(CanvasTypographyFeatureName::CapitalSpacing);
+                ENUM_VALUE(CanvasTypographyFeatureName::ContextualSwash);
+                ENUM_VALUE(CanvasTypographyFeatureName::CursivePositioning);
+                ENUM_VALUE(CanvasTypographyFeatureName::DiscretionaryLigatures);
+                ENUM_VALUE(CanvasTypographyFeatureName::ExpertForms);
+                ENUM_VALUE(CanvasTypographyFeatureName::Fractions);
+                ENUM_VALUE(CanvasTypographyFeatureName::FullWidth);
+                ENUM_VALUE(CanvasTypographyFeatureName::HalfForms);
+                ENUM_VALUE(CanvasTypographyFeatureName::HalantForms);
+                ENUM_VALUE(CanvasTypographyFeatureName::AlternateHalfWidth);
+                ENUM_VALUE(CanvasTypographyFeatureName::HistoricalForms);
+                ENUM_VALUE(CanvasTypographyFeatureName::HorizontalKanaAlternates);
+                ENUM_VALUE(CanvasTypographyFeatureName::HistoricalLigatures);
+                ENUM_VALUE(CanvasTypographyFeatureName::HalfWidth);
+                ENUM_VALUE(CanvasTypographyFeatureName::HojoKanjiForms);
+                ENUM_VALUE(CanvasTypographyFeatureName::Jis04Forms);
+                ENUM_VALUE(CanvasTypographyFeatureName::Jis78Forms);
+                ENUM_VALUE(CanvasTypographyFeatureName::Jis83Forms);
+                ENUM_VALUE(CanvasTypographyFeatureName::Jis90Forms);
+                ENUM_VALUE(CanvasTypographyFeatureName::Kerning);
+                ENUM_VALUE(CanvasTypographyFeatureName::StandardLigatures);
+                ENUM_VALUE(CanvasTypographyFeatureName::LiningFigures);
+                ENUM_VALUE(CanvasTypographyFeatureName::LocalizedForms);
+                ENUM_VALUE(CanvasTypographyFeatureName::MarkPositioning);
+                ENUM_VALUE(CanvasTypographyFeatureName::MathematicalGreek);
+                ENUM_VALUE(CanvasTypographyFeatureName::MarkToMarkPositioning);
+                ENUM_VALUE(CanvasTypographyFeatureName::AlternateAnnotationForms);
+                ENUM_VALUE(CanvasTypographyFeatureName::NlcKanjiForms);
+                ENUM_VALUE(CanvasTypographyFeatureName::OldStyleFigures);
+                ENUM_VALUE(CanvasTypographyFeatureName::Ordinals);
+                ENUM_VALUE(CanvasTypographyFeatureName::ProportionalAlternateWidth);
+                ENUM_VALUE(CanvasTypographyFeatureName::PetiteCapitals);
+                ENUM_VALUE(CanvasTypographyFeatureName::ProportionalFigures);
+                ENUM_VALUE(CanvasTypographyFeatureName::ProportionalWidths);
+                ENUM_VALUE(CanvasTypographyFeatureName::QuarterWidths);
+                ENUM_VALUE(CanvasTypographyFeatureName::RequiredLigatures);
+                ENUM_VALUE(CanvasTypographyFeatureName::RubyNotationForms);
+                ENUM_VALUE(CanvasTypographyFeatureName::StylisticAlternates);
+                ENUM_VALUE(CanvasTypographyFeatureName::ScientificInferiors);
+                ENUM_VALUE(CanvasTypographyFeatureName::SmallCapitals);
+                ENUM_VALUE(CanvasTypographyFeatureName::SimplifiedForms);
+                ENUM_VALUE(CanvasTypographyFeatureName::StylisticSet1);
+                ENUM_VALUE(CanvasTypographyFeatureName::StylisticSet2);
+                ENUM_VALUE(CanvasTypographyFeatureName::StylisticSet3);
+                ENUM_VALUE(CanvasTypographyFeatureName::StylisticSet4);
+                ENUM_VALUE(CanvasTypographyFeatureName::StylisticSet5);
+                ENUM_VALUE(CanvasTypographyFeatureName::StylisticSet6);
+                ENUM_VALUE(CanvasTypographyFeatureName::StylisticSet7);
+                ENUM_VALUE(CanvasTypographyFeatureName::StylisticSet8);
+                ENUM_VALUE(CanvasTypographyFeatureName::StylisticSet9);
+                ENUM_VALUE(CanvasTypographyFeatureName::StylisticSet10);
+                ENUM_VALUE(CanvasTypographyFeatureName::StylisticSet11);
+                ENUM_VALUE(CanvasTypographyFeatureName::StylisticSet12);
+                ENUM_VALUE(CanvasTypographyFeatureName::StylisticSet13);
+                ENUM_VALUE(CanvasTypographyFeatureName::StylisticSet14);
+                ENUM_VALUE(CanvasTypographyFeatureName::StylisticSet15);
+                ENUM_VALUE(CanvasTypographyFeatureName::StylisticSet16);
+                ENUM_VALUE(CanvasTypographyFeatureName::StylisticSet17);
+                ENUM_VALUE(CanvasTypographyFeatureName::StylisticSet18);
+                ENUM_VALUE(CanvasTypographyFeatureName::StylisticSet19);
+                ENUM_VALUE(CanvasTypographyFeatureName::StylisticSet20);
+                ENUM_VALUE(CanvasTypographyFeatureName::Subscript);
+                ENUM_VALUE(CanvasTypographyFeatureName::Superscript);
+                ENUM_VALUE(CanvasTypographyFeatureName::Swash);
+                ENUM_VALUE(CanvasTypographyFeatureName::Titling);
+                ENUM_VALUE(CanvasTypographyFeatureName::TraditionalNameForms);
+                ENUM_VALUE(CanvasTypographyFeatureName::TabularFigures);
+                ENUM_VALUE(CanvasTypographyFeatureName::TraditionalForms);
+                ENUM_VALUE(CanvasTypographyFeatureName::ThirdWidths);
+                ENUM_VALUE(CanvasTypographyFeatureName::Unicase);
+                ENUM_VALUE(CanvasTypographyFeatureName::SlashedZero);
+                END_ENUM(CanvasTypographyFeatureName);
+            }
+
+            ENUM_TO_STRING(D2D1_RENDERING_PRIORITY)
+            {
+                ENUM_VALUE(D2D1_RENDERING_PRIORITY_NORMAL);
+                ENUM_VALUE(D2D1_RENDERING_PRIORITY_LOW);
+                END_ENUM(D2D1_RENDERING_PRIORITY);
+            }
+
+            ENUM_TO_STRING(CanvasScriptShape)
+            {
+                ENUM_VALUE(CanvasScriptShape::Default);
+                ENUM_VALUE(CanvasScriptShape::NoVisual);
+                END_ENUM(CanvasScriptShape);
+            }
+
+            ENUM_TO_STRING(DWRITE_SCRIPT_SHAPES)
+            {
+                ENUM_VALUE(DWRITE_SCRIPT_SHAPES_DEFAULT);
+                ENUM_VALUE(DWRITE_SCRIPT_SHAPES_NO_VISUAL);
+                END_ENUM(DWRITE_SCRIPT_SHAPES);
+            }
+
+            ENUM_TO_STRING(DWRITE_GLYPH_ORIENTATION_ANGLE)
+            {
+                ENUM_VALUE(DWRITE_GLYPH_ORIENTATION_ANGLE_0_DEGREES);
+                ENUM_VALUE(DWRITE_GLYPH_ORIENTATION_ANGLE_90_DEGREES);
+                ENUM_VALUE(DWRITE_GLYPH_ORIENTATION_ANGLE_180_DEGREES);
+                ENUM_VALUE(DWRITE_GLYPH_ORIENTATION_ANGLE_270_DEGREES);
+                END_ENUM(DWRITE_GLYPH_ORIENTATION_ANGLE);
+            }
+
+            ENUM_TO_STRING(CanvasLineBreakCondition)
+            {
+                ENUM_VALUE(CanvasLineBreakCondition::Neutral);
+                ENUM_VALUE(CanvasLineBreakCondition::CanBreak);
+                ENUM_VALUE(CanvasLineBreakCondition::CannotBreak);
+                ENUM_VALUE(CanvasLineBreakCondition::MustBreak);
+                END_ENUM(CanvasLineBreakCondition);
+            }
+
+            ENUM_TO_STRING(CanvasGlyphJustification)
+            {
+                ENUM_VALUE(CanvasGlyphJustification::None);
+                ENUM_VALUE(CanvasGlyphJustification::ArabicBlank);
+                ENUM_VALUE(CanvasGlyphJustification::Character);
+                ENUM_VALUE(CanvasGlyphJustification::Blank);
+                ENUM_VALUE(CanvasGlyphJustification::ArabicNormal);
+                ENUM_VALUE(CanvasGlyphJustification::ArabicKashida);
+                ENUM_VALUE(CanvasGlyphJustification::ArabicAlef);
+                ENUM_VALUE(CanvasGlyphJustification::ArabicHa);
+                ENUM_VALUE(CanvasGlyphJustification::ArabicRa);
+                ENUM_VALUE(CanvasGlyphJustification::ArabicBa);
+                ENUM_VALUE(CanvasGlyphJustification::ArabicBara);
+                ENUM_VALUE(CanvasGlyphJustification::ArabicSeen);
+                ENUM_VALUE(CanvasGlyphJustification::ArabicSeenM);
+                END_ENUM(CanvasGlyphJustification);
+            }
+
             template<typename T>
             inline std::wstring ToStringAsInt(T value)
             {
@@ -1000,6 +1544,12 @@ namespace Microsoft
             inline std::wstring ToString<ABI::Windows::UI::Text::FontWeight>(ABI::Windows::UI::Text::FontWeight const& value)
             {
                 return ToStringAsInt(value.Weight);
+            }
+
+            template<>
+            inline std::wstring ToString<WinString>(WinString const& value)
+            {
+                return static_cast<wchar_t const*>(value);
             }
 
 #define TO_STRING_AS_INT(TYPE)                                          \
@@ -1113,12 +1663,98 @@ namespace Microsoft
                    a.Y == b.Y;
         }
 
+        inline bool operator==(Numerics::Vector4 const& a, Numerics::Vector4 const& b)
+        {
+            return a.X == b.X &&
+                   a.Y == b.Y &&
+                   a.Z == b.Z &&
+                   a.W == b.W;
+        }
+
         inline bool operator==(D2D1_TRIANGLE const& a, D2D1_TRIANGLE const& b)
         {
             return a.point1 == b.point1 &&
                    a.point2 == b.point2 &&
                    a.point3 == b.point3;
         }
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+        inline bool operator==(CanvasGradientMeshPatch const& a, CanvasGradientMeshPatch const& b)
+        {
+            return
+                a.Point00 == b.Point00 &&
+                a.Point01 == b.Point01 &&
+                a.Point02 == b.Point02 &&
+                a.Point03 == b.Point03 &&
+
+                a.Point10 == b.Point10 &&
+                a.Point11 == b.Point11 &&
+                a.Point12 == b.Point12 &&
+                a.Point13 == b.Point13 &&
+
+                a.Point20 == b.Point20 &&
+                a.Point21 == b.Point21 &&
+                a.Point22 == b.Point22 &&
+                a.Point23 == b.Point23 &&
+
+                a.Point30 == b.Point30 &&
+                a.Point31 == b.Point31 &&
+                a.Point32 == b.Point32 &&
+                a.Point33 == b.Point33 &&
+
+                a.Color00 == b.Color00 &&
+                a.Color03 == b.Color03 &&
+                a.Color30 == b.Color30 &&
+                a.Color33 == b.Color33 &&
+
+                a.Edge00To03 == b.Edge00To03 &&
+                a.Edge03To33 == b.Edge03To33 &&
+                a.Edge33To30 == b.Edge33To30 &&
+                a.Edge30To00 == b.Edge30To00;
+        }
+
+        inline bool operator==(D2D1_GRADIENT_MESH_PATCH const& a, D2D1_GRADIENT_MESH_PATCH const& b)
+        {
+            return
+                a.point00 == b.point00 &&
+                a.point01 == b.point01 &&
+                a.point02 == b.point02 &&
+                a.point03 == b.point03 &&
+
+                a.point10 == b.point10 &&
+                a.point11 == b.point11 &&
+                a.point12 == b.point12 &&
+                a.point13 == b.point13 &&
+
+                a.point20 == b.point20 &&
+                a.point21 == b.point21 &&
+                a.point22 == b.point22 &&
+                a.point23 == b.point23 &&
+
+                a.point30 == b.point30 &&
+                a.point31 == b.point31 &&
+                a.point32 == b.point32 &&
+                a.point33 == b.point33 &&
+
+                a.color00 == b.color00 &&
+                a.color03 == b.color03 &&
+                a.color30 == b.color30 &&
+                a.color33 == b.color33 &&
+
+                a.topEdgeMode == b.topEdgeMode &&
+                a.leftEdgeMode == b.leftEdgeMode &&
+                a.bottomEdgeMode == b.bottomEdgeMode &&
+                a.rightEdgeMode == b.rightEdgeMode;
+        }
+
+        inline bool operator==(DWRITE_FONT_PROPERTY const& a, DWRITE_FONT_PROPERTY const& b)
+        {
+            return a.propertyId == b.propertyId &&
+                wcscmp(a.propertyValue, b.propertyValue) == 0 &&
+                wcscmp(a.localeName, b.localeName) == 0;
+        }
+#endif      
+
     }
 }
 
@@ -1149,10 +1785,19 @@ inline bool operator==(D2D1_MATRIX_5X4_F const& a, D2D1_MATRIX_5X4_F const& b)
         a._51 == b._51 && a._52 == b._52 && a._53 == b._53 && a._54 == b._54;
 }
 
+inline bool operator==(DWRITE_MATRIX const& a, DWRITE_MATRIX const& b)
+{
+    return
+        a.m11 == b.m11 && a.m12 == b.m12 &&
+        a.m21 == b.m21 && a.m22 == b.m22 &&
+        a.dx == b.dx && a.dy == b.dy;
+}
+
 inline bool operator==(D2D1_POINT_2U const& a, D2D1_POINT_2U const& b)
 {
     return a.x == b.x && a.y == b.y;
 }
+
 
 #define ASSERT_IMPLEMENTS_INTERFACE(obj, INTERFACE)                     \
     {                                                                   \
@@ -1186,6 +1831,8 @@ inline void ValidateStoredErrorState(HRESULT expectedHR, wchar_t const* expected
         Assert::IsNull(errorInfo.Get());
         return;
     }
+
+    Assert::IsNotNull(errorInfo.Get());
 
     BSTR description = nullptr;
     BSTR restrictedDescription = nullptr;
@@ -1259,4 +1906,21 @@ void VerifyConvertDipsToPixels(float dpi, CANVAS_TYPE dpiOwner)
     // Check zero case
     ThrowIfFailed(dpiOwner->ConvertDipsToPixels(0, CanvasDpiRounding::Round, &pixels));
     Assert::AreEqual(0, pixels);
+}
+
+
+inline void VerifyStringMapContainsKeyValue(
+    ComPtr<IMapView<HSTRING, HSTRING>> const& stringMap,
+    wchar_t const* key,
+    wchar_t const* expectedValue)
+{
+    WinString keyString(key);
+
+    boolean hasKey;
+    ThrowIfFailed(stringMap->HasKey(keyString, &hasKey));
+    Assert::IsTrue(!!hasKey);
+
+    WinString value;
+    ThrowIfFailed(stringMap->Lookup(keyString, value.GetAddressOf()));
+    Assert::AreEqual(expectedValue, static_cast<const wchar_t*>(value));
 }

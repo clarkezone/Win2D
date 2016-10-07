@@ -9,20 +9,23 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    SpotSpecularEffect::SpotSpecularEffect()
-        : CanvasEffect(CLSID_D2D1SpotSpecular, 10, 1, true)
+    SpotSpecularEffect::SpotSpecularEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 10, 1, true, device, effect, static_cast<ISpotSpecularEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<float[3]>(D2D1_SPOTSPECULAR_PROP_LIGHT_POSITION, Numerics::Vector3{ 0.0f, 0.0f, 0.0f });
-        SetBoxedProperty<float[3]>(D2D1_SPOTSPECULAR_PROP_POINTS_AT, Numerics::Vector3{ 0.0f, 0.0f, 0.0f });
-        SetBoxedProperty<float>(D2D1_SPOTSPECULAR_PROP_FOCUS, 1.0f);
-        SetBoxedProperty<float>(D2D1_SPOTSPECULAR_PROP_LIMITING_CONE_ANGLE, 90.0f);
-        SetBoxedProperty<float>(D2D1_SPOTSPECULAR_PROP_SPECULAR_EXPONENT, 1.0f);
-        SetBoxedProperty<float>(D2D1_SPOTSPECULAR_PROP_SPECULAR_CONSTANT, 1.0f);
-        SetBoxedProperty<float>(D2D1_SPOTSPECULAR_PROP_SURFACE_SCALE, 1.0f);
-        SetBoxedProperty<float[3]>(D2D1_SPOTSPECULAR_PROP_COLOR, Color{ 255, 255, 255, 255 });
-        SetBoxedProperty<float[2]>(D2D1_SPOTSPECULAR_PROP_KERNEL_UNIT_LENGTH, Numerics::Vector2{ 1.0f, 1.0f });
-        SetBoxedProperty<uint32_t>(D2D1_SPOTSPECULAR_PROP_SCALE_MODE, D2D1_SPOTSPECULAR_SCALE_MODE_LINEAR);
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<float[3]>(D2D1_SPOTSPECULAR_PROP_LIGHT_POSITION, Numerics::Vector3{ 0.0f, 0.0f, 0.0f });
+            SetBoxedProperty<float[3]>(D2D1_SPOTSPECULAR_PROP_POINTS_AT, Numerics::Vector3{ 0.0f, 0.0f, 0.0f });
+            SetBoxedProperty<float>(D2D1_SPOTSPECULAR_PROP_FOCUS, 1.0f);
+            SetBoxedProperty<float>(D2D1_SPOTSPECULAR_PROP_LIMITING_CONE_ANGLE, 90.0f);
+            SetBoxedProperty<float>(D2D1_SPOTSPECULAR_PROP_SPECULAR_EXPONENT, 1.0f);
+            SetBoxedProperty<float>(D2D1_SPOTSPECULAR_PROP_SPECULAR_CONSTANT, 1.0f);
+            SetBoxedProperty<float>(D2D1_SPOTSPECULAR_PROP_SURFACE_SCALE, 1.0f);
+            SetBoxedProperty<float[3]>(D2D1_SPOTSPECULAR_PROP_COLOR, Color{ 255, 255, 255, 255 });
+            SetBoxedProperty<float[2]>(D2D1_SPOTSPECULAR_PROP_KERNEL_UNIT_LENGTH, Numerics::Vector2{ 1.0f, 1.0f });
+            SetBoxedProperty<uint32_t>(D2D1_SPOTSPECULAR_PROP_SCALE_MODE, D2D1_SPOTSPECULAR_SCALE_MODE_LINEAR);
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY(SpotSpecularEffect,
@@ -90,6 +93,12 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         CanvasImageInterpolation,
         D2D1_SPOTSPECULAR_PROP_SCALE_MODE)
 
+    IMPLEMENT_EFFECT_PROPERTY(SpotSpecularEffect,
+        LightColorHdr,
+        ConvertColorHdrToVector3,
+        Numerics::Vector4,
+        D2D1_SPOTSPECULAR_PROP_COLOR)
+
     IMPLEMENT_EFFECT_SOURCE_PROPERTY(SpotSpecularEffect,
         Source,
         0)
@@ -104,7 +113,8 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         { L"HeightMapScale",             D2D1_SPOTSPECULAR_PROP_SURFACE_SCALE,       GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT             },
         { L"LightColor",                 D2D1_SPOTSPECULAR_PROP_COLOR,               GRAPHICS_EFFECT_PROPERTY_MAPPING_COLOR_TO_VECTOR3   },
         { L"HeightMapKernelSize",        D2D1_SPOTSPECULAR_PROP_KERNEL_UNIT_LENGTH,  GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT             },
-        { L"HeightMapInterpolationMode", D2D1_SPOTSPECULAR_PROP_SCALE_MODE,          GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT             })
+        { L"HeightMapInterpolationMode", D2D1_SPOTSPECULAR_PROP_SCALE_MODE,          GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT             },
+        { L"LightColorHdr",              D2D1_SPOTSPECULAR_PROP_COLOR,               GRAPHICS_EFFECT_PROPERTY_MAPPING_UNKNOWN            })
 
-    ActivatableClass(SpotSpecularEffect);
+    ActivatableClassWithFactory(SpotSpecularEffect, SimpleAgileActivationFactory<SpotSpecularEffect>);
 }}}}}

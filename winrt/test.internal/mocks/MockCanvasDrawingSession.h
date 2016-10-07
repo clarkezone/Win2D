@@ -9,6 +9,10 @@ namespace canvas
     using namespace ABI::Windows::Foundation;
     using namespace ABI::Windows::UI;
 
+#if WINVER > _WIN32_WINNT_WINBLUE
+    using namespace ABI::Windows::UI::Input::Inking;
+#endif
+
     class MockCanvasDrawingSession : public RuntimeClass<
         RuntimeClassFlags<WinRtClassicComMix>,
         ICanvasDrawingSession,
@@ -36,6 +40,8 @@ namespace canvas
         }
 
         DONT_EXPECT(Clear , Color);
+        DONT_EXPECT(ClearHdr, Vector4);
+        DONT_EXPECT(Flush);
 
         DONT_EXPECT(DrawImageAtOrigin                                                       , ICanvasImage*);
         DONT_EXPECT(DrawImageAtOffset                                                       , ICanvasImage*, Vector2);
@@ -196,16 +202,35 @@ namespace canvas
         DONT_EXPECT(DrawTextLayoutWithColor, ICanvasTextLayout*, Vector2, Color);
         DONT_EXPECT(DrawTextLayoutAtCoordsWithColor, ICanvasTextLayout*, float, float, Color);
 
-        DONT_EXPECT(get_Antialiasing     , CanvasAntialiasing*);
-        DONT_EXPECT(put_Antialiasing     , CanvasAntialiasing);
-        DONT_EXPECT(get_Blend            , CanvasBlend*);
-        DONT_EXPECT(put_Blend            , CanvasBlend);
-        DONT_EXPECT(get_TextAntialiasing , CanvasTextAntialiasing*);
-        DONT_EXPECT(put_TextAntialiasing , CanvasTextAntialiasing);
-        DONT_EXPECT(get_Transform        , ABI::Microsoft::Graphics::Canvas::Numerics::Matrix3x2*);
-        DONT_EXPECT(put_Transform        , ABI::Microsoft::Graphics::Canvas::Numerics::Matrix3x2);
-        DONT_EXPECT(get_Units            , CanvasUnits*);
-        DONT_EXPECT(put_Units            , CanvasUnits);
+#if WINVER > _WIN32_WINNT_WINBLUE
+        DONT_EXPECT(DrawInk, IIterable<InkStroke*>*);
+        DONT_EXPECT(DrawInkWithHighContrast, IIterable<InkStroke*>*, boolean);
+
+        DONT_EXPECT(DrawGradientMeshAtOrigin, ICanvasGradientMesh*);
+        DONT_EXPECT(DrawGradientMesh, ICanvasGradientMesh*, Vector2);
+        DONT_EXPECT(DrawGradientMeshAtCoords, ICanvasGradientMesh*, float, float);
+#endif
+
+        DONT_EXPECT(DrawGlyphRun, Vector2, ICanvasFontFace*, float, uint32_t, CanvasGlyph*, boolean, uint32_t, ICanvasBrush*);
+        DONT_EXPECT(DrawGlyphRunWithMeasuringMode, Vector2, ICanvasFontFace*, float, uint32_t, CanvasGlyph*, boolean, uint32_t, ICanvasBrush*, CanvasTextMeasuringMode);
+        DONT_EXPECT(DrawGlyphRunWithMeasuringModeAndDescription, Vector2, ICanvasFontFace*, float, uint32_t, CanvasGlyph*, boolean, uint32_t, ICanvasBrush*, CanvasTextMeasuringMode, HSTRING, HSTRING, uint32_t, int*, uint32_t);
+    
+        DONT_EXPECT(get_Antialiasing            , CanvasAntialiasing*);
+        DONT_EXPECT(put_Antialiasing            , CanvasAntialiasing);
+        DONT_EXPECT(get_Blend                   , CanvasBlend*);
+        DONT_EXPECT(put_Blend                   , CanvasBlend);
+        DONT_EXPECT(get_TextAntialiasing        , CanvasTextAntialiasing*);
+        DONT_EXPECT(put_TextAntialiasing        , CanvasTextAntialiasing);
+        DONT_EXPECT(get_TextRenderingParameters , ICanvasTextRenderingParameters**);
+        DONT_EXPECT(put_TextRenderingParameters , ICanvasTextRenderingParameters*);
+        DONT_EXPECT(get_Transform               , ABI::Microsoft::Graphics::Canvas::Numerics::Matrix3x2*);
+        DONT_EXPECT(put_Transform               , ABI::Microsoft::Graphics::Canvas::Numerics::Matrix3x2);
+        DONT_EXPECT(get_Units                   , CanvasUnits*);
+        DONT_EXPECT(put_Units                   , CanvasUnits);
+        DONT_EXPECT(get_EffectBufferPrecision   , IReference<CanvasBufferPrecision>**);
+        DONT_EXPECT(put_EffectBufferPrecision   , IReference<CanvasBufferPrecision>*);
+        DONT_EXPECT(get_EffectTileSize          , BitmapSize*);
+        DONT_EXPECT(put_EffectTileSize          , BitmapSize);
 
         DONT_EXPECT(CreateLayerWithOpacity                                , float, ICanvasActiveLayer**);
         DONT_EXPECT(CreateLayerWithOpacityBrush                           , ICanvasBrush*, ICanvasActiveLayer**);
@@ -217,8 +242,15 @@ namespace canvas
         DONT_EXPECT(CreateLayerWithOpacityBrushAndClipGeometryAndTransform, ICanvasBrush*, ICanvasGeometry*, Matrix3x2, ICanvasActiveLayer**);
         DONT_EXPECT(CreateLayerWithAllOptions                             , float, ICanvasBrush*, Rect, ICanvasGeometry*, Matrix3x2, CanvasLayerOptions, ICanvasActiveLayer**);
 
+#if WINVER > _WIN32_WINNT_WINBLUE
+        DONT_EXPECT(CreateSpriteBatch                                       , ICanvasSpriteBatch**);
+        DONT_EXPECT(CreateSpriteBatchWithSortMode                           , CanvasSpriteSortMode, ICanvasSpriteBatch**);
+        DONT_EXPECT(CreateSpriteBatchWithSortModeAndInterpolation           , CanvasSpriteSortMode, CanvasImageInterpolation, ICanvasSpriteBatch**);
+        DONT_EXPECT(CreateSpriteBatchWithSortModeAndInterpolationAndOptions , CanvasSpriteSortMode, CanvasImageInterpolation, CanvasSpriteOptions, ICanvasSpriteBatch**);
+#endif
+        
         // ICanvasResourceWrapperNative
-        DONT_EXPECT(GetResource, REFIID iid, void**);
+        DONT_EXPECT(GetNativeResource, ICanvasDevice* device, float dpi, REFIID iid, void**);
 
 #undef DONT_EXPECT
 

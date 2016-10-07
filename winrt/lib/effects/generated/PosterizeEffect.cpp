@@ -11,13 +11,16 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    PosterizeEffect::PosterizeEffect()
-        : CanvasEffect(CLSID_D2D1Posterize, 3, 1, true)
+    PosterizeEffect::PosterizeEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 3, 1, true, device, effect, static_cast<IPosterizeEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<int32_t>(D2D1_POSTERIZE_PROP_RED_VALUE_COUNT, 4);
-        SetBoxedProperty<int32_t>(D2D1_POSTERIZE_PROP_GREEN_VALUE_COUNT, 4);
-        SetBoxedProperty<int32_t>(D2D1_POSTERIZE_PROP_BLUE_VALUE_COUNT, 4);
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<int32_t>(D2D1_POSTERIZE_PROP_RED_VALUE_COUNT, 4);
+            SetBoxedProperty<int32_t>(D2D1_POSTERIZE_PROP_GREEN_VALUE_COUNT, 4);
+            SetBoxedProperty<int32_t>(D2D1_POSTERIZE_PROP_BLUE_VALUE_COUNT, 4);
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY_WITH_VALIDATION(PosterizeEffect,
@@ -50,7 +53,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         { L"GreenValueCount", D2D1_POSTERIZE_PROP_GREEN_VALUE_COUNT, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT },
         { L"BlueValueCount",  D2D1_POSTERIZE_PROP_BLUE_VALUE_COUNT,  GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT })
 
-    ActivatableClass(PosterizeEffect);
+    ActivatableClassWithFactory(PosterizeEffect, SimpleAgileActivationFactory<PosterizeEffect>);
 }}}}}
 
 #endif // _WIN32_WINNT_WIN10

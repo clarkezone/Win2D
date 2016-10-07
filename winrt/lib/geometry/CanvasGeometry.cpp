@@ -8,11 +8,15 @@
 #include "CanvasPathBuilder.h"
 #include "GeometrySink.h"
 #include "TessellationSink.h"
+#include "../images/CanvasCommandList.h"
+#include "../text/DrawGlyphRunHelper.h"
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+#include "InkToGeometryCommandSink.h"
+#endif
 
 using namespace ABI::Microsoft::Graphics::Canvas::Geometry;
 using namespace ABI::Microsoft::Graphics::Canvas;
-
-static const Matrix3x2 Identity3x2 = { 1, 0, 0, 1, 0, 0 };
 
 IFACEMETHODIMP CanvasGeometryFactory::CreateRectangle(
     ICanvasResourceCreator* resourceCreator,
@@ -25,7 +29,7 @@ IFACEMETHODIMP CanvasGeometryFactory::CreateRectangle(
             CheckInPointer(resourceCreator);
             CheckAndClearOutPointer(geometry);
 
-            auto newCanvasGeometry = GetManager()->Create(resourceCreator, rect);
+            auto newCanvasGeometry = CanvasGeometry::CreateNew(resourceCreator, rect);
 
             ThrowIfFailed(newCanvasGeometry.CopyTo(geometry));
         });
@@ -55,7 +59,7 @@ IFACEMETHODIMP CanvasGeometryFactory::CreateRoundedRectangle(
             CheckInPointer(resourceCreator);
             CheckAndClearOutPointer(geometry);
 
-            auto newCanvasGeometry = GetManager()->Create(resourceCreator, rect, xRadius, yRadius);
+            auto newCanvasGeometry = CanvasGeometry::CreateNew(resourceCreator, rect, xRadius, yRadius);
 
             ThrowIfFailed(newCanvasGeometry.CopyTo(geometry));
         });
@@ -87,7 +91,7 @@ IFACEMETHODIMP CanvasGeometryFactory::CreateEllipse(
             CheckInPointer(resourceCreator);
             CheckAndClearOutPointer(geometry);
 
-            auto newCanvasGeometry = GetManager()->Create(resourceCreator, center, xRadius, yRadius);
+            auto newCanvasGeometry = CanvasGeometry::CreateNew(resourceCreator, center, xRadius, yRadius);
 
             ThrowIfFailed(newCanvasGeometry.CopyTo(geometry));
         });
@@ -133,7 +137,7 @@ IFACEMETHODIMP CanvasGeometryFactory::CreatePath(
             CheckInPointer(pathBuilder);
             CheckAndClearOutPointer(geometry);
 
-            auto newCanvasGeometry = GetManager()->Create(pathBuilder);
+            auto newCanvasGeometry = CanvasGeometry::CreateNew(pathBuilder);
 
             ThrowIfFailed(newCanvasGeometry.CopyTo(geometry));
     });
@@ -151,7 +155,7 @@ IFACEMETHODIMP CanvasGeometryFactory::CreatePolygon(
             CheckInPointer(resourceCreator); 
             CheckAndClearOutPointer(geometry);
 
-            auto newCanvasGeometry = GetManager()->Create(resourceCreator, pointCount, points);
+            auto newCanvasGeometry = CanvasGeometry::CreateNew(resourceCreator, pointCount, points);
 
             ThrowIfFailed(newCanvasGeometry.CopyTo(geometry));
         });
@@ -184,18 +188,105 @@ IFACEMETHODIMP CanvasGeometryFactory::CreateGroupWithFilledRegionDetermination(
             CheckInPointer(resourceCreator); 
             CheckAndClearOutPointer(geometry);
 
-            auto newCanvasGeometry = GetManager()->Create(resourceCreator, geometryCount, geometryElements, filledRegionDetermination);
+            auto newCanvasGeometry = CanvasGeometry::CreateNew(resourceCreator, geometryCount, geometryElements, filledRegionDetermination);
 
             ThrowIfFailed(newCanvasGeometry.CopyTo(geometry));
         });
 }
+
+IFACEMETHODIMP CanvasGeometryFactory::CreateText(
+    ICanvasTextLayout* textLayout,
+    ICanvasGeometry** geometry)
+{
+    return ExceptionBoundary(
+        [&]
+        {
+            CheckInPointer(textLayout);
+            CheckAndClearOutPointer(geometry);
+
+            auto newCanvasGeometry = CanvasGeometry::CreateNew(textLayout);
+
+            ThrowIfFailed(newCanvasGeometry.CopyTo(geometry));
+        });
+}
+
+
+IFACEMETHODIMP CanvasGeometryFactory::CreateGlyphRun(
+    ICanvasResourceCreator* resourceCreator,
+    Vector2 point,
+    ICanvasFontFace* fontFace,
+    float fontSize,
+    uint32_t glyphCount,
+    CanvasGlyph* glyphs,
+    boolean isSideways,
+    uint32_t bidiLevel,
+    CanvasTextMeasuringMode measuringMode,
+    CanvasGlyphOrientation glyphOrientation,
+    ICanvasGeometry** geometry)
+{
+    return ExceptionBoundary(
+        [&]
+        {
+            CheckInPointer(resourceCreator);
+            CheckInPointer(fontFace);
+            CheckInPointer(glyphs);
+            CheckAndClearOutPointer(geometry);
+
+            auto newCanvasGeometry = CanvasGeometry::CreateNew(
+                resourceCreator,
+                point,
+                fontFace,
+                fontSize,
+                glyphCount,
+                glyphs,
+                isSideways,
+                bidiLevel,
+                measuringMode,
+                glyphOrientation);
+
+            ThrowIfFailed(newCanvasGeometry.CopyTo(geometry));
+        });
+}
+
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+
+IFACEMETHODIMP CanvasGeometryFactory::CreateInk(
+    ICanvasResourceCreator* resourceCreator,
+    IIterable<InkStroke*>* inkStrokes,
+    ICanvasGeometry** geometry)
+{
+    return CreateInkWithTransformAndFlatteningTolerance(resourceCreator, inkStrokes, Identity3x2(), D2D1_DEFAULT_FLATTENING_TOLERANCE, geometry);
+}
+
+IFACEMETHODIMP CanvasGeometryFactory::CreateInkWithTransformAndFlatteningTolerance(
+    ICanvasResourceCreator* resourceCreator,
+    IIterable<InkStroke*>* inkStrokes,
+    Matrix3x2 transform,
+    float flatteningTolerance,
+    ICanvasGeometry** geometry)
+{
+    return ExceptionBoundary(
+        [&]
+        {
+            CheckInPointer(resourceCreator);
+            CheckInPointer(inkStrokes);
+            CheckAndClearOutPointer(geometry);
+
+            auto newCanvasGeometry = CanvasGeometry::CreateNew(resourceCreator, inkStrokes, transform, flatteningTolerance);
+
+            ThrowIfFailed(newCanvasGeometry.CopyTo(geometry));
+        });
+}
+
+#endif
 
 IFACEMETHODIMP CanvasGeometryFactory::ComputeFlatteningTolerance(
     float dpi,
     float maximumZoomFactor,
     float* flatteningTolerance)
 {
-    return ComputeFlatteningToleranceWithTransform(dpi, maximumZoomFactor, Identity3x2, flatteningTolerance);
+    return ComputeFlatteningToleranceWithTransform(dpi, maximumZoomFactor, Identity3x2(), flatteningTolerance);
 }
 
 // Ideally we would just call D2D1::ComputeFlatteningTolerance here, which internally uses
@@ -258,10 +349,9 @@ IFACEMETHODIMP CanvasGeometryFactory::get_DefaultFlatteningTolerance(float* theV
 }
 
 CanvasGeometry::CanvasGeometry(
-    std::shared_ptr<CanvasGeometryManager> manager,
-    ID2D1Geometry* d2dGeometry,
-    ICanvasDevice* canvasDevice)
-    : ResourceWrapper(manager, d2dGeometry)
+    ICanvasDevice* canvasDevice,
+    ID2D1Geometry* d2dGeometry)
+    : ResourceWrapper(d2dGeometry)
     , m_canvasDevice(canvasDevice)
 {
 }
@@ -324,7 +414,7 @@ IFACEMETHODIMP CanvasGeometry::CombineWithUsingFlatteningTolerance(
                 flatteningTolerance,
                 targetPathBuilderInternal->GetGeometrySink().Get())); 
 
-            auto newGeometry = Manager()->Create(temporaryPathBuilder.Get());
+            auto newGeometry = CanvasGeometry::CreateNew(temporaryPathBuilder.Get());
             ThrowIfFailed(newGeometry.CopyTo(geometry));
         });
 }
@@ -336,7 +426,7 @@ IFACEMETHODIMP CanvasGeometry::Stroke(
     return ExceptionBoundary(
         [&]
         {
-            return StrokeImpl(strokeWidth, nullptr, nullptr, D2D1_DEFAULT_FLATTENING_TOLERANCE, geometry);
+            StrokeImpl(strokeWidth, nullptr, nullptr, D2D1_DEFAULT_FLATTENING_TOLERANCE, geometry);
         });
 }
 
@@ -349,7 +439,7 @@ IFACEMETHODIMP CanvasGeometry::StrokeWithStrokeStyle(
         [&]
         {
             CheckInPointer(strokeStyle);
-            return StrokeImpl(strokeWidth, strokeStyle, nullptr, D2D1_DEFAULT_FLATTENING_TOLERANCE, geometry);
+            StrokeImpl(strokeWidth, strokeStyle, nullptr, D2D1_DEFAULT_FLATTENING_TOLERANCE, geometry);
         });
 }
 
@@ -364,7 +454,7 @@ IFACEMETHODIMP CanvasGeometry::StrokeWithAllOptions(
         [&]
         {
             CheckInPointer(strokeStyle);
-            return StrokeImpl(strokeWidth, strokeStyle, &transform, flatteningTolerance, geometry);
+            StrokeImpl(strokeWidth, strokeStyle, &transform, flatteningTolerance, geometry);
         });
 }
 
@@ -390,7 +480,7 @@ void CanvasGeometry::StrokeImpl(
         flatteningTolerance,
         targetPathBuilderInternal->GetGeometrySink().Get()));
 
-    auto newGeometry = Manager()->Create(temporaryPathBuilder.Get());
+    auto newGeometry = CanvasGeometry::CreateNew(temporaryPathBuilder.Get());
     ThrowIfFailed(newGeometry.CopyTo(geometry));
 }
 
@@ -398,7 +488,7 @@ IFACEMETHODIMP CanvasGeometry::Outline(
     ICanvasGeometry** geometry)
 {
     return OutlineWithTransformAndFlatteningTolerance(
-        Identity3x2,
+        Identity3x2(),
         D2D1_DEFAULT_FLATTENING_TOLERANCE,
         geometry);
 }
@@ -424,7 +514,7 @@ IFACEMETHODIMP CanvasGeometry::OutlineWithTransformAndFlatteningTolerance(
                 flatteningTolerance,
                 targetPathBuilderInternal->GetGeometrySink().Get())); 
 
-            auto newGeometry = Manager()->Create(temporaryPathBuilder.Get());
+            auto newGeometry = CanvasGeometry::CreateNew(temporaryPathBuilder.Get());
             ThrowIfFailed(newGeometry.CopyTo(geometry));
         });
 }
@@ -435,7 +525,7 @@ IFACEMETHODIMP CanvasGeometry::Simplify(
 {
     return SimplifyWithTransformAndFlatteningTolerance(
         simplification,
-        Identity3x2,
+        Identity3x2(),
         D2D1_DEFAULT_FLATTENING_TOLERANCE,
         geometry);
 }
@@ -463,7 +553,7 @@ IFACEMETHODIMP CanvasGeometry::SimplifyWithTransformAndFlatteningTolerance(
                 flatteningTolerance,
                 targetPathBuilderInternal->GetGeometrySink().Get())); 
 
-            auto newGeometry = Manager()->Create(temporaryPathBuilder.Get());
+            auto newGeometry = CanvasGeometry::CreateNew(temporaryPathBuilder.Get());
             ThrowIfFailed(newGeometry.CopyTo(geometry));
         });
 }
@@ -487,7 +577,8 @@ IFACEMETHODIMP CanvasGeometry::Transform(
                 resource.Get(),
                 ReinterpretAs<D2D1_MATRIX_3X2_F*>(&transform));
 
-            auto newGeometry = Manager()->GetOrCreate(device.Get(), static_cast<ID2D1Geometry*>(d2dGeometry.Get()));
+            auto newGeometry = Make<CanvasGeometry>(device.Get(), static_cast<ID2D1Geometry*>(d2dGeometry.Get()));
+            CheckMakeResult(newGeometry);
 
             ThrowIfFailed(newGeometry.CopyTo(geometry));
         });
@@ -499,7 +590,7 @@ IFACEMETHODIMP CanvasGeometry::CompareWith(
 {
     return CompareWithUsingTransformAndFlatteningTolerance(
         otherGeometry,
-        Identity3x2,
+        Identity3x2(),
         D2D1_DEFAULT_FLATTENING_TOLERANCE,
         relation);
 }
@@ -544,7 +635,7 @@ IFACEMETHODIMP CanvasGeometry::ComputeArea(
     float* area)
 {
     return ComputeAreaWithTransformAndFlatteningTolerance(
-        Identity3x2,
+        Identity3x2(),
         D2D1_DEFAULT_FLATTENING_TOLERANCE,
         area);
 }
@@ -576,7 +667,7 @@ IFACEMETHODIMP CanvasGeometry::ComputePathLength(
     float* length)
 {
     return ComputePathLengthWithTransformAndFlatteningTolerance(
-        Identity3x2,
+        Identity3x2(),
         D2D1_DEFAULT_FLATTENING_TOLERANCE,
         length);
 }
@@ -682,7 +773,7 @@ IFACEMETHODIMP CanvasGeometry::FillContainsPoint(
 {
     return FillContainsPointWithTransformAndFlatteningTolerance(
         point,
-        Identity3x2,
+        Identity3x2(),
         D2D1_DEFAULT_FLATTENING_TOLERANCE,
         containsPoint);
 }
@@ -715,7 +806,7 @@ IFACEMETHODIMP CanvasGeometry::FillContainsPointWithTransformAndFlatteningTolera
 IFACEMETHODIMP CanvasGeometry::ComputeBounds(
     Rect* bounds)
 {
-    return ComputeBoundsWithTransform(Identity3x2, bounds);
+    return ComputeBoundsWithTransform(Identity3x2(), bounds);
 }
 
 IFACEMETHODIMP CanvasGeometry::ComputeBoundsWithTransform(
@@ -808,9 +899,9 @@ IFACEMETHODIMP CanvasGeometry::StrokeContainsPoint(
 {
     return ExceptionBoundary(
         [&]
-    {
-        StrokeContainsPointImpl(point, strokeWidth, nullptr, nullptr, D2D1_DEFAULT_FLATTENING_TOLERANCE, containsPoint);
-    });
+        {
+            StrokeContainsPointImpl(point, strokeWidth, nullptr, nullptr, D2D1_DEFAULT_FLATTENING_TOLERANCE, containsPoint);
+        });
 }
 
 IFACEMETHODIMP CanvasGeometry::StrokeContainsPointWithStrokeStyle(
@@ -873,7 +964,7 @@ IFACEMETHODIMP CanvasGeometry::Tessellate(
     CanvasTriangleVertices** triangles)
 {
     return TessellateWithTransformAndFlatteningTolerance(
-        Identity3x2,
+        Identity3x2(),
         D2D1_DEFAULT_FLATTENING_TOLERANCE,
         trianglesCount,
         triangles);
@@ -934,7 +1025,7 @@ IFACEMETHODIMP CanvasGeometry::SendPathTo(
     });
 }
 
-ComPtr<CanvasGeometry> CanvasGeometryManager::CreateNew(
+ComPtr<CanvasGeometry> CanvasGeometry::CreateNew(
     ICanvasResourceCreator* resourceCreator,
     Rect rect)
 {
@@ -946,15 +1037,14 @@ ComPtr<CanvasGeometry> CanvasGeometryManager::CreateNew(
     auto d2dGeometry = deviceInternal->CreateRectangleGeometry(ToD2DRect(rect));
 
     auto canvasGeometry = Make<CanvasGeometry>(
-        shared_from_this(),
-        d2dGeometry.Get(),
-        device.Get());
+        device.Get(),
+        d2dGeometry.Get());
     CheckMakeResult(canvasGeometry);
 
     return canvasGeometry;
 }
 
-ComPtr<CanvasGeometry> CanvasGeometryManager::CreateNew(
+ComPtr<CanvasGeometry> CanvasGeometry::CreateNew(
     ICanvasResourceCreator* resourceCreator,
     Vector2 center,
     float radiusX,
@@ -968,15 +1058,14 @@ ComPtr<CanvasGeometry> CanvasGeometryManager::CreateNew(
     auto d2dGeometry = deviceInternal->CreateEllipseGeometry(D2D1::Ellipse(ToD2DPoint(center), radiusX, radiusY));
 
     auto canvasGeometry = Make<CanvasGeometry>(
-        shared_from_this(),
-        d2dGeometry.Get(),
-        device.Get());
+        device.Get(),
+        d2dGeometry.Get());
     CheckMakeResult(canvasGeometry);
 
     return canvasGeometry;
 }
 
-ComPtr<CanvasGeometry> CanvasGeometryManager::CreateNew(
+ComPtr<CanvasGeometry> CanvasGeometry::CreateNew(
     ICanvasResourceCreator* resourceCreator,
     Rect rect,
     float radiusX,
@@ -990,15 +1079,14 @@ ComPtr<CanvasGeometry> CanvasGeometryManager::CreateNew(
     auto d2dGeometry = deviceInternal->CreateRoundedRectangleGeometry(D2D1::RoundedRect(ToD2DRect(rect), radiusX, radiusY));
 
     auto canvasGeometry = Make<CanvasGeometry>(
-        shared_from_this(),
-        d2dGeometry.Get(),
-        device.Get());
+        device.Get(),
+        d2dGeometry.Get());
     CheckMakeResult(canvasGeometry);
 
     return canvasGeometry;
 }
 
-ComPtr<CanvasGeometry> CanvasGeometryManager::CreateNew(
+ComPtr<CanvasGeometry> CanvasGeometry::CreateNew(
     ICanvasPathBuilder* pathBuilder)
 {
     auto pathBuilderInternal = As<ICanvasPathBuilderInternal>(pathBuilder);
@@ -1008,15 +1096,14 @@ ComPtr<CanvasGeometry> CanvasGeometryManager::CreateNew(
     auto d2dGeometry = pathBuilderInternal->CloseAndReturnPath();
 
     auto canvasGeometry = Make<CanvasGeometry>(
-        shared_from_this(),
-        d2dGeometry.Get(),
-        device.Get());
+        device.Get(),
+        d2dGeometry.Get());
     CheckMakeResult(canvasGeometry);
 
     return canvasGeometry;
 }
 
-ComPtr<CanvasGeometry> CanvasGeometryManager::CreateNew(
+ComPtr<CanvasGeometry> CanvasGeometry::CreateNew(
     ICanvasResourceCreator* resourceCreator,
     uint32_t pointCount,
     Vector2* points)
@@ -1048,13 +1135,13 @@ ComPtr<CanvasGeometry> CanvasGeometryManager::CreateNew(
 
     ThrowIfFailed(geometrySink->Close());
 
-    auto canvasGeometry = Make<CanvasGeometry>(shared_from_this(), pathGeometry.Get(), device.Get());
+    auto canvasGeometry = Make<CanvasGeometry>(device.Get(), pathGeometry.Get());
     CheckMakeResult(canvasGeometry);
 
     return canvasGeometry;
 }
 
-ComPtr<CanvasGeometry> CanvasGeometryManager::CreateNew(
+ComPtr<CanvasGeometry> CanvasGeometry::CreateNew(
     ICanvasResourceCreator* resourceCreator,
     uint32_t geometryCount,
     ICanvasGeometry** geometryElements,
@@ -1096,25 +1183,433 @@ ComPtr<CanvasGeometry> CanvasGeometryManager::CreateNew(
         geometryCount);
 
     auto canvasGeometry = Make<CanvasGeometry>(
-        shared_from_this(),
-        d2dGeometry.Get(),
-        device.Get());
+        device.Get(),
+        d2dGeometry.Get());
     CheckMakeResult(canvasGeometry);
 
     return canvasGeometry;
 }
 
-ComPtr<CanvasGeometry> CanvasGeometryManager::CreateWrapper(
-    ICanvasDevice* device,
-    ID2D1Geometry* geometry)
+
+static ComPtr<ID2D1TransformedGeometry> GetGlyphRunGeometry(
+    ComPtr<ICanvasDeviceInternal> const& deviceInternal,
+    FLOAT baselineOriginX,
+    FLOAT baselineOriginY,
+    DWRITE_GLYPH_ORIENTATION_ANGLE orientationAngle,
+    DWRITE_GLYPH_RUN const* glyphRun)
 {
-    auto canvasGeometry = Make<CanvasGeometry>(
-        shared_from_this(),
-        geometry,
-        device);
+    auto d2dPathGeometry = deviceInternal->CreatePathGeometry();
+
+    ComPtr<ID2D1GeometrySink> d2dGeometrySink;
+    ThrowIfFailed(d2dPathGeometry->Open(&d2dGeometrySink));
+
+    ThrowIfFailed(glyphRun->fontFace->GetGlyphRunOutline(
+        glyphRun->fontEmSize,
+        glyphRun->glyphIndices,
+        glyphRun->glyphAdvances,
+        glyphRun->glyphOffsets,
+        glyphRun->glyphCount,
+        glyphRun->isSideways,
+        glyphRun->bidiLevel % 2,
+        d2dGeometrySink.Get()));
+
+    ThrowIfFailed(d2dGeometrySink->Close());
+
+    auto textAnalyzer = CustomFontManager::GetInstance()->GetTextAnalyzer();
+
+    DWRITE_MATRIX transform;
+    ThrowIfFailed(As<IDWriteTextAnalyzer1>(textAnalyzer)->GetGlyphOrientationTransform(orientationAngle, glyphRun->isSideways, &transform));
+    transform.dx = baselineOriginX;
+    transform.dy = baselineOriginY;
+
+    auto transformedGeometry = deviceInternal->CreateTransformedGeometry(d2dPathGeometry.Get(), ReinterpretAs<D2D1_MATRIX_3X2_F*>(&transform));
+
+    return transformedGeometry;
+}
+
+
+class OutlineTextRenderer : public RuntimeClass<RuntimeClassFlags<ClassicCom>, IDWriteTextRenderer1>,
+    private LifespanTracker<OutlineTextRenderer>
+{
+    std::vector<ComPtr<ID2D1Geometry>> m_geometries;
+    ComPtr<ICanvasDeviceInternal> m_device;
+public:
+    OutlineTextRenderer(ComPtr<ICanvasDevice> const& device)
+        : m_device(As<ICanvasDeviceInternal>(device))
+    {
+    }
+
+    ComPtr<ID2D1GeometryGroup> CloseAndGetPath()
+    {
+        if (!m_geometries.empty())
+        {
+            std::vector<ID2D1Geometry*> rawPtrs;
+            rawPtrs.resize(m_geometries.size());
+
+            for (uint32_t i = 0; i < m_geometries.size(); ++i)
+            {
+                rawPtrs[i] = m_geometries[i].Get();
+            }
+
+            return m_device->CreateGeometryGroup(D2D1_FILL_MODE_ALTERNATE, &rawPtrs[0], static_cast<uint32_t>(rawPtrs.size()));
+        }
+        else
+        {
+            ID2D1Geometry* unused{};
+            return m_device->CreateGeometryGroup(D2D1_FILL_MODE_ALTERNATE, &unused, 0);
+        }
+
+    }
+
+    IFACEMETHODIMP DrawGlyphRun(
+        void* clientDrawingContext,
+        FLOAT baselineOriginX,
+        FLOAT baselineOriginY,
+        DWRITE_MEASURING_MODE measuringMode,
+        DWRITE_GLYPH_RUN const* glyphRun,
+        DWRITE_GLYPH_RUN_DESCRIPTION const* glyphRunDescription,
+        IUnknown* clientDrawingEffect)
+    {
+        return DrawGlyphRun(
+            clientDrawingContext,
+            baselineOriginX,
+            baselineOriginY,
+            DWRITE_GLYPH_ORIENTATION_ANGLE_0_DEGREES,
+            measuringMode,
+            glyphRun,
+            glyphRunDescription,
+            clientDrawingEffect);
+    }
+
+    IFACEMETHODIMP DrawGlyphRun(
+        void*,
+        FLOAT baselineOriginX,
+        FLOAT baselineOriginY,
+        DWRITE_GLYPH_ORIENTATION_ANGLE orientationAngle,
+        DWRITE_MEASURING_MODE,
+        DWRITE_GLYPH_RUN const* glyphRun,
+        DWRITE_GLYPH_RUN_DESCRIPTION const*,
+        IUnknown*)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                auto transformedGeometry = GetGlyphRunGeometry(m_device, baselineOriginX, baselineOriginY, orientationAngle, glyphRun);
+
+                m_geometries.push_back(transformedGeometry);
+            });
+    }
+
+    D2D1_RECT_F RotateRectangle(DWRITE_GLYPH_ORIENTATION_ANGLE orientationAngle, D2D1_RECT_F const& rect)
+    {
+        switch (orientationAngle)
+        {
+            case DWRITE_GLYPH_ORIENTATION_ANGLE_90_DEGREES:
+                return D2D1::RectF(-rect.top, rect.left, -rect.bottom, rect.right);
+            case DWRITE_GLYPH_ORIENTATION_ANGLE_180_DEGREES:
+                return D2D1::RectF(-rect.left, -rect.top, -rect.right, -rect.bottom);
+            case DWRITE_GLYPH_ORIENTATION_ANGLE_270_DEGREES:
+                D2D1::RectF(rect.top, -rect.left, rect.bottom, -rect.right);
+            case DWRITE_GLYPH_ORIENTATION_ANGLE_0_DEGREES:
+            default:
+                return rect;
+        }
+    }
+
+    D2D1_RECT_F OffsetRectangle(float offsetX, float offsetY, D2D1_RECT_F const& rect)
+    {
+        return D2D1::RectF(rect.left + offsetX, rect.top + offsetY, rect.right + offsetX, rect.bottom + offsetY);
+    }
+
+    IFACEMETHODIMP DrawUnderline(
+        void* clientDrawingContext,
+        FLOAT baselineOriginX,
+        FLOAT baselineOriginY,
+        DWRITE_UNDERLINE const* underline,
+        IUnknown* clientDrawingEffect)
+    {
+        return DrawUnderline(
+            clientDrawingContext,
+            baselineOriginX,
+            baselineOriginY,
+            DWRITE_GLYPH_ORIENTATION_ANGLE_0_DEGREES,
+            underline,
+            clientDrawingEffect);
+    }
+
+    IFACEMETHODIMP DrawUnderline(
+        void*,
+        FLOAT baselineOriginX,
+        FLOAT baselineOriginY,
+        DWRITE_GLYPH_ORIENTATION_ANGLE orientationAngle,
+        DWRITE_UNDERLINE const* underline,
+        IUnknown*)
+    {        
+        return ExceptionBoundary(
+            [&]
+            {
+                D2D1_RECT_F rect = { 0, underline->offset, underline->width, underline->offset + underline->thickness };
+                rect = RotateRectangle(orientationAngle, rect);
+                rect = OffsetRectangle(baselineOriginX, baselineOriginY, rect);
+
+                auto rectangleGeometry = m_device->CreateRectangleGeometry(rect);
+
+                m_geometries.push_back(rectangleGeometry);
+            });
+    }
+
+    IFACEMETHODIMP DrawStrikethrough(
+        void* clientDrawingContext,
+        FLOAT baselineOriginX,
+        FLOAT baselineOriginY,
+        DWRITE_STRIKETHROUGH const* strikethrough,
+        IUnknown* clientDrawingEffect)
+    {
+        return DrawStrikethrough(
+            clientDrawingContext,
+            baselineOriginX,
+            baselineOriginY,
+            DWRITE_GLYPH_ORIENTATION_ANGLE_0_DEGREES,
+            strikethrough,
+            clientDrawingEffect);
+    }
+
+    IFACEMETHODIMP DrawStrikethrough(
+        void*,
+        FLOAT baselineOriginX,
+        FLOAT baselineOriginY,
+        DWRITE_GLYPH_ORIENTATION_ANGLE orientationAngle,
+        DWRITE_STRIKETHROUGH const* strikethrough,
+        IUnknown*)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                D2D1_RECT_F rect = { 0, strikethrough->offset, strikethrough->width, strikethrough->offset + strikethrough->thickness };
+                rect = RotateRectangle(orientationAngle, rect);
+                rect = OffsetRectangle(baselineOriginX, baselineOriginY, rect);
+
+                auto rectangleGeometry = m_device->CreateRectangleGeometry(rect);
+
+                m_geometries.push_back(rectangleGeometry);
+
+            });
+    }
+
+    IFACEMETHODIMP DrawInlineObject(
+        void*,
+        FLOAT originX,
+        FLOAT originY,
+        IDWriteInlineObject* inlineObject,
+        BOOL isSideways,
+        BOOL isRightToLeft,
+        IUnknown* brush)
+    {
+        return DrawInlineObject(
+            nullptr,
+            originX,
+            originY,
+            DWRITE_GLYPH_ORIENTATION_ANGLE_0_DEGREES,
+            inlineObject,
+            isSideways,
+            isRightToLeft,
+            brush);
+    }
+
+    IFACEMETHODIMP DrawInlineObject(
+        void*,
+        FLOAT originX,
+        FLOAT originY,
+        DWRITE_GLYPH_ORIENTATION_ANGLE,
+        IDWriteInlineObject* inlineObject,
+        BOOL isSideways,
+        BOOL isRightToLeft,
+        IUnknown* brush)
+    {
+        //
+        // Forwarding this along allows the implementation of the inline object
+        // to draw itself, and make calls to DrawGlyphRun on this renderer.
+        //
+        // Our implementation of DrawGlyphRun produces outlines, and so this
+        // allows inline objects' glyph runs to show up as outlines.
+        // 
+        // In particular, ellipsis triming signs are drawn as glyph runs,
+        // and we want them to be outline-able.
+        //
+        return inlineObject->Draw(
+            nullptr, 
+            this, 
+            originX, 
+            originY, 
+            isSideways, 
+            isRightToLeft, 
+            brush);
+    }
+
+    IFACEMETHODIMP IsPixelSnappingDisabled(
+        void*,
+        BOOL* isDisabled)
+    {
+        //
+        // Outlines can't take advantage of pixel snapping because 
+        // we don't know what target, positioning etc to which the
+        // text will ultimately be drawn, or if it will even be
+        // drawn 'intact'. 
+        //
+        // The conventional text rasterizing path (i.e. DrawTextLayout)
+        // is what takes advantage of pixel-snapping and hinting.
+        //
+        *isDisabled = TRUE;
+        return S_OK;
+    }
+
+    IFACEMETHODIMP GetCurrentTransform(
+        void*,
+        DWRITE_MATRIX* transform)
+    {
+        //
+        // This transform is redundant with the ability to wrap the
+        // output geometry in a transformed geometry, so we don't
+        // expose a way of modifying it here.
+        //
+        return ExceptionBoundary(
+            [&]
+            {
+                CheckInPointer(transform);
+
+                D2D1_MATRIX_3X2_F identity = D2D1::Matrix3x2F::Identity();
+                *(reinterpret_cast<D2D1_MATRIX_3X2_F*>(transform)) = identity;
+            });
+    }
+
+    IFACEMETHODIMP GetPixelsPerDip(
+        void*,
+        FLOAT* pixelsPerDip)
+    {
+        //
+        // Outlines are returned at a default DPI; geometries recieve
+        // DPI scaling when they are drawn.
+        // It is not lossy to produce outlines at a low(er) DPI and then
+        // scale them up later because getting glyph outlines should 
+        // never cause a flatten, and because pixel hinting doesn't apply
+        // here.
+        //
+
+        const float assumedDpi = DEFAULT_DPI;
+        *pixelsPerDip = assumedDpi / DEFAULT_DPI;
+
+        return S_OK;
+    }
+};
+
+ComPtr<CanvasGeometry> CanvasGeometry::CreateNew(
+    ICanvasTextLayout* canvasTextLayout)
+{
+    auto dwriteTextLayout = GetWrappedResource<IDWriteTextLayout2>(canvasTextLayout);
+
+    ComPtr<ICanvasDevice> device;
+    ThrowIfFailed(canvasTextLayout->get_Device(&device));
+
+    auto outlineTextRenderer = Make<OutlineTextRenderer>(device);
+
+    ThrowIfFailed(dwriteTextLayout->Draw(nullptr, outlineTextRenderer.Get(), 0, 0));
+
+    auto d2dGeometry = outlineTextRenderer->CloseAndGetPath();
+
+    auto outlineGeometry = Make<CanvasGeometry>(device.Get(), d2dGeometry.Get());
+
+    return outlineGeometry;
+}
+
+
+ComPtr<CanvasGeometry> CanvasGeometry::CreateNew(
+    ICanvasResourceCreator* resourceCreator,
+    Vector2 point,
+    ICanvasFontFace* fontFace,
+    float fontSize,
+    uint32_t glyphCount,
+    CanvasGlyph* glyphs,
+    boolean isSideways,
+    uint32_t bidiLevel,
+    CanvasTextMeasuringMode measuringMode,
+    CanvasGlyphOrientation glyphOrientation)
+{
+    DrawGlyphRunHelper drawGlyphRunHelper(
+        fontFace,
+        fontSize,
+        glyphCount,
+        glyphs,
+        isSideways,
+        bidiLevel,
+        measuringMode);
+
+    ComPtr<ICanvasDevice> device;
+    ThrowIfFailed(resourceCreator->get_Device(&device));
+
+    auto d2dGeometry = GetGlyphRunGeometry(
+        As<ICanvasDeviceInternal>(device),
+        point.X,
+        point.Y,
+        ToDWriteGlyphOrientationAngle(glyphOrientation),
+        &drawGlyphRunHelper.DWriteGlyphRun);
+
+    auto canvasGeometry = Make<CanvasGeometry>(device.Get(), d2dGeometry.Get());
     CheckMakeResult(canvasGeometry);
 
     return canvasGeometry;
 }
+
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+
+ComPtr<CanvasGeometry> CanvasGeometry::CreateNew(
+    ICanvasResourceCreator* resourceCreator,
+    IIterable<InkStroke*>* inkStrokes,
+    Matrix3x2 transform,
+    float flatteningTolerance)
+{
+    ComPtr<ICanvasDevice> device;
+    ThrowIfFailed(resourceCreator->get_Device(&device));
+
+    // Create a temporary command list.
+    auto commandList = CanvasCommandList::CreateNew(device.Get());
+
+    // Draw the ink into the command list.
+    ComPtr<ICanvasDrawingSession> drawingSession;
+    ThrowIfFailed(commandList->CreateDrawingSession(&drawingSession));
+
+    ThrowIfFailed(drawingSession->DrawInkWithHighContrast(inkStrokes, false));
+
+    drawingSession.Reset();
+
+    // Create a path geometry, and open its geometry sink.
+    auto pathGeometry = As<ICanvasDeviceInternal>(device)->CreatePathGeometry();
+
+    ComPtr<ID2D1GeometrySink> geometrySink;
+    ThrowIfFailed(pathGeometry->Open(&geometrySink));
+
+    // Create an InkToGeometryCommandSink, which implements ID2D1CommandSink2
+    // and streams anything passed to DrawInk into our geometrySink.
+    auto commandSink = Make<InkToGeometryCommandSink>(transform, flatteningTolerance, geometrySink.Get());
+    CheckMakeResult(commandSink);
+
+    // Stream the temporary command list (which contains our ink) to the InkToGeometryCommandSink.
+    auto d2dCommandList = GetWrappedResource<ID2D1CommandList>(commandList);
+    
+    ThrowIfFailed(d2dCommandList->Close());
+
+    ThrowIfFailed(d2dCommandList->Stream(commandSink.Get()));
+
+    ThrowIfFailed(commandSink->GetResult());
+    ThrowIfFailed(geometrySink->Close());
+
+    // Wrap a CanvasGeometry around the D2D path geometry.
+    auto canvasGeometry = Make<CanvasGeometry>(device.Get(), pathGeometry.Get());
+    CheckMakeResult(canvasGeometry);
+
+    return canvasGeometry;
+}
+
+#endif
 
 ActivatableClassWithFactory(CanvasGeometry, CanvasGeometryFactory);

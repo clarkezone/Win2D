@@ -13,8 +13,13 @@ namespace canvas
     {
     public:
         std::function<void(UINT32 index, ID2D1Image* input)> MockSetInput;
-        std::function<HRESULT()> MockSetInputCount;
+        std::function<HRESULT(UINT32 count)> MockSetInputCount;
+        std::function<void(UINT32 index, ID2D1Image** input)> MockGetInput;
+        std::function<UINT32()> MockGetInputCount;
+        std::function<void(ID2D1Image** output)> MockGetOutput;
         std::function<HRESULT(UINT32 index, D2D1_PROPERTY_TYPE type, CONST BYTE* data, UINT32 dataSize)> MockSetValue;
+        std::function<D2D1_PROPERTY_TYPE(UINT32 index)> MockGetType;
+        std::function<HRESULT(UINT32 index, D2D1_PROPERTY_TYPE type, BYTE *data, UINT32 dataSize)> MockGetValue;
 
         //
         // ID2D1Effect
@@ -43,7 +48,7 @@ namespace canvas
                 Assert::Fail(L"Unexpected call to SetInputCount");
                 return E_NOTIMPL;
             }
-            return MockSetInputCount();
+            return MockSetInputCount(inputCount);
         }
 
         STDMETHOD_(void, GetInput)(
@@ -51,21 +56,33 @@ namespace canvas
             _Outptr_opt_ ID2D1Image **input
             ) CONST
         {
-            Assert::Fail(L"Unexpected call to GetInput");
+            if (!MockGetInput)
+            {
+                Assert::Fail(L"Unexpected call to GetInput");
+            }
+            MockGetInput(index, input);
         }
 
-            STDMETHOD_(UINT32, GetInputCount)(
+        STDMETHOD_(UINT32, GetInputCount)(
             ) CONST
         {
-            Assert::Fail(L"Unexpected call to GetInputCount");
-            return 0;
+            if (!MockGetInputCount)
+            {
+                Assert::Fail(L"Unexpected call to GetInputCount");
+                return 0;
+            }
+            return MockGetInputCount();
         }
 
-            STDMETHOD_(void, GetOutput)(
+        STDMETHOD_(void, GetOutput)(
             _Outptr_ ID2D1Image **outputImage
             ) CONST
         {
-            Assert::Fail(L"Unexpected call to GetOutput");
+            if (!MockGetOutput)
+            {
+                Assert::Fail(L"Unexpected call to GetOutput");
+            }
+            MockGetOutput(outputImage);
         }
 
         //
@@ -101,8 +118,12 @@ namespace canvas
             UINT32 index
             ) CONST
         {
-            Assert::Fail(L"Unexpected call to GetType");
-            return D2D1_PROPERTY_TYPE_UNKNOWN;
+            if (!MockGetType)
+            {
+                Assert::Fail(L"Unexpected call to GetType");
+                return D2D1_PROPERTY_TYPE_UNKNOWN;
+            }
+            return MockGetType(index);
         }
 
         STDMETHOD_(UINT32, GetPropertyIndex)(
@@ -157,8 +178,12 @@ namespace canvas
             UINT32 dataSize
             ) CONST
         {
-            Assert::Fail(L"Unexpected call to GetValue");
-            return E_NOTIMPL;
+            if (!MockGetValue)
+            {
+                Assert::Fail(L"Unexpected call to GetValue");
+                return E_NOTIMPL;
+            }
+            return MockGetValue(index, type, data, dataSize);
         }
 
         STDMETHOD_(UINT32, GetValueSize)(
@@ -197,17 +222,26 @@ namespace canvas
         int m_setInputCalls;
         int m_setValueCalls;
 
+        int m_inputCount;
+
         std::vector<ComPtr<ID2D1Image>> m_inputs;
         std::vector<std::vector<byte>> m_properties;
 
         MockD2DEffectThatCountsCalls(IID const& effectId = CLSID_D2D1GaussianBlur)
           : m_effectId(effectId)
+          , m_inputCount(0)
           , m_setInputCalls(0)
           , m_setValueCalls(0)
         {
-            MockSetInputCount = []
+            MockSetInputCount = [&](UINT32 count)
             {
+                m_inputCount = count;
                 return S_OK;
+            };
+
+            MockGetInputCount = [&]
+            {
+                return m_inputCount;
             };
 
             MockSetInput = [&](UINT32 index, ID2D1Image* input)
@@ -218,6 +252,11 @@ namespace canvas
                     m_inputs.resize(index + 1);
 
                 m_inputs[index] = input;
+            };
+
+            MockGetInput = [&](UINT32 index, ID2D1Image** input)
+            {
+                m_inputs[index].CopyTo(input);
             };
 
             MockSetValue = [&](UINT32 index, D2D1_PROPERTY_TYPE type, CONST BYTE* data, UINT32 dataSize)

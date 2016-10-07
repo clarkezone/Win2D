@@ -5,8 +5,14 @@
 #include "pch.h"
 
 #include "CanvasActiveLayer.h"
+#include "CanvasSpriteBatch.h"
 #include "text/CanvasTextFormat.h"
+#include "text/CanvasTextRenderingParameters.h"
+#include "text/CanvasFontFace.h"
 #include "utils/TemporaryTransform.h"
+#include "text/TextUtilities.h"
+#include "text/InternalDWriteTextRenderer.h"
+#include "text/DrawGlyphRunHelper.h"
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 {
@@ -56,77 +62,86 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
                                             private LifespanTracker<NoopCanvasDrawingSessionAdapter>
     {
     public:
-
-        virtual D2D1_POINT_2F GetRenderingSurfaceOffset() override
-        {
-            return D2D1::Point2F(0, 0);
-        }
-
-        virtual void EndDraw() override
+        virtual void EndDraw(ID2D1DeviceContext1*) override
         {
             // nothing
         }
     };
 
 
-    CanvasDrawingSessionManager::CanvasDrawingSessionManager()
-        : m_adapter(std::make_shared<NoopCanvasDrawingSessionAdapter>())
-    {
-    }
-
-    ComPtr<CanvasDrawingSession> CanvasDrawingSessionManager::CreateNew(
+    ComPtr<CanvasDrawingSession> CanvasDrawingSession::CreateNew(
         ID2D1DeviceContext1* deviceContext,
-        std::shared_ptr<ICanvasDrawingSessionAdapter> drawingSessionAdapter)
-    {
-        return CreateNew(nullptr, deviceContext, drawingSessionAdapter);
-    }
-
-    ComPtr<CanvasDrawingSession> CanvasDrawingSessionManager::CreateNew(
+        std::shared_ptr<ICanvasDrawingSessionAdapter> drawingSessionAdapter,
         ICanvasDevice* owner,
-        ID2D1DeviceContext1* deviceContext,
-        std::shared_ptr<ICanvasDrawingSessionAdapter> drawingSessionAdapter)
+        std::shared_ptr<bool> targetHasActiveDrawingSession,
+        D2D1_POINT_2F offset)
     {
         InitializeDefaultState(deviceContext);
 
-        return Make<CanvasDrawingSession>(
-            shared_from_this(),
-            owner,
-            deviceContext,
-            drawingSessionAdapter);
-    }
-
-
-    ComPtr<CanvasDrawingSession> CanvasDrawingSessionManager::CreateWrapper(
-        ID2D1DeviceContext1* resource)
-    {
         auto drawingSession = Make<CanvasDrawingSession>(
-            shared_from_this(), 
-            nullptr,
-            resource, 
-            m_adapter);
+            deviceContext,
+            drawingSessionAdapter,
+            owner,
+            std::move(targetHasActiveDrawingSession),
+            offset);
         CheckMakeResult(drawingSession);
+
         return drawingSession;
     }
-    
 
-    void CanvasDrawingSessionManager::InitializeDefaultState(ID2D1DeviceContext1* deviceContext)
+
+    void CanvasDrawingSession::InitializeDefaultState(ID2D1DeviceContext1* deviceContext)
     {
         // Win2D wants a different text antialiasing default vs. native D2D.
         deviceContext->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
     }
 
 
-    CanvasDrawingSession::CanvasDrawingSession(
-        std::shared_ptr<CanvasDrawingSessionManager> manager,
-        ICanvasDevice* owner,
-        ID2D1DeviceContext1* deviceContext,
-        std::shared_ptr<ICanvasDrawingSessionAdapter> adapter)
-        : ResourceWrapper(manager, deviceContext)
-        , m_owner(owner)
-        , m_adapter(adapter)
-        , m_nextLayerId(0)
+#if WINVER > _WIN32_WINNT_WINBLUE
+    ComPtr<IInkD2DRenderer> DefaultInkAdapter::CreateInkRenderer()
     {
-        CheckInPointer(adapter.get());
+        ComPtr<IInkD2DRenderer> inkRenderer;
+
+        ThrowIfFailed(CoCreateInstance(__uuidof(InkD2DRenderer),
+            nullptr,
+            CLSCTX_INPROC_SERVER,
+            IID_PPV_ARGS(&inkRenderer)));
+
+        return inkRenderer;
+    }
+
+
+    bool DefaultInkAdapter::IsHighContrastEnabled()
+    {
+        if (!m_accessibilitySettings)
+        {
+            ComPtr<IActivationFactory> activationFactory;
+            ThrowIfFailed(GetActivationFactory(HStringReference(RuntimeClass_Windows_UI_ViewManagement_AccessibilitySettings).Get(), &activationFactory));
+            ThrowIfFailed(activationFactory->ActivateInstance(&m_accessibilitySettings));
+        }
+
+        boolean isHighContrastEnabled;
+        ThrowIfFailed(m_accessibilitySettings->get_HighContrast(&isHighContrastEnabled));
+        return !!isHighContrastEnabled;
+    }
+#endif
+
+
+    CanvasDrawingSession::CanvasDrawingSession(
+        ID2D1DeviceContext1* deviceContext,
+        std::shared_ptr<ICanvasDrawingSessionAdapter> adapter,
+        ICanvasDevice* owner,
+        std::shared_ptr<bool> targetHasActiveDrawingSession,
+        D2D1_POINT_2F offset)
+        : ResourceWrapper(deviceContext)
+        , m_adapter(adapter ? adapter : std::make_shared<NoopCanvasDrawingSessionAdapter>())
+        , m_targetHasActiveDrawingSession(std::move(targetHasActiveDrawingSession))
+        , m_offset(offset)
+        , m_nextLayerId(0)
+        , m_owner(owner)
+    {
+        if (m_targetHasActiveDrawingSession)
+            *m_targetHasActiveDrawingSession = true;
     }
 
 
@@ -139,27 +154,38 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
     IFACEMETHODIMP CanvasDrawingSession::Close()
     {
-        // Base class Close() called outside of ExceptionBoundary since this
-        // already has its own boundary.
-        HRESULT hr = ResourceWrapper::Close();
-        if (FAILED(hr))
-            return hr;
-
         return ExceptionBoundary(
             [&]
             {
+                auto deviceContext = MaybeGetResource();
+        
+                ReleaseResource();
+
                 if (!m_activeLayerIds.empty())
-                    ThrowHR(E_FAIL, HStringReference(Strings::DidNotPopLayer).Get());
+                    ThrowHR(E_FAIL, Strings::DidNotPopLayer);
+
+                if (m_targetHasActiveDrawingSession)
+                    *m_targetHasActiveDrawingSession = false;
 
                 if (m_adapter)
                 {
+                    assert(deviceContext);
+                    
                     // Arrange it so that m_adapter will always get
                     // reset, even if EndDraw throws.
                     auto adapter = m_adapter;
                     m_adapter.reset();
 
-                    adapter->EndDraw();
-                }        
+                    adapter->EndDraw(deviceContext.Get());
+                }
+
+                m_solidColorBrush.Reset();
+                m_defaultTextFormat.Reset();
+                m_owner.Reset();
+#if WINVER > _WIN32_WINNT_WINBLUE
+                m_inkD2DRenderer.Reset();
+                m_inkStateBlock.Reset();
+#endif
             });
     }
 
@@ -170,10 +196,28 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         return ExceptionBoundary(
             [&]
             {
-                auto& deviceContext = GetResource();
+                GetResource()->Clear(ToD2DColor(color));
+            });
+    }
 
-                auto d2dColor = ToD2DColor(color);
-                deviceContext->Clear(&d2dColor);
+
+    IFACEMETHODIMP CanvasDrawingSession::ClearHdr(
+        Vector4 color)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                GetResource()->Clear(ToD2DColor(color));
+            });
+    }
+
+
+    IFACEMETHODIMP CanvasDrawingSession::Flush()
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                ThrowIfFailed(GetResource()->Flush(nullptr, nullptr));
             });
     }
 
@@ -379,6 +423,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
     class DrawImageWorker
     {
+        ICanvasDevice* m_canvasDevice;
         ID2D1DeviceContext1* m_deviceContext;
         Vector2* m_offset;
         Rect* m_destinationRect;
@@ -391,8 +436,9 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         ComPtr<ID2D1Image> m_borderEffectOutput;
 
     public:
-        DrawImageWorker(ID2D1DeviceContext1* deviceContext, Vector2* offset, Rect* destinationRect, Rect* sourceRect, float opacity, CanvasImageInterpolation interpolation)
-            : m_deviceContext(deviceContext)
+        DrawImageWorker(ICanvasDevice* canvasDevice, ID2D1DeviceContext1* deviceContext, Vector2* offset, Rect* destinationRect, Rect* sourceRect, float opacity, CanvasImageInterpolation interpolation)
+            : m_canvasDevice(canvasDevice)
+            , m_deviceContext(deviceContext)
             , m_offset(offset)
             , m_destinationRect(destinationRect)
             , m_sourceRect(sourceRect)
@@ -426,7 +472,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
                 // If DrawBitmap cannot handle this request, we must use the DrawImage slow path.
 
                 auto internalImage = As<ICanvasImageInternal>(image);
-                auto d2dImage = internalImage->GetD2DImage(m_deviceContext);
+                auto d2dImage = internalImage->GetD2DImage(m_canvasDevice, m_deviceContext);
 
                 auto d2dInterpolationMode = static_cast<D2D1_INTERPOLATION_MODE>(m_interpolation);
                 auto d2dCompositeMode = composite ? static_cast<D2D1_COMPOSITE_MODE>(*composite)
@@ -583,7 +629,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
                 return D2D1_COMPOSITE_MODE_PLUS;
                 
             case D2D1_PRIMITIVE_BLEND_MIN:
-                ThrowHR(E_FAIL, HStringReference(Strings::DrawImageMinBlendNotSupported).Get());
+                ThrowHR(E_FAIL, Strings::DrawImageMinBlendNotSupported);
                 
             default:
                 ThrowHR(E_UNEXPECTED);
@@ -688,7 +734,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             auto& deviceContext = GetResource();
             CheckInPointer(image);
 
-            DrawImageWorker(deviceContext.Get(), offset, destinationRect, sourceRect, opacity, interpolation).DrawImage(image, composite);
+            DrawImageWorker(GetDevice().Get(), deviceContext.Get(), offset, destinationRect, sourceRect, opacity, interpolation).DrawImage(image, composite);
         });
 
     }
@@ -707,7 +753,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             auto& deviceContext = GetResource();
             CheckInPointer(bitmap);
 
-            DrawImageWorker(deviceContext.Get(), offset, destinationRect, sourceRect, opacity, interpolation).DrawBitmap(bitmap, perspective);
+            DrawImageWorker(GetDevice().Get(), deviceContext.Get(), offset, destinationRect, sourceRect, opacity, interpolation).DrawBitmap(bitmap, perspective);
         });
     }
 
@@ -2454,30 +2500,14 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         ID2D1Brush* brush,
         ICanvasTextFormat* format)
     {
-        auto& deviceContext = GetResource();
-        CheckInPointer(brush);
-
         if (!format)
-        {
             format = GetDefaultTextFormat();
-        }
 
-        ComPtr<ICanvasTextFormatInternal> formatInternal;
-        ThrowIfFailed(format->QueryInterface(formatInternal.GetAddressOf()));
-
-        uint32_t textLength;
-        auto textBuffer = WindowsGetStringRawBuffer(text, &textLength);
-        ThrowIfNullPointer(textBuffer, E_INVALIDARG);
-
-        auto d2dRect = ToD2DRect(rect);
-
-        deviceContext->DrawText(
-            textBuffer,
-            textLength,
-            formatInternal->GetRealizedTextFormat().Get(),
-            &d2dRect,
-            brush,
-            static_cast<D2D1_DRAW_TEXT_OPTIONS>(formatInternal->GetDrawTextOptions()));
+        auto formatInternal = As<ICanvasTextFormatInternal>(format);
+        auto realizedFormat = formatInternal->GetRealizedTextFormat();
+        auto drawTextOptions = formatInternal->GetDrawTextOptions();
+        
+        DrawTextImpl(text, rect, brush, realizedFormat.Get(), drawTextOptions);
     }
 
 
@@ -2496,22 +2526,52 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         // disable word wrapping.
         Rect rect{ point.X, point.Y, 0, 0 };
 
+        auto formatInternal = As<ICanvasTextFormatInternal>(format);
+        auto drawTextOptions = formatInternal->GetDrawTextOptions();
+
+        ComPtr<IDWriteTextFormat> realizedTextFormat;
+        
         //
-        // TODO #802: there's a thread-safety implication since we're modifying state
-        // on something that _may_ be being used on another thread.
+        // Drawing at a point only works if word wrapping is turned off.  We
+        // don't want to modify the original format passed in (since DrawText is
+        // conceptually a read-only operation and we want the same format to be
+        // usable across multiple threads).  Instead we create a temporary clone
+        // of the original with a different word wrapping setting.
         //
-        CanvasWordWrapping oldWordWrapping{};
-        ThrowIfFailed(format->get_WordWrapping(&oldWordWrapping));
+        
+        CanvasWordWrapping wordWrapping;
+        ThrowIfFailed(format->get_WordWrapping(&wordWrapping));
 
-        ThrowIfFailed(format->put_WordWrapping(CanvasWordWrapping::NoWrap));
+        if (wordWrapping == CanvasWordWrapping::NoWrap)
+        {
+            realizedTextFormat = formatInternal->GetRealizedTextFormat();
+        }
+        else
+        {
+            realizedTextFormat = formatInternal->GetRealizedTextFormatClone(CanvasWordWrapping::NoWrap);
+        }
 
-        auto restoreWordWrapping = MakeScopeWarden(
-            [&]
-            {
-                format->put_WordWrapping(oldWordWrapping);
-            });
+        DrawTextImpl(text, rect, brush, realizedTextFormat.Get(), drawTextOptions);
+    }
 
-        DrawTextAtRectImpl(text, rect, brush, format);
+
+    void CanvasDrawingSession::DrawTextImpl(
+        HSTRING text,
+        Rect const& rect,
+        ID2D1Brush* brush,
+        IDWriteTextFormat* realizedFormat,
+        D2D1_DRAW_TEXT_OPTIONS drawTextOptions)
+    {
+        auto& deviceContext = GetResource();
+        CheckInPointer(brush);
+
+        uint32_t textLength;
+        auto textBuffer = WindowsGetStringRawBuffer(text, &textLength);
+        ThrowIfNullPointer(textBuffer, E_INVALIDARG);
+
+        auto d2dRect = ToD2DRect(rect);
+
+        deviceContext->DrawText(textBuffer, textLength, realizedFormat, &d2dRect, brush, drawTextOptions);
     }
 
 
@@ -2519,7 +2579,8 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
     {
         if (!m_defaultTextFormat)
         {
-            m_defaultTextFormat = CanvasTextFormatFactory::GetOrCreateManager()->Create();
+            m_defaultTextFormat = Make<CanvasTextFormat>();
+            CheckMakeResult(m_defaultTextFormat);
         }
 
         return m_defaultTextFormat.Get();
@@ -3214,6 +3275,110 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             brush);
     }
 
+#if WINVER > _WIN32_WINNT_WINBLUE
+    IFACEMETHODIMP CanvasDrawingSession::DrawInk(IIterable<InkStroke*>* inkStrokeCollection)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                DrawInkImpl(inkStrokeCollection, InkAdapter::GetInstance()->IsHighContrastEnabled());
+            });
+    }
+
+    IFACEMETHODIMP CanvasDrawingSession::DrawInkWithHighContrast(
+        IIterable<InkStroke*>* inkStrokeCollection,
+        boolean highContrast)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                DrawInkImpl(inkStrokeCollection, !!highContrast);
+            });
+    }
+
+    void CanvasDrawingSession::DrawInkImpl(
+        IIterable<InkStroke*>* inkStrokeCollection,
+        bool highContrast)
+    {
+        auto& deviceContext = GetResource();
+
+        CheckInPointer(inkStrokeCollection);
+
+        ComPtr<IUnknown> inkStrokeCollectionAsIUnknown = As<IUnknown>(inkStrokeCollection);
+
+        if (!m_inkD2DRenderer)
+        {
+            m_inkD2DRenderer = InkAdapter::GetInstance()->CreateInkRenderer();
+        }
+
+        if (!m_inkStateBlock)
+        {
+            ComPtr<ID2D1Factory> d2dFactory;
+            deviceContext->GetFactory(&d2dFactory);
+
+            ThrowIfFailed(As<ID2D1Factory1>(d2dFactory)->CreateDrawingStateBlock(&m_inkStateBlock));
+        }
+
+        deviceContext->SaveDrawingState(m_inkStateBlock.Get());
+
+        auto restoreStateWarden = MakeScopeWarden([&] { deviceContext->RestoreDrawingState(m_inkStateBlock.Get()); });
+
+        ThrowIfFailed(m_inkD2DRenderer->Draw(
+            deviceContext.Get(), 
+            inkStrokeCollectionAsIUnknown.Get(), 
+            highContrast));
+    }
+
+    IFACEMETHODIMP CanvasDrawingSession::DrawGradientMeshAtOrigin(ICanvasGradientMesh* gradientMesh)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                auto& deviceContext = GetResource();
+                auto deviceContext2 = As<ID2D1DeviceContext2>(deviceContext);
+
+                CheckInPointer(gradientMesh);
+
+                deviceContext2->DrawGradientMesh(
+                    GetWrappedResource<ID2D1GradientMesh>(gradientMesh).Get());
+            });
+    }
+
+    IFACEMETHODIMP CanvasDrawingSession::DrawGradientMesh(ICanvasGradientMesh* gradientMesh, Vector2 point)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                auto& deviceContext = GetResource();
+                auto deviceContext2 = As<ID2D1DeviceContext2>(deviceContext);
+
+                CheckInPointer(gradientMesh);
+                
+                TemporaryTransform<ID2D1DeviceContext1> transform(GetResource().Get(), point);
+
+                deviceContext2->DrawGradientMesh(
+                    GetWrappedResource<ID2D1GradientMesh>(gradientMesh).Get());
+            });
+    }
+
+    IFACEMETHODIMP CanvasDrawingSession::DrawGradientMeshAtCoords(ICanvasGradientMesh* gradientMesh, float x, float y)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                auto& deviceContext = GetResource();
+                auto deviceContext2 = As<ID2D1DeviceContext2>(deviceContext);
+
+                CheckInPointer(gradientMesh);
+                
+                TemporaryTransform<ID2D1DeviceContext1> transform(GetResource().Get(), Vector2{ x, y });
+
+                deviceContext2->DrawGradientMesh(
+                    GetWrappedResource<ID2D1GradientMesh>(gradientMesh).Get());
+            });
+    }
+
+#endif
 
     ID2D1SolidColorBrush* CanvasDrawingSession::GetColorBrush(Color const& color)
     {
@@ -3223,7 +3388,6 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         }
         else
         {
-            // TODO #802: pool and reuse this brush along with the device context?
             auto& deviceContext = GetResource();
             ThrowIfFailed(deviceContext->CreateSolidColorBrush(ToD2DColor(color), &m_solidColorBrush));
         }
@@ -3253,10 +3417,10 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
                 *value = static_cast<CanvasAntialiasing>(deviceContext->GetAntialiasMode());
             });
-	}
+    }
 
     IFACEMETHODIMP CanvasDrawingSession::put_Antialiasing(CanvasAntialiasing value)
-	{
+    {
         return ExceptionBoundary(
             [&]
             {
@@ -3264,10 +3428,10 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
                 deviceContext->SetAntialiasMode(static_cast<D2D1_ANTIALIAS_MODE>(value));
             });
-	}
+    }
 
     IFACEMETHODIMP CanvasDrawingSession::get_Blend(CanvasBlend* value)
-	{
+    {
         return ExceptionBoundary(
             [&]
             {
@@ -3276,10 +3440,10 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
                 *value = static_cast<CanvasBlend>(deviceContext->GetPrimitiveBlend());
             });
-	}
+    }
 
     IFACEMETHODIMP CanvasDrawingSession::put_Blend(CanvasBlend value)
-	{
+    {
         return ExceptionBoundary(
             [&]
             {
@@ -3287,7 +3451,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
                 deviceContext->SetPrimitiveBlend(static_cast<D2D1_PRIMITIVE_BLEND>(value));
             });
-	}
+    }
 
     IFACEMETHODIMP CanvasDrawingSession::get_TextAntialiasing(CanvasTextAntialiasing* value)
     {
@@ -3299,10 +3463,10 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
                 *value = static_cast<CanvasTextAntialiasing>(deviceContext->GetTextAntialiasMode());
             });
-	}
+    }
 
     IFACEMETHODIMP CanvasDrawingSession::put_TextAntialiasing(CanvasTextAntialiasing value)
-	{
+    {
         return ExceptionBoundary(
             [&]
             {
@@ -3310,51 +3474,129 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
                 deviceContext->SetTextAntialiasMode(static_cast<D2D1_TEXT_ANTIALIAS_MODE>(value));
             });
-	}
+    }
 
-    IFACEMETHODIMP CanvasDrawingSession::get_Transform(ABI::Microsoft::Graphics::Canvas::Numerics::Matrix3x2* value)
+    IFACEMETHODIMP CanvasDrawingSession::get_TextRenderingParameters(ICanvasTextRenderingParameters** value)
     {
         return ExceptionBoundary(
             [&]
             {
                 auto& deviceContext = GetResource();
-                CheckInPointer(value);
+                CheckAndClearOutPointer(value);
 
-                D2D1_MATRIX_3X2_F transform;
-                deviceContext->GetTransform(&transform);
-                
-                //
-                // Un-apply the offset transform. This could be done with a matrix invert, 
-                // but this is cheaper.
-                //
-                // This polls from the wrapped object, rather than stores a local transform 
-                // member. This ensures that any transforms performed in native interop
-                // will be retrievable here.
-                //
-                const D2D1_POINT_2F renderingSurfaceOffset = m_adapter->GetRenderingSurfaceOffset();
-                transform._31 -= renderingSurfaceOffset.x;
-                transform._32 -= renderingSurfaceOffset.y;
+                ComPtr<IDWriteRenderingParams> dwriteRenderingParams;
+                deviceContext->GetTextRenderingParams(&dwriteRenderingParams);
 
-                *value = *reinterpret_cast<ABI::Microsoft::Graphics::Canvas::Numerics::Matrix3x2*>(&transform);
+                if (dwriteRenderingParams)
+                {
+                    auto canvasTextRenderingParams = ResourceManager::GetOrCreate<ICanvasTextRenderingParameters>(dwriteRenderingParams.Get());
+
+                    ThrowIfFailed(canvasTextRenderingParams.CopyTo(value));
+                }
             });
-	}
+    }
 
-    IFACEMETHODIMP CanvasDrawingSession::put_Transform(ABI::Microsoft::Graphics::Canvas::Numerics::Matrix3x2 value)
-	{
+    IFACEMETHODIMP CanvasDrawingSession::put_TextRenderingParameters(ICanvasTextRenderingParameters* value)
+    {
         return ExceptionBoundary(
             [&]
             {
                 auto& deviceContext = GetResource();
-                
-                D2D1_POINT_2F offset = m_adapter->GetRenderingSurfaceOffset();
 
-                D2D1_MATRIX_3X2_F transform = *(ReinterpretAs<D2D1_MATRIX_3X2_F*>(&value));
-                transform._31 += offset.x;
-                transform._32 += offset.y;
+                ComPtr<IDWriteRenderingParams> dwriteRenderingParams;
+                if (value)
+                {
+                    dwriteRenderingParams = GetWrappedResource<IDWriteRenderingParams>(value);
+                }
 
-                deviceContext->SetTransform(transform);
+                deviceContext->SetTextRenderingParams(dwriteRenderingParams.Get());
+
             });
-	}
+    }
+
+
+    //
+    // Converts the given offset from DIPs to the appropriate unit
+    //
+    static D2D1_POINT_2F GetOffsetInCorrectUnits(ID2D1DeviceContext1* deviceContext, D2D1_POINT_2F const& offset)
+    {
+        auto unitMode = deviceContext->GetUnitMode();
+
+        if (unitMode == D2D1_UNIT_MODE_DIPS)
+        {
+            return offset;
+        }
+        else if (unitMode == D2D1_UNIT_MODE_PIXELS)
+        {
+            auto dpi = GetDpi(deviceContext);
+            D2D1_POINT_2F adjustedOffset = {
+                (float)DipsToPixels(offset.x, dpi, CanvasDpiRounding::Floor),
+                (float)DipsToPixels(offset.y, dpi, CanvasDpiRounding::Floor)
+            };
+            return adjustedOffset;
+        }
+        else
+        {
+            assert(false);
+            ThrowHR(E_UNEXPECTED);
+        }
+    }
+
+    //
+    // Gets the current transform from the given device context, stripping out
+    // the current offset
+    //
+    static Matrix3x2 GetTransform(ID2D1DeviceContext1* deviceContext, D2D1_POINT_2F const& offset)
+    {
+        D2D1_MATRIX_3X2_F transform;
+        deviceContext->GetTransform(&transform);
+
+        // We assume that the currently set transform has the offset applied to
+        // it, correctly set for the current unit mode.  We need to subtract
+        // that from the transform before returning it.
+        auto adjustedOffset = GetOffsetInCorrectUnits(deviceContext, offset);
+        transform._31 -= adjustedOffset.x;
+        transform._32 -= adjustedOffset.y;
+
+        return *reinterpret_cast<ABI::Microsoft::Graphics::Canvas::Numerics::Matrix3x2*>(&transform);
+    }
+
+    //
+    // Sets the transform on the given device context, applied the offset.
+    //
+    static void SetTransform(ID2D1DeviceContext1* deviceContext, D2D1_POINT_2F const& offset, Matrix3x2 const& matrix)
+    {
+        auto adjustedOffset = GetOffsetInCorrectUnits(deviceContext, offset);
+
+        D2D1_MATRIX_3X2_F transform = *(ReinterpretAs<D2D1_MATRIX_3X2_F const*>(&matrix));
+        transform._31 += adjustedOffset.x;
+        transform._32 += adjustedOffset.y;
+
+        deviceContext->SetTransform(transform);
+    }
+
+    IFACEMETHODIMP CanvasDrawingSession::get_Transform(ABI::Microsoft::Graphics::Canvas::Numerics::Matrix3x2* value)
+    {
+        return ExceptionBoundary(
+            [&]
+            {                               
+                auto& deviceContext = GetResource();
+                CheckInPointer(value);
+
+                *value = GetTransform(deviceContext.Get(), m_offset);
+            });
+    }
+
+    IFACEMETHODIMP CanvasDrawingSession::put_Transform(ABI::Microsoft::Graphics::Canvas::Numerics::Matrix3x2 value)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                auto& deviceContext = GetResource();
+
+                SetTransform(deviceContext.Get(), m_offset, value);
+            });
+    }
 
     IFACEMETHODIMP CanvasDrawingSession::get_Units(CanvasUnits* value)
     {
@@ -3366,18 +3608,110 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
                 *value = static_cast<CanvasUnits>(deviceContext->GetUnitMode());
             });
-	}
+    }
 
     IFACEMETHODIMP CanvasDrawingSession::put_Units(CanvasUnits value)
-	{
+    {
         return ExceptionBoundary(
             [&]
             {
                 auto& deviceContext = GetResource();
 
-                deviceContext->SetUnitMode(static_cast<D2D1_UNIT_MODE>(value));
+                if (m_offset.x != 0 || m_offset.y != 0)
+                {
+                    auto transform = GetTransform(deviceContext.Get(), m_offset);
+                    deviceContext->SetUnitMode(static_cast<D2D1_UNIT_MODE>(value));
+                    SetTransform(deviceContext.Get(), m_offset, transform);
+                }
+                else
+                {
+                    deviceContext->SetUnitMode(static_cast<D2D1_UNIT_MODE>(value));
+                }
             });
     }
+
+    IFACEMETHODIMP CanvasDrawingSession::get_EffectBufferPrecision(IReference<CanvasBufferPrecision>** value)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                auto& deviceContext = GetResource();
+                CheckAndClearOutPointer(value);
+
+                D2D1_RENDERING_CONTROLS renderingControls;
+                deviceContext->GetRenderingControls(&renderingControls);
+
+                // If the value is not unknown, box it as an IReference.
+                // Unknown precision returns null.
+                if (renderingControls.bufferPrecision != D2D1_BUFFER_PRECISION_UNKNOWN)
+                {
+                    auto nullable = Make<Nullable<CanvasBufferPrecision>>(FromD2DBufferPrecision(renderingControls.bufferPrecision));
+                    CheckMakeResult(nullable);
+
+                    ThrowIfFailed(nullable.CopyTo(value));
+                }
+            });
+    }
+
+    IFACEMETHODIMP CanvasDrawingSession::put_EffectBufferPrecision(IReference<CanvasBufferPrecision>* value)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                auto& deviceContext = GetResource();
+
+                D2D1_RENDERING_CONTROLS renderingControls;
+                deviceContext->GetRenderingControls(&renderingControls);
+
+                if (value)
+                {
+                    // Convert non-null values from Win2D to D2D format.
+                    CanvasBufferPrecision bufferPrecision;
+                    ThrowIfFailed(value->get_Value(&bufferPrecision));
+
+                    renderingControls.bufferPrecision = ToD2DBufferPrecision(bufferPrecision);
+                }
+                else
+                {
+                    // Null references -> unknown.
+                    renderingControls.bufferPrecision = D2D1_BUFFER_PRECISION_UNKNOWN;
+                }
+
+                deviceContext->SetRenderingControls(&renderingControls);
+            });
+    }
+
+    IFACEMETHODIMP CanvasDrawingSession::get_EffectTileSize(BitmapSize* value)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                auto& deviceContext = GetResource();
+                CheckInPointer(value);
+
+                D2D1_RENDERING_CONTROLS renderingControls;
+                deviceContext->GetRenderingControls(&renderingControls);
+
+                *value = BitmapSize{ renderingControls.tileSize.width, renderingControls.tileSize.height };
+            });
+    }
+
+    IFACEMETHODIMP CanvasDrawingSession::put_EffectTileSize(BitmapSize value)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                auto& deviceContext = GetResource();
+
+                D2D1_RENDERING_CONTROLS renderingControls;
+                deviceContext->GetRenderingControls(&renderingControls);
+
+                renderingControls.tileSize = D2D_SIZE_U{ value.Width, value.Height };
+
+                deviceContext->SetRenderingControls(&renderingControls);
+            });
+    }
+
 
     IFACEMETHODIMP CanvasDrawingSession::get_Device(ICanvasDevice** value)
     {
@@ -3388,23 +3722,23 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             {
                 CheckInPointer(value);
 
-                if (!m_owner)
-                {
-                    auto& deviceContext = GetResource();
-
-                    ComPtr<ID2D1Device> d2dDeviceBase;
-                    deviceContext->GetDevice(&d2dDeviceBase);
-
-                    ComPtr<ID2D1Device1> d2dDevice;
-                    ThrowIfFailed(d2dDeviceBase.As(&d2dDevice));
-
-                    auto canvasDeviceManager = CanvasDeviceFactory::GetOrCreateManager();
-
-                    m_owner = canvasDeviceManager->GetOrCreate(d2dDevice.Get());
-                }
-
-                ThrowIfFailed(m_owner.CopyTo(value));
+                ThrowIfFailed(GetDevice().CopyTo(value));
             });
+    }
+
+    ComPtr<ICanvasDevice> const& CanvasDrawingSession::GetDevice()
+    {
+        if (!m_owner)
+        {
+            auto& deviceContext = GetResource();
+
+            ComPtr<ID2D1Device> d2dDevice;
+            deviceContext->GetDevice(&d2dDevice);
+
+            m_owner = ResourceManager::GetOrCreate<ICanvasDevice>(d2dDevice.Get());
+        }
+
+        return m_owner;
     }
 
     IFACEMETHODIMP CanvasDrawingSession::get_Dpi(float* dpi)
@@ -3524,6 +3858,113 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         return CreateLayerImpl(opacity, opacityBrush, &clipRectangle, clipGeometry, &geometryTransform, options, layer);
     }
 
+    IFACEMETHODIMP CanvasDrawingSession::DrawGlyphRun(
+        Vector2 point,
+        ICanvasFontFace* fontFace,
+        float fontSize,
+        uint32_t glyphCount,
+        CanvasGlyph* glyphs,
+        boolean isSideways,
+        uint32_t bidiLevel,
+        ICanvasBrush* brush)
+    {
+        return DrawGlyphRunWithMeasuringModeAndDescription(
+            point,
+            fontFace,
+            fontSize,
+            glyphCount,
+            glyphs,
+            isSideways,
+            bidiLevel,
+            brush,
+            CanvasTextMeasuringMode::Natural,
+            nullptr,
+            nullptr,
+            0,
+            0,
+            0);
+    }
+
+    IFACEMETHODIMP CanvasDrawingSession::DrawGlyphRunWithMeasuringMode(
+        Vector2 point,
+        ICanvasFontFace* fontFace,
+        float fontSize,
+        uint32_t glyphCount,
+        CanvasGlyph* glyphs,
+        boolean isSideways,
+        uint32_t bidiLevel,
+        ICanvasBrush* brush,
+        CanvasTextMeasuringMode textMeasuringMode)
+    {
+        return DrawGlyphRunWithMeasuringModeAndDescription(
+            point,
+            fontFace,
+            fontSize,
+            glyphCount,
+            glyphs,
+            isSideways,
+            bidiLevel,
+            brush,
+            textMeasuringMode,
+            nullptr,
+            nullptr,
+            0,
+            0,
+            0);
+    }
+
+    IFACEMETHODIMP CanvasDrawingSession::DrawGlyphRunWithMeasuringModeAndDescription(
+        Vector2 point,
+        ICanvasFontFace* fontFace,
+        float fontSize,
+        uint32_t glyphCount,
+        CanvasGlyph* glyphs,
+        boolean isSideways,
+        uint32_t bidiLevel,
+        ICanvasBrush* brush,
+        CanvasTextMeasuringMode textMeasuringMode,
+        HSTRING localeName,
+        HSTRING text,
+        uint32_t clusterMapIndicesCount,
+        int* clusterMapIndices,
+        uint32_t textPosition)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                auto& deviceContext = GetResource();
+
+                CheckInPointer(fontFace);
+                CheckInPointer(glyphs);
+                CheckInPointer(brush);
+
+                DrawGlyphRunHelper helper(
+                    fontFace, 
+                    fontSize, 
+                    glyphCount, 
+                    glyphs, 
+                    isSideways, 
+                    bidiLevel, 
+                    brush, 
+                    textMeasuringMode, 
+                    localeName, 
+                    text, 
+                    clusterMapIndicesCount, 
+                    clusterMapIndices, 
+                    textPosition,
+                    deviceContext);
+
+                auto d2dBrush = MaybeAs<ID2D1Brush>(helper.ClientDrawingEffect);
+
+                deviceContext->DrawGlyphRun(
+                    ToD2DPoint(point),
+                    &helper.DWriteGlyphRun,
+                    &helper.DWriteGlyphRunDescription,
+                    d2dBrush.Get(),
+                    helper.MeasuringMode);
+            });
+    }
+
     // Returns true if the current transform matrix contains only scaling and translation, but no rotation or skew.
     static bool TransformIsAxisPreserving(ID2D1DeviceContext* deviceContext)
     {
@@ -3630,7 +4071,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         assert(!m_activeLayerIds.empty());
 
         if (m_activeLayerIds.back() != layerId)
-            ThrowHR(E_FAIL, HStringReference(Strings::PoppedWrongLayer).Get());
+            ThrowHR(E_FAIL, Strings::PoppedWrongLayer);
 
         m_activeLayerIds.pop_back();
 
@@ -3644,6 +4085,90 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         }
     }
 
+#if WINVER > _WIN32_WINNT_WINBLUE
 
-    ActivatableStaticOnlyFactory(CanvasDrawingSessionFactory);
+    IFACEMETHODIMP CanvasDrawingSession::CreateSpriteBatch(
+        ICanvasSpriteBatch** spriteBatch)
+    {
+        return CreateSpriteBatchWithSortModeAndInterpolationAndOptions(
+            CanvasSpriteSortMode::None,
+            CanvasImageInterpolation::Linear,
+            CanvasSpriteOptions::None,
+            spriteBatch);
+    }
+    
+    IFACEMETHODIMP CanvasDrawingSession::CreateSpriteBatchWithSortMode(
+        CanvasSpriteSortMode sortMode,
+        ICanvasSpriteBatch** spriteBatch)
+    {
+        return CreateSpriteBatchWithSortModeAndInterpolationAndOptions(
+            sortMode,
+            CanvasImageInterpolation::Linear,
+            CanvasSpriteOptions::None,
+            spriteBatch);
+    }
+    
+    IFACEMETHODIMP CanvasDrawingSession::CreateSpriteBatchWithSortModeAndInterpolation(
+        CanvasSpriteSortMode sortMode,
+        CanvasImageInterpolation interpolation,
+        ICanvasSpriteBatch** spriteBatch)
+    {
+        return CreateSpriteBatchWithSortModeAndInterpolationAndOptions(
+            sortMode,
+            interpolation,
+            CanvasSpriteOptions::None,
+            spriteBatch);
+    }
+    
+    IFACEMETHODIMP CanvasDrawingSession::CreateSpriteBatchWithSortModeAndInterpolationAndOptions(
+        CanvasSpriteSortMode sortMode,
+        CanvasImageInterpolation interpolation,
+        CanvasSpriteOptions options,
+        ICanvasSpriteBatch** spriteBatch)
+    {
+        return ExceptionBoundary([&]
+        {
+            // Validate interpolation mode
+            switch (interpolation)
+            {
+            case CanvasImageInterpolation::NearestNeighbor:
+            case CanvasImageInterpolation::Linear:
+                break;
+
+            default:
+                // We have a special message for this case since there are
+                // various, valid looking, CanvasImageInterpolation modes that
+                // are not valid to use with this API.
+                ThrowHR(E_INVALIDARG, Strings::SpriteBatchInvalidInterpolation);
+            }
+
+            // Validate options
+            auto const validOptions = CanvasSpriteOptions::ClampToSourceRect;
+            if ((static_cast<uint32_t>(options) & ~static_cast<uint32_t>(validOptions)) != 0)
+            {
+                // no special message for this since this can't happen unless
+                // the app is doing casting.
+                ThrowHR(E_INVALIDARG);
+            }
+
+            CheckAndClearOutPointer(spriteBatch);
+            
+            auto deviceContext3 = MaybeAs<ID2D1DeviceContext3>(GetResource());
+
+            if (!deviceContext3)
+                ThrowHR(E_NOTIMPL, Strings::SpriteBatchNotAvailable);
+
+            auto newSpriteBatch = Make<CanvasSpriteBatch>(
+                deviceContext3,
+                sortMode,
+                static_cast<D2D1_BITMAP_INTERPOLATION_MODE>(interpolation),
+                static_cast<D2D1_SPRITE_OPTIONS>(options));
+            CheckMakeResult(newSpriteBatch);
+
+            ThrowIfFailed(newSpriteBatch.CopyTo(spriteBatch));
+        });
+    }
+    
+#endif
+
 }}}}

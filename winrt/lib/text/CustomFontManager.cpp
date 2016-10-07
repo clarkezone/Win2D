@@ -10,10 +10,30 @@
 
 using namespace ABI::Microsoft::Graphics::Canvas::Text;
 
+
+ComPtr<IDWriteFactory> DefaultCustomFontManagerAdapter::CreateDWriteFactory(DWRITE_FACTORY_TYPE type)
+{
+    ComPtr<IDWriteFactory> factory;
+    ThrowIfFailed(DWriteCreateFactory(type, __uuidof(factory), &factory));
+    return factory;
+}
+
+
+IStorageFileStatics* DefaultCustomFontManagerAdapter::GetStorageFileStatics()
+{
+    if (!m_storageFileStatics)
+    {
+        ThrowIfFailed(GetActivationFactory(
+            HStringReference(RuntimeClass_Windows_Storage_StorageFile).Get(),
+            &m_storageFileStatics));
+    }
+
+    return m_storageFileStatics.Get();
+}
+
+
 class CustomFontFileEnumerator 
-    : public RuntimeClass<
-        RuntimeClassFlags<ClassicCom>,
-        IDWriteFontFileEnumerator>
+    : public RuntimeClass<RuntimeClassFlags<ClassicCom>, IDWriteFontFileEnumerator>
     , private LifespanTracker<CustomFontFileEnumerator>
 {
     ComPtr<IDWriteFactory> m_factory;
@@ -53,9 +73,7 @@ public:
 
 
 class CustomFontLoader
-    : public RuntimeClass<
-    RuntimeClassFlags<ClassicCom>,
-    IDWriteFontCollectionLoader>
+    : public RuntimeClass<RuntimeClassFlags<ClassicCom>, IDWriteFontCollectionLoader>
     , private LifespanTracker<CustomFontLoader>
 {
 public:
@@ -67,17 +85,17 @@ public:
     {
         return ExceptionBoundary(
             [=]
-        {
-            auto enumerator = Make<CustomFontFileEnumerator>(factory, collectionKey, collectionKeySize);
-            CheckMakeResult(enumerator);
-            ThrowIfFailed(enumerator.CopyTo(fontFileEnumerator));
-        });
+            {
+                auto enumerator = Make<CustomFontFileEnumerator>(factory, collectionKey, collectionKeySize);
+                CheckMakeResult(enumerator);
+                ThrowIfFailed(enumerator.CopyTo(fontFileEnumerator));
+            });
     }
 };
 
 
-CustomFontManager::CustomFontManager(std::shared_ptr<ICanvasTextFormatAdapter> const& adapter)
-    : m_adapter(adapter)
+CustomFontManager::CustomFontManager()
+    : m_adapter(CustomFontManagerAdapter::GetInstance())
 {
     ThrowIfFailed(GetActivationFactory(
         HStringReference(RuntimeClass_Windows_Foundation_Uri).Get(),
@@ -89,10 +107,15 @@ WinString CustomFontManager::GetAbsolutePathFromUri(WinString const& uriString)
     ComPtr<IUriRuntimeClass> uri;
     ThrowIfFailed(m_uriFactory->CreateWithRelativeUri(WinString(L"ms-appx://"), uriString, &uri));
 
+    return GetAbsolutePathFromUri(uri.Get());
+}
+
+WinString CustomFontManager::GetAbsolutePathFromUri(IUriRuntimeClass* uri)
+{
     auto storageFileStatics = m_adapter->GetStorageFileStatics();
     ComPtr<IAsyncOperation<StorageFile*>> operation;
 
-    HRESULT hr = storageFileStatics->GetFileFromApplicationUriAsync(uri.Get(), &operation);
+    HRESULT hr = storageFileStatics->GetFileFromApplicationUriAsync(uri, &operation);
     if (FAILED(hr))
     {
         ThrowHR(hr, HStringReference(Strings::InvalidFontFamilyUri).Get());
@@ -135,6 +158,18 @@ ComPtr<IDWriteFontCollection> CustomFontManager::GetFontCollectionFromUri(WinStr
 
     auto path = GetAbsolutePathFromUri(uri);
 
+    return GetFontCollectionFromPath(path);
+}
+
+ComPtr<IDWriteFontCollection> CustomFontManager::GetFontCollectionFromUri(IUriRuntimeClass* uri)
+{
+    auto path = GetAbsolutePathFromUri(uri);
+
+    return GetFontCollectionFromPath(path);
+}
+
+ComPtr<IDWriteFontCollection> CustomFontManager::GetFontCollectionFromPath(WinString& path)
+{
     auto pathBegin = begin(path);
     auto pathEnd = end(path);
 
@@ -153,6 +188,8 @@ ComPtr<IDWriteFontCollection> CustomFontManager::GetFontCollectionFromUri(WinStr
 
 ComPtr<IDWriteFactory> const& CustomFontManager::GetIsolatedFactory()
 {
+    RecursiveLock lock(m_mutex);
+    
     if (!m_isolatedFactory)
     {
         m_isolatedFactory = m_adapter->CreateDWriteFactory(DWRITE_FACTORY_TYPE_ISOLATED);
@@ -165,12 +202,45 @@ ComPtr<IDWriteFactory> const& CustomFontManager::GetIsolatedFactory()
 
 ComPtr<IDWriteFactory> const& CustomFontManager::GetSharedFactory()
 {
+    RecursiveLock lock(m_mutex);
+    
     if (!m_sharedFactory)
     {
         m_sharedFactory = m_adapter->CreateDWriteFactory(DWRITE_FACTORY_TYPE_SHARED);
     }
 
     return m_sharedFactory;
+}
+
+ComPtr<IDWriteTextAnalyzer2> const& CustomFontManager::GetTextAnalyzer()
+{
+    RecursiveLock lock(m_mutex);
+
+    auto& sharedFactory = GetSharedFactory();
+
+    if (!m_textAnalyzer)
+    {
+        ComPtr<IDWriteTextAnalyzer> textAnalyzerBase;
+
+        ThrowIfFailed(sharedFactory->CreateTextAnalyzer(&textAnalyzerBase));
+        m_textAnalyzer = As<IDWriteTextAnalyzer2>(textAnalyzerBase);
+    }
+
+    return m_textAnalyzer;
+}
+
+ComPtr<IDWriteFontFallback> const& CustomFontManager::GetSystemFontFallback()
+{
+    RecursiveLock lock(m_mutex);
+
+    auto& sharedFactory = GetSharedFactory();
+
+    if (!m_systemFontFallback)
+    {
+        ThrowIfFailed(As<IDWriteFactory2>(sharedFactory)->GetSystemFontFallback(&m_systemFontFallback));
+    }
+
+    return m_systemFontFallback;
 }
 
 void CustomFontManager::ValidateUri(WinString const& uriString)
@@ -187,6 +257,6 @@ void CustomFontManager::ValidateUri(WinString const& uriString)
     if (!schemeName.Equals(HStringReference(L"ms-appx").Get()) &&
         !schemeName.Equals(HStringReference(L"ms-appdata").Get()))
     {
-        ThrowHR(E_INVALIDARG, HStringReference(Strings::InvalidFontFamilyUriScheme).Get());
+        ThrowHR(E_INVALIDARG, Strings::InvalidFontFamilyUriScheme);
     }
 }

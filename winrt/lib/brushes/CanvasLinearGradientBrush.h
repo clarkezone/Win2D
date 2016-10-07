@@ -7,30 +7,25 @@
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Brushes
 {
     using namespace ABI::Microsoft::Graphics::Canvas::Numerics;
-    using namespace ::Microsoft::WRL;    
-
-    class CanvasLinearGradientBrushManager;
-
-    struct CanvasLinearGradientBrushTraits
-    {
-        typedef ID2D1LinearGradientBrush resource_t;
-        typedef CanvasLinearGradientBrush wrapper_t;
-        typedef ICanvasLinearGradientBrush wrapper_interface_t;
-        typedef CanvasLinearGradientBrushManager manager_t;
-    };
+    using namespace ::Microsoft::WRL;
 
     class CanvasLinearGradientBrush : RESOURCE_WRAPPER_RUNTIME_CLASS(
-        CanvasLinearGradientBrushTraits,
+        ID2D1LinearGradientBrush,
+        CanvasLinearGradientBrush,
+        ICanvasLinearGradientBrush,
         MixIn<CanvasLinearGradientBrush, CanvasBrush>),
         public CanvasBrush
     {
         InspectableClass(RuntimeClass_Microsoft_Graphics_Canvas_Brushes_CanvasLinearGradientBrush, BaseTrust);
 
     public:
+        static ComPtr<CanvasLinearGradientBrush> CreateNew(
+            ICanvasResourceCreator* resourceCreator,
+            ID2D1GradientStopCollection1* stopCollection);
+
         CanvasLinearGradientBrush(
-            std::shared_ptr<CanvasLinearGradientBrushManager> manager,
-            ID2D1LinearGradientBrush* brush,
-            ICanvasDevice* device);
+            ICanvasDevice* device,
+            ID2D1LinearGradientBrush* brush);
 
         IFACEMETHOD(get_StartPoint)(_Out_ Vector2* value) override;
 
@@ -41,6 +36,8 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         IFACEMETHOD(put_EndPoint)(_In_ Vector2 value) override;
 
         IFACEMETHOD(get_Stops)(UINT32* valueCount, CanvasGradientStop** valueElements) override;
+
+        IFACEMETHOD(get_StopsHdr)(UINT32* valueCount, CanvasGradientStopHdr** valueElements) override;
 
         IFACEMETHOD(get_EdgeBehavior)(CanvasEdgeBehavior* value) override;
 
@@ -62,40 +59,13 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         ComPtr<ID2D1GradientStopCollection1> GetGradientStopCollection();
     };
 
-    class CanvasLinearGradientBrushManager : public ResourceManager<CanvasLinearGradientBrushTraits>
-    {
-    public:
-        ComPtr<CanvasLinearGradientBrush> CreateNew(
-            ICanvasResourceCreator* resourceAllocator,
-            UINT32 gradientStopCount,
-            CanvasGradientStop* gradientStops,
-            CanvasEdgeBehavior edgeBehavior,
-            CanvasAlphaMode alphaMode,
-            CanvasColorSpace preInterpolationSpace,
-            CanvasColorSpace postInterpolationSpace,
-            CanvasBufferPrecision bufferPrecision);
-
-        ComPtr<CanvasLinearGradientBrush> CreateNew(
-            ICanvasResourceCreator* resourceCreator,
-            ID2D1GradientStopCollection1* stopCollection);
-
-        ComPtr<CanvasLinearGradientBrush> CreateWrapper(
-            ICanvasDevice* device,
-            ID2D1LinearGradientBrush* resource);
-    };
-
     class CanvasLinearGradientBrushFactory
-        : public ActivationFactory<
-        ICanvasLinearGradientBrushFactory,
-        CloakedIid<ICanvasDeviceResourceFactoryNative>,
-        ICanvasLinearGradientBrushStatics>,
-        public PerApplicationManager<CanvasLinearGradientBrushFactory, CanvasLinearGradientBrushManager>
+        : public AgileActivationFactory<ICanvasLinearGradientBrushFactory, ICanvasLinearGradientBrushStatics>
+        , private LifespanTracker<CanvasLinearGradientBrushFactory>
     {
         InspectableClassStatic(RuntimeClass_Microsoft_Graphics_Canvas_Brushes_CanvasLinearGradientBrush, BaseTrust);
 
     public:
-        IMPLEMENT_DEFAULT_ICANVASDEVICERESOURCEFACTORYNATIVE();
-        
         IFACEMETHOD(CreateSimple)(
             ICanvasResourceCreator* resourceCreator,
             ABI::Windows::UI::Color startColor,
@@ -103,13 +73,13 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             ICanvasLinearGradientBrush** canvasLinearGradientBrush) override;
 
         IFACEMETHOD(CreateWithStops)(
-            ICanvasResourceCreator* resourceAllocator,
+            ICanvasResourceCreator* resourceCreator,
             UINT32 gradientStopCount,
             CanvasGradientStop* gradientStops,
             ICanvasLinearGradientBrush** linearGradientBrush) override;
 
         IFACEMETHOD(CreateWithEdgeBehaviorAndAlphaMode)(
-            ICanvasResourceCreator* resourceAllocator,
+            ICanvasResourceCreator* resourceCreator,
             UINT32 gradientStopCount,
             CanvasGradientStop* gradientStops,
             CanvasEdgeBehavior extend,
@@ -117,7 +87,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             ICanvasLinearGradientBrush** linearGradientBrush) override;
 
         IFACEMETHOD(CreateWithEdgeBehaviorAndInterpolationOptions)(
-            ICanvasResourceCreator* resourceAllocator,
+            ICanvasResourceCreator* resourceCreator,
             UINT32 gradientStopCount,
             CanvasGradientStop* gradientStops,
             CanvasEdgeBehavior edgeBehavior,
@@ -130,6 +100,37 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         //
         // ICanvasLinearGradientBrushStatics
         //
+        IFACEMETHOD(CreateHdrSimple)(
+            ICanvasResourceCreator* resourceCreator,
+            Vector4 startColor,
+            Vector4 endColor,
+            ICanvasLinearGradientBrush** canvasLinearGradientBrush) override;
+
+        IFACEMETHOD(CreateHdrWithStops)(
+            ICanvasResourceCreator* resourceCreator,
+            UINT32 gradientStopCount,
+            CanvasGradientStopHdr* gradientStopsHdr,
+            ICanvasLinearGradientBrush** linearGradientBrush) override;
+
+        IFACEMETHOD(CreateHdrWithEdgeBehaviorAndAlphaMode)(
+            ICanvasResourceCreator* resourceCreator,
+            UINT32 gradientStopCount,
+            CanvasGradientStopHdr* gradientStopsHdr,
+            CanvasEdgeBehavior extend,
+            CanvasAlphaMode alphaMode,
+            ICanvasLinearGradientBrush** linearGradientBrush) override;
+
+        IFACEMETHOD(CreateHdrWithEdgeBehaviorAndInterpolationOptions)(
+            ICanvasResourceCreator* resourceCreator,
+            UINT32 gradientStopCount,
+            CanvasGradientStopHdr* gradientStopsHdr,
+            CanvasEdgeBehavior edgeBehavior,
+            CanvasAlphaMode alphaMode,
+            CanvasColorSpace preInterpolationSpace,
+            CanvasColorSpace postInterpolationSpace,
+            CanvasBufferPrecision bufferPrecision,
+            ICanvasLinearGradientBrush** linearGradientBrush) override;
+
         IFACEMETHOD(CreateRainbow)(
             ICanvasResourceCreator* resourceCreator,
             float eldritchness,

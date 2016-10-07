@@ -4,281 +4,161 @@
 
 #pragma once
 
-#include "ResourceTracker.h"
-#include "ResourceWrapper.h"
-#include "StoredInPropertyMap.h"
-
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 {
-    //
-    // Manages idempotent resource wrapping.  This is intended to be used in
-    // conjunction with ResourceWrapper.
-    //
-    // See ResourceTrackerUnitTests.cpp for simple example usage.
-    //
-    // TRAITS is expected to have following typedef members:
-    //
-    //     resource_t - the type of resource being wrapped (eg ID2D1Device1)
-    //     wrapper_t  - the concrete type of wrapper (eg CanvasDevice)
-    //     wrapper_interface_t - the default interface of the wrapper (eg ICanvasDevice)
-    //     manager_t - the manager type
-    //
-    // manager_t is expected to derive from ResourceManager.
-    //
-    // It can provide however many overloaded CreateNew() methods to create
-    // instances of wrapper_t is requires.  It must also provide a
-    // CreateWrapper() method that wraps a resource_t.
-    //
-    // ResourceManager exposes Create() and GetOrCreate() methods that
-    // internally call CreateNew() or CreateWrapper().
-    //
-    // class MyManager : public ResourceManager<MyTraits>
-    // {
-    // public:
-    //     ComPtr<MyWrapper> CreateNew(int param1, int param2);
-    //     ComPtr<IMyWrapper> CreateWrapper(MyResource* r);
-    // };
-    //
-    // auto w = MyManager.Create(1,2); // will call CreateNew
-    // auto w = MyManager.GetOrCreate(r); // calls CreateWrapper if wrapper needs to be created
-    //
-    template<typename TRAITS>
-    class ResourceManager : public std::enable_shared_from_this<typename TRAITS::manager_t>,
-                            public StoredInPropertyMap,
-                            private LifespanTracker<typename TRAITS::manager_t>
+    class __declspec(uuid("D8CF19FE-8064-423E-B649-8B458BA86116"))
+    ICanvasResourceWrapperWithDevice : public IUnknown
     {
-        ResourceTracker<typename TRAITS::wrapper_t> m_tracker;
     public:
-        typedef typename TRAITS::resource_t resource_t;
-        typedef typename TRAITS::wrapper_t wrapper_t;
-        typedef typename TRAITS::wrapper_interface_t wrapper_interface_t;
-
-        template<typename... Arguments>
-        ComPtr<wrapper_t> Create(Arguments&&... args)
-        {
-            auto wrapper = GetManager()->CreateNew(args...);
-            m_tracker.Add(wrapper->GetResource().Get(), wrapper.Get());
-            return wrapper;
-        }
-
-        template<typename... Arguments>
-        ComPtr<wrapper_t> GetOrCreate(Arguments&&... args)
-        {
-            return m_tracker.GetOrCreate(
-                args...,
-                [&] 
-                {
-                    return GetManager()->CreateWrapper(args...); 
-                });
-        }
-
-    protected:
-        //
-        // This class is intended to only be used when derived from.  Making the
-        // constructor protected helps to enforce this.
-        //
-        ResourceManager() = default;
-
-    private:
-        //
-        // Cast to the manager type.  Remember that manager_t needs to derive
-        // from ResourceManager.  This allows ResourceManager to call functions
-        // in manager_t.
-        //
-        typename TRAITS::manager_t* GetManager()
-        {
-            return static_cast<TRAITS::manager_t*>(this);
-        }
-
-        //
-        // Indicates that 'resource' is no longer being wrapped by anything.
-        // The is called by ResourceWrapper::Close().
-        //
-        void Remove(resource_t* resource)
-        {
-            m_tracker.Remove(resource);
-        }
-
-        // ResourceWrapper needs to be able to call remove
-        friend class ResourceWrapper<TRAITS>;
+        IFACEMETHOD(get_Device)(ICanvasDevice** value) = 0;
     };
 
 
-    //
-    // Helper for activation factories to manage their manager object.
-    //
-    // ActivationFactories may come and go, but as long as something is holding
-    // a reference to a ResourceManager somewhere we want the factory to
-    // continue to use that one.
-    //
-    // FACTORY is expected to derive from PerApplicationManager.
-    //
-    template<typename FACTORY, typename MANAGER>
-    class PerApplicationManager : private LifespanTracker<FACTORY>
+    class __declspec(uuid("D4142C4E-024D-45C3-85D1-B058314D9204"))
+    ICanvasResourceWrapperWithDpi : public IUnknown
     {
-        std::shared_ptr<MANAGER> m_manager;
     public:
-        typedef MANAGER manager_t;
+        IFACEMETHOD(get_Dpi)(float* value) = 0;
+    };
 
-        //
-        // Default constructor uses the real CoreApplication statics.
-        //
-        PerApplicationManager()
-            : m_manager(GetOrCreateManager())
+
+    class ResourceManager
+    {
+    public:
+        // Used by ResourceWrapper to maintain its state in the interop mapping table.
+        static void Add(IUnknown* resource, IInspectable* wrapper);
+        static void Remove(IUnknown* resource);
+
+
+        // Used internally, and exposed to apps via CanvasDeviceFactory::GetOrCreate and Microsoft.Graphics.Canvas.native.h.
+        static ComPtr<IInspectable> GetOrCreate(ICanvasDevice* device, IUnknown* resource, float dpi);
+
+
+        // Convenience helpers.
+        template<typename T>
+        static ComPtr<T> GetOrCreate(IUnknown* resource)
         {
+            return As<T>(GetOrCreate(nullptr, resource, 0));
         }
 
-        //
-        // Constructor that uses a specific ICoreApplication; allows tests to
-        // provide their own instance.
-        //
-        PerApplicationManager(ABI::Windows::ApplicationModel::Core::ICoreApplication* coreApplication)
-            : m_manager(GetOrCreateManager(coreApplication))
+        template<typename T>
+        static ComPtr<T> GetOrCreate(ICanvasDevice* device, IUnknown* resource)
         {
+            return As<T>(GetOrCreate(device, resource, 0));
+        }
+        
+        
+        // Validation helpers, also used by ResourceWrapper.
+        static void ValidateDevice(IInspectable* wrapper, ICanvasDevice* device);
+        static void ValidateDevice(ICanvasResourceWrapperWithDevice* wrapper, ICanvasDevice* device);
+        
+        static void ValidateDpi(IInspectable* wrapper, float dpi);
+        static void ValidateDpi(ICanvasResourceWrapperWithDpi* wrapper, float dpi);
+
+
+        // A try-create function attempts to wrap a native resource with a WinRT wrapper of a specific type.
+        // The result is an out pointer rather than return value because we are going to call these functions
+        // a bunch of times in a loop probing for different types, and don't want the overhead of messing
+        // with refcounts for the common case of probes that early out due to wrong resource type.
+
+        typedef bool(*TryCreateFunction)(ICanvasDevice* device, IUnknown* resource, float dpi, ComPtr<IInspectable>* result);
+
+
+        // Allow unit tests to inject additional try-create functions.
+        static void RegisterType(TryCreateFunction tryCreate);
+        static void UnregisterType(TryCreateFunction tryCreate);
+
+
+        // Custom tester functions can apply extra filtering rules (eg. calling IsRenderTargetBitmap on an ID2D1Bitmap1).
+        template<typename TResource>
+        static inline bool DefaultTester(TResource*)
+        {
+            return true;
         }
 
-        std::shared_ptr<MANAGER> const& GetManager()
+
+        template<typename TResource, typename TWrapper, typename TMaker, bool TTester(TResource*) = DefaultTester<TResource>>
+        static bool TryCreate(ICanvasDevice* device, IUnknown* resource, float dpi, ComPtr<IInspectable>* result)
         {
-            return m_manager;
-        }
+            static_assert(std::is_base_of<ICanvasResourceWrapperNative, TWrapper>::value, "Types used with interop should implement ICanvasResourceWrapperNative");
 
-        static std::shared_ptr<MANAGER> GetOrCreateManager()
-        {
-            return GetOrCreateManager(GetCoreApplication().Get());
-        }
+            // Is this the type we are looking for?
+            auto myTypeOfResource = MaybeAs<TResource>(resource);
 
-        static std::shared_ptr<MANAGER> GetOrCreateManager(ABI::Windows::ApplicationModel::Core::ICoreApplication* coreApplication)
-        {
-            using ::Microsoft::WRL::Wrappers::HStringReference;
-            using namespace ABI::Windows::Foundation::Collections;
+            if (!myTypeOfResource)
+                return false;
 
-            //
-            // Look up the manager holder.  This is stored in
-            // CoreApplication.Properties since we can't store any global
-            // references to COM objects (since C++ doesn't have guaranteed
-            // destruction order for global references).
-            //
+            if (!TTester(myTypeOfResource.Get()))
+                return false;
 
-            ComPtr<IPropertySet> properties;
-            ThrowIfFailed(coreApplication->get_Properties(
-                &properties));
-
-            ComPtr<IMap<HSTRING, IInspectable*>> propertyMap;
-            ThrowIfFailed(properties.As(&propertyMap));
-
-            HStringReference keyName(TEXT(__FUNCDNAME__));
-            ComPtr<ManagerHolder> managerHolder;
-            ComPtr<IInspectable> inspectableManagerHolder;
-
-            if (SUCCEEDED(propertyMap->Lookup(keyName.Get(), &inspectableManagerHolder)))
-            {
-                managerHolder = static_cast<ManagerHolder*>(inspectableManagerHolder.Get());
-            }
-
-            //
-            // Use the existing manager if possible
-            //
-
-            if (managerHolder)
-            {
-                auto manager = managerHolder->Manager.lock();
-                if (manager)
-                    return manager;
-            }
-
-            //
-            // Create, and remember, a new manager if there wasn't one
-            // previously
-            //
-
-            // TODO #802: this isn't threadsafe
-            auto manager = FACTORY::CreateManager();
-
-            managerHolder = Make<ManagerHolder>();
-            CheckMakeResult(managerHolder);
-            managerHolder->Manager = manager;
+            // Create a new wrapper instance.
+            auto wrapper = TMaker::Make<TResource, TWrapper>(device, myTypeOfResource.Get(), dpi);
             
-            boolean inserted = false; // unused
-            ThrowIfFailed(propertyMap->Insert(keyName.Get(), managerHolder.Get(), &inserted)); // Insert will replace an existing entry
+            CheckMakeResult(wrapper);
+            ThrowIfFailed(wrapper.As(result));
 
-            manager->WhenDestroyedRemoveFromPropertyMap(propertyMap.Get(), keyName.Get());
-
-            return manager;
+            return true;
         }
 
-    private:
-        static ComPtr<ABI::Windows::ApplicationModel::Core::ICoreApplication> GetCoreApplication()
+
+        //  Calls Make<> on a type whose constructor wants only a resource parameter.
+        struct MakeWrapper
         {
-            using namespace ABI::Windows::ApplicationModel::Core;
-            using namespace ABI::Windows::Foundation;
-            using namespace ::Microsoft::WRL::Wrappers;
+            template<typename TResource, typename TWrapper>
+            static ComPtr<TWrapper> Make(ICanvasDevice* device, TResource* resource, float dpi)
+            {
+                UNREFERENCED_PARAMETER(device);
+                UNREFERENCED_PARAMETER(dpi);
 
-            ComPtr<ICoreApplication> coreApplication;
-            ThrowIfFailed(GetActivationFactory(
-                HStringReference(RuntimeClass_Windows_ApplicationModel_Core_CoreApplication).Get(),
-                &coreApplication));
-
-            return coreApplication;
-        }
-
-        //
-        // Wrapper about a weak_ptr<MANAGER> that can be stored in a PropertySet
-        // (and therefore on CoreApplication.Properties).
-        //
-        struct ManagerHolder : public RuntimeClass<IInspectable>,
-                               private LifespanTracker<ManagerHolder>
-        {
-            std::weak_ptr<MANAGER> Manager;
+                return ::Microsoft::WRL::Make<TWrapper>(resource);
+            }
         };
 
-        //
-        // FACTORY can provide it's own implementation of this if it needs more
-        // explicit control over manager creation.
-        //
-        static std::shared_ptr<MANAGER> CreateManager()
+
+        //  Calls Make<> on a type whose constructor wants device and resource parameters.
+        struct MakeWrapperWithDevice
         {
-            return std::make_shared<MANAGER>();
-        }
+            template<typename TResource, typename TWrapper>
+            static ComPtr<TWrapper> Make(ICanvasDevice* device, TResource* resource, float dpi)
+            {
+                UNREFERENCED_PARAMETER(dpi);
+
+                static_assert(std::is_base_of<ICanvasResourceWrapperWithDevice, TWrapper>::value, "Types constructed from a device should implement ICanvasResourceWrapperWithDevice");
+
+                if (!device)
+                    ThrowHR(E_INVALIDARG, Strings::ResourceManagerNoDevice);
+
+                return ::Microsoft::WRL::Make<TWrapper>(device, resource);
+            }
+        };
+
+
+        //  Calls Make<> on a type whose constructor wants device, resource, and dpi parameters.
+        struct MakeWrapperWithDeviceAndDpi
+        {
+            template<typename TResource, typename TWrapper>
+            static ComPtr<TWrapper> Make(ICanvasDevice* device, TResource* resource, float dpi)
+            {
+                static_assert(std::is_base_of<ICanvasResourceWrapperWithDevice, TWrapper>::value, "Types constructed from a device should implement ICanvasResourceWrapperWithDevice");
+                static_assert(std::is_base_of<ICanvasResourceWrapperWithDpi,    TWrapper>::value, "Types constructed with a dpi should implement ICanvasResourceWrapperWithDpi");
+                
+                if (!device)
+                    ThrowHR(E_INVALIDARG, Strings::ResourceManagerNoDevice);
+
+                if (dpi <= 0)
+                    ThrowHR(E_INVALIDARG, Strings::ResourceManagerNoDpi);
+
+                return ::Microsoft::WRL::Make<TWrapper>(device, resource, dpi);
+            }
+        };
+
+
+    private:
+        // Native resource -> WinRT wrapper map, shared by all active resources.
+        static std::unordered_map<IUnknown*, WeakRef> m_resources;
+        static std::recursive_mutex m_mutex;
+
+        // Table of try-create functions, one per type.
+        static std::vector<TryCreateFunction> tryCreateFunctions;
     };
-
-//
-// This macro can be placed inside an activation factory class definition to
-// provide a default implementation of ICanvasFactoryNative
-//
-#define IMPLEMENT_DEFAULT_ICANVASFACTORYNATIVE()                                        \
-    IFACEMETHODIMP GetOrCreate(IUnknown* resource, IInspectable** wrapper) override     \
-    {                                                                                   \
-        return ExceptionBoundary(                                                       \
-            [&]                                                                         \
-            {                                                                           \
-                CheckInPointer(resource);                                               \
-                CheckAndClearOutPointer(wrapper);                                       \
-                                                                                        \
-                ComPtr<typename manager_t::resource_t> typedResource;                   \
-                ThrowIfFailed(resource->QueryInterface(typedResource.GetAddressOf()));  \
-                                                                                        \
-                auto newWrapper = GetManager()->GetOrCreate(typedResource.Get());       \
-                                                                                        \
-                ThrowIfFailed(newWrapper.CopyTo(wrapper));                              \
-            });                                                                         \
-    }
-
-#define IMPLEMENT_DEFAULT_ICANVASDEVICERESOURCEFACTORYNATIVE()                                              \
-    IFACEMETHODIMP GetOrCreate(ICanvasDevice* device, IUnknown* resource, IInspectable** wrapper) override  \
-    {                                                                                                       \
-        return ExceptionBoundary(                                                                           \
-            [&]                                                                                             \
-            {                                                                                               \
-                CheckInPointer(resource);                                                                   \
-                CheckAndClearOutPointer(wrapper);                                                           \
-                                                                                                            \
-                ComPtr<typename manager_t::resource_t> typedResource;                                       \
-                ThrowIfFailed(resource->QueryInterface(typedResource.GetAddressOf()));                      \
-                                                                                                            \
-                auto newWrapper = GetManager()->GetOrCreate(device, typedResource.Get());                   \
-                                                                                                            \
-                ThrowIfFailed(newWrapper.CopyTo(wrapper));                                                  \
-            });                                                                                             \
-    }
-
 }}}}

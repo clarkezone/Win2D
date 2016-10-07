@@ -3,7 +3,7 @@
     <metadata minClientVersion="2.8.6">
         <id>Win2D.uwp</id>
         <version>0.0.0-SpecifyVersionOnCommandline</version>
-        <title>Win2D.uwp: Win2D for the Universal Windows Platform (Windows 10)</title>
+        <title>Win2D.uwp</title>
         <authors>Microsoft</authors>
         <owners>win2d,microsoft</owners>
         <description>An easy-to-use Windows Runtime API for immediate mode 2D graphics rendering.&#10;For the Universal Windows Platform (Windows 10).</description>
@@ -26,19 +26,10 @@
 
       <file target="lib\uap10.0\Microsoft.Graphics.Canvas.winmd"             src="$bin$\UAPx86\release\winrt.dll.UAP\Microsoft.Graphics.Canvas.winmd" />
       <file target="lib\uap10.0\Microsoft.Graphics.Canvas.xml"               src="bin\intellisense\Microsoft.Graphics.Canvas.xml" />
-      <file target="lib\uap10.0\en\Microsoft.Graphics.Canvas.xml"            src="bin\intellisense\Microsoft.Graphics.Canvas.xml" /> <!-- [1] -->
-
-      <file target="lib\uap10.0\Workaround1200257.dll"                       src="$bin$\UAPAnyCPU\release\Workaround1200257\Workaround1200257.dll" />
 
       <file target="runtimes\win10-arm\native\Microsoft.Graphics.Canvas.dll" src="$bin$\UAPARM\release\winrt.dll.UAP\Microsoft.Graphics.Canvas.dll" />
       <file target="runtimes\win10-x64\native\Microsoft.Graphics.Canvas.dll" src="$bin$\UAPx64\release\winrt.dll.UAP\Microsoft.Graphics.Canvas.dll" />
       <file target="runtimes\win10-x86\native\Microsoft.Graphics.Canvas.dll" src="$bin$\UAPx86\release\winrt.dll.UAP\Microsoft.Graphics.Canvas.dll" />
-
-      <!-- 
-           [1] Workaround devdiv:1200085.  Fallback XML docs aren't getting
-           picked up in VS2015, but if we place them in a specific culture
-           directory then they'll at least be available for that language. 
-      -->
 
     </files>
 </package>

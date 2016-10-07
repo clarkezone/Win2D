@@ -2,12 +2,9 @@
 //
 // Licensed under the MIT License. See LICENSE.txt in the project root for license information.
 
-using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Xml.Serialization;
-using System.Collections.Generic;
-using System.Text;
-using System.IO;
 
 namespace CodeGen
 {
@@ -74,13 +71,13 @@ namespace CodeGen
 
             m_nativeNameOfInheritanceParent = xmlData.Extends;
 
-            if(overrides != null && overrides.IsProjectedAsAbstract)
+            if (overrides != null && overrides.IsProjectedAsAbstract)
             {
                 m_stylizedName = "I" + Formatter.Prefix + unprefixed;
             }
 
             m_methods = new List<Method>();
-            foreach(XmlBindings.Method xmlMethod in xmlData.Methods)
+            foreach (XmlBindings.Method xmlMethod in xmlData.Methods)
             {
                 Method m = new Method(xmlMethod);
                 m_methods.Add(m);
@@ -128,7 +125,7 @@ namespace CodeGen
                 m_nativeReturnType = xmlData.Return;
 
                 m_parameters = new List<Parameter>();
-                foreach(XmlBindings.Parameter parameterXml in xmlData.Parameters)
+                foreach (XmlBindings.Parameter parameterXml in xmlData.Parameters)
                 {
                     Parameter p = new Parameter(parameterXml);
                     m_parameters.Add(p);

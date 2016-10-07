@@ -10,7 +10,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
     using namespace ABI::Microsoft::Graphics::Canvas::Numerics;
 
     class CanvasPathBuilderFactory
-        : public ActivationFactory<ICanvasPathBuilderFactory>,
+        : public AgileActivationFactory<ICanvasPathBuilderFactory>,
           private LifespanTracker<CanvasPathBuilderFactory>
     {
         InspectableClassStatic(RuntimeClass_Microsoft_Graphics_Canvas_Geometry_CanvasPathBuilder, BaseTrust);
@@ -21,8 +21,8 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             ICanvasPathBuilder** canvasPathBuilder) override;
     };
     
-    [uuid(DC532EB2-A103-4EEA-914A-FC1B99E3F657)]
-    class ICanvasPathBuilderInternal : public IUnknown
+    class __declspec(uuid("DC532EB2-A103-4EEA-914A-FC1B99E3F657"))
+    ICanvasPathBuilderInternal : public IUnknown
     {
     public:
         virtual ComPtr<ICanvasDevice> GetDevice() = 0;
@@ -41,6 +41,13 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
     {
         InspectableClass(RuntimeClass_Microsoft_Graphics_Canvas_Geometry_CanvasPathBuilder, BaseTrust);
 
+        //
+        // Although this ties together several bits of state, no attempt is made
+        // to make CanvasPathBuilder thread safe.  It is hard to imagine any
+        // valid scenario where a path may be meaningfully built simultaneously
+        // from multiple threads.
+        //
+        
         ClosablePtr<ICanvasDevice> m_canvasDevice;
         ClosablePtr<ID2D1GeometrySink> m_d2dGeometrySink;
         ClosablePtr<ID2D1PathGeometry1> m_d2dPathGeometry;

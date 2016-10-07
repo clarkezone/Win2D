@@ -15,6 +15,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
     using namespace ABI::Windows::ApplicationModel;
     using namespace ABI::Windows::UI::Core;
     using namespace ABI::Windows::UI::Xaml::Controls;
+    using namespace ABI::Windows::UI::Xaml::Shapes;
     using namespace ABI::Windows::UI::Xaml;
     using namespace ABI::Windows::Foundation;
     using namespace ABI::Windows::System::Threading;
@@ -32,7 +33,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         IFACEMETHODIMP get_Timing(CanvasTimingInformation* value);
     };
 
-    class CanvasAnimatedUpdateEventArgsFactory : public ActivationFactory<ICanvasAnimatedUpdateEventArgsFactory>,
+    class CanvasAnimatedUpdateEventArgsFactory : public AgileActivationFactory<ICanvasAnimatedUpdateEventArgsFactory>,
                                                  private LifespanTracker<CanvasAnimatedUpdateEventArgsFactory>
     {
         InspectableClassStatic(RuntimeClass_Microsoft_Graphics_Canvas_UI_Xaml_CanvasAnimatedUpdateEventArgs, BaseTrust);
@@ -43,7 +44,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             ICanvasAnimatedUpdateEventArgs** updateEventArgs);
     };
 
-    class CanvasAnimatedDrawEventArgsFactory : public ActivationFactory<ICanvasAnimatedDrawEventArgsFactory>,
+    class CanvasAnimatedDrawEventArgsFactory : public AgileActivationFactory<ICanvasAnimatedDrawEventArgsFactory>,
                                                private LifespanTracker<CanvasAnimatedDrawEventArgsFactory>
     {
         InspectableClassStatic(RuntimeClass_Microsoft_Graphics_Canvas_UI_Xaml_CanvasAnimatedDrawEventArgs, BaseTrust);
@@ -105,6 +106,8 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
 
         virtual ComPtr<CanvasSwapChainPanel> CreateCanvasSwapChainPanel() = 0;
 
+        virtual ComPtr<IShape> CreateDesignModeShape() = 0;
+
         virtual std::unique_ptr<CanvasGameLoop> CreateAndStartGameLoop(
             CanvasAnimatedControl* control,
             ISwapChainPanel* swapChainPanel) = 0;
@@ -115,9 +118,9 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
     std::shared_ptr<ICanvasAnimatedControlAdapter> CreateCanvasAnimatedControlAdapter();
 
     class CanvasAnimatedControl : public RuntimeClass<
-        MixIn<CanvasAnimatedControl, BaseControl<CanvasAnimatedControlTraits>>,
+        MixIn<CanvasAnimatedControl, BaseControlWithDrawHandler<CanvasAnimatedControlTraits>>,
         ComposableBase<>>,
-        public BaseControl<CanvasAnimatedControlTraits>,
+        public BaseControlWithDrawHandler<CanvasAnimatedControlTraits>,
         public ICanvasGameLoopClient
     {
         InspectableClass(RuntimeClass_Microsoft_Graphics_Canvas_UI_Xaml_CanvasAnimatedControl, BaseTrust);
@@ -127,6 +130,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         EventSource<ITypedEventHandler<ICanvasAnimatedControl*, IInspectable*>, InvokeModeOptions<StopOnFirstError>> m_gameLoopStoppedEventList;
 
         ComPtr<ICanvasSwapChainPanel> m_canvasSwapChainPanel;
+        ComPtr<IShape> m_designModeShape; // in design mode we use a shape rather than a swap chain panel
 
         std::unique_ptr<CanvasGameLoop> m_gameLoop;
         ComPtr<IAsyncAction> m_renderLoopAction;
@@ -138,7 +142,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
 
         //
         // State shared between the UI thread and the update/render thread.
-        // Access to this must be guarded using BaseControl's mutex.
+        // Access to this must be guarded using m_sharedStateMutex
         //
         struct SharedState
         {
@@ -152,6 +156,8 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
                 , NeedsDraw(true)
                 , Invalidated(false)
                 , DeviceNeedsReCreationWithNewOptions(false)
+                , SizeSeenByGameLoop{}
+                , IsInTick(false)
             {}
 
             bool IsPaused;
@@ -163,9 +169,12 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             bool NeedsDraw;
             bool Invalidated;
             bool DeviceNeedsReCreationWithNewOptions;
+            Size SizeSeenByGameLoop;
+            bool IsInTick;
             std::vector<ComPtr<AnimatedControlAsyncAction>> PendingAsyncActions;
         };
 
+        std::mutex m_sharedStateMutex;
         SharedState m_sharedState;
 
     public:
@@ -175,8 +184,11 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         virtual ~CanvasAnimatedControl();
 
         //
-        // ICanvasControl
+        // ICanvasAnimatedControl
         //
+
+        IFACEMETHODIMP get_ClearColor(Color* value) override;
+        IFACEMETHODIMP put_ClearColor(Color value) override;
 
         IFACEMETHODIMP add_Update(
             Animated_UpdateEventHandler* value,
@@ -211,6 +223,8 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
 
         IFACEMETHODIMP get_Paused(boolean* value) override;
         
+        IFACEMETHODIMP get_Size(Size* value) override;
+
         IFACEMETHODIMP Invalidate() override;
         
         IFACEMETHODIMP ResetElapsedTime() override;
@@ -242,7 +256,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             ICanvasDrawingSession* drawingSession,
             bool isRunningSlowly) override final;
 
-        virtual void Changed(Lock const& lock, ChangeReason reason = ChangeReason::Other) override final;
+        virtual void Changed(ChangeReason reason) override final;
         virtual void Loaded() override final;
         virtual void Unloaded() override final;
         virtual void ApplicationSuspending(ISuspendingEventArgs* args) override final;
@@ -250,7 +264,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         virtual void WindowVisibilityChanged() override final;
 
     private:
-        void CreateSwapChainPanel();
+        void CreateContentControl();
 
         // ICanvasGameLoopClient methods
 

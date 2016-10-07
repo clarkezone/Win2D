@@ -9,13 +9,16 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    MorphologyEffect::MorphologyEffect()
-        : CanvasEffect(CLSID_D2D1Morphology, 3, 1, true)
+    MorphologyEffect::MorphologyEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 3, 1, true, device, effect, static_cast<IMorphologyEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<uint32_t>(D2D1_MORPHOLOGY_PROP_MODE, D2D1_MORPHOLOGY_MODE_ERODE);
-        SetBoxedProperty<int32_t>(D2D1_MORPHOLOGY_PROP_WIDTH, 1);
-        SetBoxedProperty<int32_t>(D2D1_MORPHOLOGY_PROP_HEIGHT, 1);
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<uint32_t>(D2D1_MORPHOLOGY_PROP_MODE, D2D1_MORPHOLOGY_MODE_ERODE);
+            SetBoxedProperty<int32_t>(D2D1_MORPHOLOGY_PROP_WIDTH, 1);
+            SetBoxedProperty<int32_t>(D2D1_MORPHOLOGY_PROP_HEIGHT, 1);
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY(MorphologyEffect,
@@ -47,5 +50,5 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         { L"Width",  D2D1_MORPHOLOGY_PROP_WIDTH,  GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT },
         { L"Height", D2D1_MORPHOLOGY_PROP_HEIGHT, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT })
 
-    ActivatableClass(MorphologyEffect);
+    ActivatableClassWithFactory(MorphologyEffect, SimpleAgileActivationFactory<MorphologyEffect>);
 }}}}}

@@ -2,11 +2,7 @@
 //
 // Licensed under the MIT License. See LICENSE.txt in the project root for license information.
 
-using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using System.IO;
 
 namespace Mock
@@ -25,7 +21,7 @@ namespace Mock
 
             string extends = interfaceType.NativeNameOfIntheritanceParent;
 
-            if(extends != "IUnknown")
+            if (extends != "IUnknown")
             {
                 GetInheritanceHierarchy(extends, processedInputFiles, inheritanceHierarchy);
             }
@@ -40,7 +36,8 @@ namespace Mock
             {
                 case "pointer":
                 case "pointer opt":
-                    return qualifiable is CodeGen.Struct;
+                case "pointer ecount opt":
+                    return qualifiable is CodeGen.Struct || qualifiable is CodeGen.Primitive;
                 default:
                     return false;
             }
@@ -58,6 +55,7 @@ namespace Mock
                     return "";
 
                 case "deref out pointer":
+                case "deref out pointer com":
                 case "pointer pointer":
                 case "out pointer pointer":
                 case "deref opt out pointer":
@@ -99,7 +97,7 @@ namespace Mock
             Dictionary<string, CodeGen.QualifiableType> typeDictionary)
         {
             CodeGen.QualifiableType qualifiable = null;
-            if(typeDictionary.ContainsKey(p.NativeTypeName))
+            if (typeDictionary.ContainsKey(p.NativeTypeName))
                 qualifiable = typeDictionary[p.NativeTypeName];
 
             string constPart = IsParameterConst(p.Form, qualifiable) ? "CONST " : "";
@@ -134,7 +132,7 @@ namespace Mock
                 {
                     output.Write(GetParameterTypeNameIncludingIndirection(m.Parameters[i], typeDictionary));
 
-                    if(m.Parameters[i].IsArray)
+                    if (m.Parameters[i].IsArray)
                     {
                         output.Write(", UINT32");
                     }
@@ -178,7 +176,7 @@ namespace Mock
 
                     output.Write(parameterString);
 
-                    if(m.Parameters[i].IsArray)
+                    if (m.Parameters[i].IsArray)
                     {
                         output.Write(",");
                         output.WriteLine();
@@ -186,7 +184,7 @@ namespace Mock
                         output.Write("UINT32 " + m.Parameters[i].Name + "Count");
                     }
 
-                    if(i < m.Parameters.Count - 1)
+                    if (i < m.Parameters.Count - 1)
                     {
                         output.Write(",");
                     }
@@ -213,7 +211,7 @@ namespace Mock
                 {
                     output.Write(m.Parameters[i].Name);
 
-                    if(m.Parameters[i].IsArray)
+                    if (m.Parameters[i].IsArray)
                     {
                         output.Write(", " + m.Parameters[i].Name + "Count");
                     }
@@ -239,7 +237,7 @@ namespace Mock
 
             // Strip the revision number out of the mock name.
             string mockTypeName = "MockD2D" + name;
-            if(mockTypeName.EndsWith("1") || mockTypeName.EndsWith("2") || mockTypeName.EndsWith("3"))
+            if (mockTypeName.EndsWith("1") || mockTypeName.EndsWith("2") || mockTypeName.EndsWith("3"))
             {
                 mockTypeName = mockTypeName.Remove(mockTypeName.Length - 1);
             }
@@ -264,13 +262,20 @@ namespace Mock
                 output.WriteLine("RuntimeClassFlags<ClassicCom>,");
 
                 output.WriteIndent();
-                output.Write("ChainInterfaces<");
+                if (inheritanceHierarchy.Count > 1)
+                {
+                    output.Write("ChainInterfaces<");
+                }
                 for (int i = 0; i < inheritanceHierarchy.Count; i++)
                 {
                     output.Write(inheritanceHierarchy[i].NativeName);
                     if (i < inheritanceHierarchy.Count - 1) output.Write(", ");
                 }
-                output.Write(">>");
+                if (inheritanceHierarchy.Count > 1)
+                {
+                    output.Write(">");
+                }
+                output.Write(">");
                 output.WriteLine();
                 output.Unindent();
                 output.WriteLine("{");
@@ -306,6 +311,12 @@ namespace Mock
             OutputMock("RoundedRectangleGeometry", inputDir, outputDir);
             OutputMock("TransformedGeometry", inputDir, outputDir);
             OutputMock("GeometryGroup", inputDir, outputDir);
+            OutputMock("DrawInfo", inputDir, outputDir);
+            OutputMock("EffectContext", inputDir, outputDir);
+            OutputMock("TransformGraph", inputDir, outputDir);
+            OutputMock("BorderTransform", inputDir, outputDir);
+            OutputMock("Ink", inputDir, outputDir);
+            OutputMock("InkStyle", inputDir, outputDir);
         }
 
         static void Main(string[] args)

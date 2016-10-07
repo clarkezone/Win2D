@@ -2,11 +2,8 @@
 //
 // Licensed under the MIT License. See LICENSE.txt in the project root for license information.
 
-using System.Diagnostics;
-using System.Xml.Serialization;
 using System.Collections.Generic;
-using System.Text;
-using System.IO;
+using System.Xml.Serialization;
 
 namespace CodeGen
 {
@@ -58,10 +55,10 @@ namespace CodeGen
             }
 
             m_enums = new List<Enum>();
-            foreach(XmlBindings.Enum enumXml in xmlData.Enums)
+            foreach (XmlBindings.Enum enumXml in xmlData.Enums)
             {
                 Overrides.XmlBindings.Enum overridesEnum = null;
-                if(overrides != null) overridesEnum = overrides.Enums.Find(x => x.Name == enumXml.Name);
+                if (overrides != null) overridesEnum = overrides.Enums.Find(x => x.Name == enumXml.Name);
 
                 m_enums.Add(new Enum(this, rootProjectedNamespace, enumXml, overridesEnum, typeDictionary, outputDataTypes));
             }
@@ -70,7 +67,7 @@ namespace CodeGen
             foreach (XmlBindings.Struct structXml in xmlData.Structs)
             {
                 Overrides.XmlBindings.Struct overridesStruct = null;
-                if(overrides != null) overridesStruct = overrides.Structs.Find(x => x.Name == structXml.Name);
+                if (overrides != null) overridesStruct = overrides.Structs.Find(x => x.Name == structXml.Name);
 
                 m_structs.Add(new Struct(this, structXml, overridesStruct, typeDictionary, outputDataTypes));
             }
@@ -79,7 +76,7 @@ namespace CodeGen
             foreach (XmlBindings.Interface interfaceXml in xmlData.Interfaces)
             {
                 Overrides.XmlBindings.Interface overridesInterface = null;
-                if(overrides != null) overridesInterface = overrides.Interfaces.Find(x => x.Name == interfaceXml.Name);
+                if (overrides != null) overridesInterface = overrides.Interfaces.Find(x => x.Name == interfaceXml.Name);
 
                 m_interfaces.Add(new Interface(this, interfaceXml, overridesInterface, typeDictionary));
             }

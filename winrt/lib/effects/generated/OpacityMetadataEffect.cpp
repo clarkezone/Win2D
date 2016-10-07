@@ -9,11 +9,14 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    OpacityMetadataEffect::OpacityMetadataEffect()
-        : CanvasEffect(CLSID_D2D1OpacityMetadata, 1, 1, true)
+    OpacityMetadataEffect::OpacityMetadataEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 1, 1, true, device, effect, static_cast<IOpacityMetadataEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<float[4]>(D2D1_OPACITYMETADATA_PROP_INPUT_OPAQUE_RECT, Rect{ -std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity() });
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<float[4]>(D2D1_OPACITYMETADATA_PROP_INPUT_OPAQUE_RECT, Rect{ -std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity() });
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY(OpacityMetadataEffect,
@@ -29,5 +32,5 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
     IMPLEMENT_EFFECT_PROPERTY_MAPPING(OpacityMetadataEffect,
         { L"OpaqueRectangle", D2D1_OPACITYMETADATA_PROP_INPUT_OPAQUE_RECT, GRAPHICS_EFFECT_PROPERTY_MAPPING_RECT_TO_VECTOR4 })
 
-    ActivatableClass(OpacityMetadataEffect);
+    ActivatableClassWithFactory(OpacityMetadataEffect, SimpleAgileActivationFactory<OpacityMetadataEffect>);
 }}}}}

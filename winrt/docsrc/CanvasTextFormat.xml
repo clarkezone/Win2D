@@ -127,6 +127,13 @@ Licensed under the MIT License. See LICENSE.txt in the project root for license 
     <member name="T:Microsoft.Graphics.Canvas.Text.CanvasTextFormat">
       <summary>Describes font and layout options for drawing text.</summary>
 
+      <remarks>
+        <p>
+          When using <a href="Interop.htm">Direct2D interop</a>, this Win2D class
+          corresponds to the Direct2D interface IDWriteTextFormat1.
+        </p>
+      </remarks>
+
       <example>
         Create a CanvasTextFormat with reasonable defaults:
         <code>var format = new CanvasTextFormat();</code>
@@ -195,16 +202,29 @@ Licensed under the MIT License. See LICENSE.txt in the project root for license 
     <member name="P:Microsoft.Graphics.Canvas.Text.CanvasTextFormat.LineSpacingBaseline">
       <summary>Specifies the distance from top of line to baseline. A reasonable ratio to lineSpacing is 80 percent.</summary>
       <remarks>
-        This property is ignored when <see cref="P:Microsoft.Graphics.Canvas.Text.CanvasTextFormat.LineSpacing" /> is negative.
+        <p>
+          This property is ignored when <see cref="P:Microsoft.Graphics.Canvas.Text.CanvasTextFormat.LineSpacing" /> is negative.
+        </p>
+        <p>
+          The default value for this property is 1.
+        </p>
+        <p>
+          The behavior of this property is affected by the text format's <see cref="T:Microsoft.Graphics.Canvas.Text.CanvasLineSpacingMode"/>.
+        </p>
       </remarks>
     </member>
     <member name="P:Microsoft.Graphics.Canvas.Text.CanvasTextFormat.LineSpacing">
       <summary>Negative values use default line spacing; non-negative values specify the line height.</summary>
       <remarks>
-        The line height is the distance from one baseline to another.  When
-        LineSpacing is negative the <see
-        cref="P:Microsoft.Graphics.Canvas.Text.CanvasTextFormat.LineSpacingBaseline"/>
-        property is ignored.
+        <p>
+          The line height is the distance from one baseline to another.  When
+          LineSpacing is negative the <see
+          cref="P:Microsoft.Graphics.Canvas.Text.CanvasTextFormat.LineSpacingBaseline"/>
+          property is ignored.
+        </p>
+        <p>
+          The behavior of this property is affected by the text format's <see cref="T:Microsoft.Graphics.Canvas.Text.CanvasLineSpacingMode"/>.
+        </p>
       </remarks>
     </member>
     <member name="P:Microsoft.Graphics.Canvas.Text.CanvasTextFormat.IncrementalTabStop">
@@ -247,6 +267,173 @@ Licensed under the MIT License. See LICENSE.txt in the project root for license 
               starts with <tt>ms-appx:///</tt>.
             </dd>
           </dl>
+        </p>
+        <p>
+          Passing in an applicationUri which is well-formed, but doesn't correspond to
+          a valid font file will still succeed. It's equivalent to having no FontFamily
+          specified. To be stricter and test that the font file was loaded and supported,
+          <see cref="M:Microsoft.Graphics.Canvas.Text.CanvasFontSet.#ctor(System.Uri)">
+          create a CanvasFontSet
+          </see>
+          and verify that its 
+          <see cref="P:Microsoft.Graphics.Canvas.Text.CanvasFontSet.Fonts">
+          Fonts
+          </see>
+          count is at least one.
+        </p>
+      </remarks>
+    </member>    
+
+    <member name="M:Microsoft.Graphics.Canvas.Text.CanvasTextFormat.GetSystemFontFamilies">
+      <summary>Gets a list of font families available.</summary>
+      <remarks>
+        <p>
+          Font family names are locale-dependent. For each font, this method
+          returns its 'en-us' name if possible. If no 'en-us' name is available,
+          this method returns whatever is first name enumerated for the font.
+        </p>
+        <p>
+          If you prefer font names to prioritize some other localization,
+          use the overload 
+          <see cref="M:Microsoft.Graphics.Canvas.Text.CanvasTextFormat.GetSystemFontFamilies(System.Collections.Generic.IReadOnlyList{System.String})"/>.
+        </p>
+      </remarks>
+    </member>
+    
+    <member name="M:Microsoft.Graphics.Canvas.Text.CanvasTextFormat.GetSystemFontFamilies(System.Collections.Generic.IReadOnlyList{System.String})">
+      <summary>Gets a list of font families available, prioritizing the specified locales.</summary>
+      <remarks>
+        <p>
+          Font family names are locale-dependent. For each font, this method 
+          returns the first available of:
+          <ul>
+            <li>The specified list of locales, in order</li>
+            <li>en-us</li>
+            <li>Whatever is the first name enumerated for the font.</li>
+          </ul>
+        </p>
+        <p>
+          An application's environment has a list of locales ordered by
+          user preference. 
+        </p>
+        <p>
+          Using this in C# looks like:
+          <code>          
+              using Windows.Globalization;
+              
+              ...
+              
+              string[] fontFamilyNames = CanvasTextFormat.GetSystemFontFamilies(ApplicationLanguages.Languages);
+          </code>
+        </p>
+        <p>
+          Passing a null locale list is valid, and is equivalent to using the 
+          <see cref="M:Microsoft.Graphics.Canvas.Text.CanvasTextFormat.GetSystemFontFamilies"/>
+          overload.
+        </p>
+      </remarks>
+    </member>
+
+    <member name="T:Microsoft.Graphics.Canvas.Text.CanvasLineSpacingMode" Win10="true">
+      <summary>Options for specifying how lines are spaced apart.</summary>
+    </member>
+    <member name="F:Microsoft.Graphics.Canvas.Text.CanvasLineSpacingMode.Default">
+      <summary>
+        Automatically positioned, if <see cref="P:Microsoft.Graphics.Canvas.Text.CanvasTextFormat.LineSpacing"/> is negative; otherwise, LineSpacing and LineSpacingBaseline are treated as a quantities in DIPs.
+      </summary>
+    </member>
+    <member name="F:Microsoft.Graphics.Canvas.Text.CanvasLineSpacingMode.Uniform">
+      <summary>
+        Spacing is affected by the absolute value of LineSpacing, and vertical offset of the text is determined by LineSpacingBaseline. LineSpacing and LineSpacingBaseline are treated as a quantities in DIPs.
+      </summary>
+    </member>
+    <member name="F:Microsoft.Graphics.Canvas.Text.CanvasLineSpacingMode.Proportional">
+      <summary>
+        Spacing is affected by the absolute value of LineSpacing, and vertical offset of the text is determined by LineSpacingBaseline. LineSpacing and LineSpacingBaseline are treated as a ratio of the default.
+      </summary>
+    </member>
+
+    <member name="P:Microsoft.Graphics.Canvas.Text.CanvasTextFormat.LineSpacingMode" Win10="true">
+      <summary>Specifies how lines are spaced apart.</summary>
+      <remarks>
+        <p>
+          If this property is set to Default:
+          <ul>
+            <li>Leaving <see cref="P:Microsoft.Graphics.Canvas.Text.CanvasTextFormat.LineSpacing"/> 
+            at is default value of -1 will keep the default line spacing.</li>
+            <li>Set LineSpacing to any positive quantity to have it affect the line spacing. 
+                And, LineSpacing and 
+                <see cref="P:Microsoft.Graphics.Canvas.Text.CanvasTextFormat.LineSpacingBaseline"/> are absolute quantities.</li>
+          </ul>
+        </p>
+        <p>
+          If this property is set to Uniform, then the magnitude of the LineSpacing field will affect line spacing.
+          LineSpacing and LineSpacingBaseline are absolute quantities in DIPs.
+        </p>
+        <p>
+          If this property is set to Proportional, then the magnitude of the LineSpacing field will affect line spacing.
+          LineSpacing and LineSpacingBaseline are amounts by which to scale the default line spacing and line spacing baseline, respectively.
+        </p>
+        <p>
+          For example, to create a text format for double-spaced text, use
+          <code>
+            CanvasTextFormat textFormat = new CanvasTextFormat()
+            {
+                LineSpacingMode = CanvasLineSpacingMode.Proportional,
+                LineSpacing = 2
+            };
+          </code>
+        </p>
+      </remarks>
+    </member>    
+
+    <member name="P:Microsoft.Graphics.Canvas.Text.CanvasTextFormat.VerticalGlyphOrientation">
+      <summary>Specifies the orientation of glyphs when a vertical reading direction is used.</summary>
+      <remarks>By default, some naturally horizontal scripts may be rotated if they're drawn using a vertical text direction.</remarks>
+    </member>
+    <member name="P:Microsoft.Graphics.Canvas.Text.CanvasTextFormat.OpticalAlignment">
+      <summary>Specifies how glyphs are aligned to the margin.</summary>
+      <remarks>
+          By default, there is allowed to be some whitespace in between the margin edge and the glyph edge.
+      </remarks>
+    </member>
+    <member name="P:Microsoft.Graphics.Canvas.Text.CanvasTextFormat.LastLineWrapping">
+      <summary>Specifies whether the last line is wrapped.</summary>
+      <remarks>This is set to 'true' by default.</remarks>
+    </member>    
+    
+    <member name="T:Microsoft.Graphics.Canvas.Text.CanvasTrimmingSign">
+      <summary>Specifies the trimming sign that is used when drawing a text layout.</summary>
+      <remarks>
+        A trimming sign is a symbol that shows up when the text sticking out
+        of a text layout's requestedWidth and requestedHeight bounds is trimmed.
+        Rather than simply truncate the text, an app may want to show an 
+        ellipsis ("&#8230;") symbol.
+      </remarks>
+    </member>
+    <member name="F:Microsoft.Graphics.Canvas.Text.CanvasTrimmingSign.None">
+      <summary>When text is trimmed, it is truncated and no trimming sign appears.</summary>
+    </member>
+    <member name="F:Microsoft.Graphics.Canvas.Text.CanvasTrimmingSign.Ellipsis">
+      <summary>When text is trimmed, an ellipsis ("&#8230;") symbol appears.</summary>
+    </member>
+
+    <member name="P:Microsoft.Graphics.Canvas.Text.CanvasTextFormat.TrimmingSign">
+      <summary>Specifies the type of trimming sign used, when text is drawn outside a text layout's requested size extents.</summary>
+      <remarks>By default, no trimming sign is used. The text will just appear chopped off at the size boundary.</remarks>
+    </member>
+    
+    <member name="P:Microsoft.Graphics.Canvas.Text.CanvasTextFormat.CustomTrimmingSign">
+      <summary>Gets or sets a custom trimming sign.</summary>
+      <remarks>
+        <p>
+          A custom trimming sign is represented by an application-implemented interface.
+          The application chooses arbitrary drawing behavior to use as a trimming sign.
+        </p>
+        <p>
+          A custom trimming sign takes precedence over the text format's TrimmingSign property.
+          For example, if the TrimmingSign property is set to Ellipsis, and a custom trimming
+          sign was set, then the custom trimming sign will get used- not the ellipsis one.
         </p>
       </remarks>
     </member>

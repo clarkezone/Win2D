@@ -7,8 +7,10 @@
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 {
     typedef std::unique_lock<std::mutex> Lock;
+    typedef std::unique_lock<std::recursive_mutex> RecursiveLock;
 
-    inline void MustOwnLock(Lock const& lock)
+    template<typename LOCK>
+    inline void MustOwnLock(LOCK const& lock)
     {
         assert(lock.owns_lock());
         UNREFERENCED_PARAMETER(lock);

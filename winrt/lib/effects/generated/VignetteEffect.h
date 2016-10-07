@@ -21,11 +21,14 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         InspectableClass(RuntimeClass_Microsoft_Graphics_Canvas_Effects_VignetteEffect, BaseTrust);
 
     public:
-        VignetteEffect();
+        VignetteEffect(ICanvasDevice* device = nullptr, ID2D1Effect* effect = nullptr);
+
+        static IID const& EffectId() { return CLSID_D2D1Vignette; }
 
         EFFECT_PROPERTY(Color, Color);
         EFFECT_PROPERTY(Amount, float);
         EFFECT_PROPERTY(Curve, float);
+        EFFECT_PROPERTY(ColorHdr, Numerics::Vector4);
         EFFECT_PROPERTY(Source, IGraphicsEffectSource*);
 
         EFFECT_PROPERTY_MAPPING();

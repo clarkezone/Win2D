@@ -11,12 +11,15 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    SepiaEffect::SepiaEffect()
-        : CanvasEffect(CLSID_D2D1Sepia, 2, 1, true)
+    SepiaEffect::SepiaEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 2, 1, true, device, effect, static_cast<ISepiaEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<float>(D2D1_SEPIA_PROP_INTENSITY, 0.5f);
-        SetBoxedProperty<uint32_t>(D2D1_SEPIA_PROP_ALPHA_MODE, D2D1_COLORMANAGEMENT_ALPHA_MODE_PREMULTIPLIED);
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<float>(D2D1_SEPIA_PROP_INTENSITY, 0.5f);
+            SetBoxedProperty<uint32_t>(D2D1_SEPIA_PROP_ALPHA_MODE, D2D1_COLORMANAGEMENT_ALPHA_MODE_PREMULTIPLIED);
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY_WITH_VALIDATION(SepiaEffect,
@@ -40,7 +43,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         { L"Intensity", D2D1_SEPIA_PROP_INTENSITY,  GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT                 },
         { L"AlphaMode", D2D1_SEPIA_PROP_ALPHA_MODE, GRAPHICS_EFFECT_PROPERTY_MAPPING_COLORMATRIX_ALPHA_MODE })
 
-    ActivatableClass(SepiaEffect);
+    ActivatableClassWithFactory(SepiaEffect, SimpleAgileActivationFactory<SepiaEffect>);
 }}}}}
 
 #endif // _WIN32_WINNT_WIN10

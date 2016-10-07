@@ -63,10 +63,8 @@ TEST_CLASS(CanvasCommandListTests)
     {
         auto device = Make<StubCanvasDevice>();
         auto d2dCommandList = Make<MockD2DCommandList>();
-        auto factory = Make<CanvasCommandListFactory>();
 
-        ComPtr<ICanvasCommandList> commandList;
-        ThrowIfFailed(factory->GetOrCreate(device.Get(), d2dCommandList.Get(), &commandList));
+        ComPtr<ICanvasCommandList> commandList = Make<CanvasCommandList>(device.Get(), d2dCommandList.Get());
 
         auto wrappedD2DCommandList = GetWrappedResource<ID2D1CommandList>(commandList);
         Assert::IsTrue(IsSameInstance(d2dCommandList.Get(), wrappedD2DCommandList.Get()));
@@ -148,7 +146,7 @@ TEST_CLASS(CanvasCommandListTests)
                 Assert::AreEqual(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, mode);
             });
 
-        f.Device->CreateDeviceContextMethod.SetExpectedCalls(1, [=] { return dc; });
+        f.Device->CreateDeviceContextForDrawingSessionMethod.SetExpectedCalls(1, [=] { return dc; });
 
         dc->SetTargetMethod.SetExpectedCalls(1, 
             [=](ID2D1Image* target)
@@ -156,7 +154,7 @@ TEST_CLASS(CanvasCommandListTests)
                 Assert::IsTrue(IsSameInstance(wrappedCommandList.Get(), target));
                 
                 dc->BeginDrawMethod.SetExpectedCalls(1,
-                    [=]()
+                    [=]
                     {
                         dc->EndDrawMethod.SetExpectedCalls(1);
                     });
@@ -180,12 +178,21 @@ TEST_CLASS(CanvasCommandListTests)
 
         mockCl->CloseMethod.SetExpectedCalls(1);
 
-        ID2D1DeviceContext* ignoredDeviceContext = nullptr;
+        ICanvasDevice* ignoredDevice = nullptr;
+        auto stubDeviceContext = Make<StubD2DDeviceContext>();
+        // We don't call Close on the command list unless we see that
+        // it isn't already closed via GetImageLocalBounds.
+        stubDeviceContext->GetImageLocalBoundsMethod.AllowAnyCall(
+            [](ID2D1Image*, D2D1_RECT_F*)
+            {
+                return D2DERR_WRONG_STATE;
+            });
+
         auto canvasImageInternal = As<ICanvasImageInternal>(f.CommandList);
 
         for (int i = 0; i < 10; ++i)
         {
-            auto d2dImage = canvasImageInternal->GetD2DImage(ignoredDeviceContext);
+            auto d2dImage = canvasImageInternal->GetD2DImage(ignoredDevice, stubDeviceContext.Get());
             Assert::IsTrue(IsSameInstance(d2dImage.Get(), d2dCommandList.Get()));
         }
     }
@@ -198,49 +205,12 @@ TEST_CLASS(CanvasCommandListTests)
         auto mockCl = static_cast<MockD2DCommandList*>(d2dCommandList.Get());
         mockCl->CloseMethod.AllowAnyCall();
 
-        ID2D1DeviceContext* ignoredDeviceContext = nullptr;
-        As<ICanvasImageInternal>(f.CommandList)->GetD2DImage(ignoredDeviceContext);
+        ICanvasDevice* ignoredDevice = nullptr;
+        auto stubDeviceContext = Make<StubD2DDeviceContext>();
+        As<ICanvasImageInternal>(f.CommandList)->GetD2DImage(ignoredDevice, stubDeviceContext.Get());
 
         ComPtr<ICanvasDrawingSession> ds;
         Assert::AreEqual(E_INVALIDARG, f.CommandList->CreateDrawingSession(&ds));
         ValidateStoredErrorState(E_INVALIDARG, Strings::CommandListCannotBeDrawnToAfterItHasBeenUsed);
     }
-
-    TEST_METHOD_EX(CanvasCommandList_GetD2DImage_CanHandleCloseReturningError)
-    {
-        Fixture f;
-
-        auto d2dCommandList = GetWrappedResource<ID2D1CommandList>(f.CommandList);
-        auto mockCl = static_cast<MockD2DCommandList*>(d2dCommandList.Get());
-
-        // This might happen if the command list was created by wrapping a
-        // D2DCommandList that had already been closed.
-        mockCl->CloseMethod.SetExpectedCalls(1, [] { return D2DERR_WRONG_STATE; });
-
-        ID2D1DeviceContext* ignoredDeviceContext = nullptr;
-        As<ICanvasImageInternal>(f.CommandList)->GetD2DImage(ignoredDeviceContext);        
-    }
-
-    TEST_METHOD_EX(CanvasCommandList_GetRealizedEffectNode_ClosesD2DCommandListOnFirstCall)
-    {
-        Fixture f;
-        
-        auto d2dCommandList = GetWrappedResource<ID2D1CommandList>(f.CommandList);
-        auto mockCl = static_cast<MockD2DCommandList*>(d2dCommandList.Get());
-
-        mockCl->CloseMethod.SetExpectedCalls(1);
-
-        ID2D1DeviceContext* ignoredDeviceContext = nullptr;
-        auto canvasImageInternal = As<ICanvasImageInternal>(f.CommandList);
-
-        for (int i = 0; i < 10; ++i)
-        {
-            float anyDpi = 1234;
-            auto node = canvasImageInternal->GetRealizedEffectNode(ignoredDeviceContext, anyDpi);
-            Assert::IsTrue(IsSameInstance(node.Image.Get(), d2dCommandList.Get()));
-            Assert::AreEqual(0.0f, node.Dpi);
-            Assert::AreEqual(0ULL, node.RealizationId);
-        }
-    }
 };
-

@@ -14,7 +14,8 @@ std::shared_ptr<CanvasImageSourceDrawingSessionAdapter> CanvasImageSourceDrawing
     D2D1_COLOR_F const& clearColor,
     RECT const& updateRect,
     float dpi,
-    ID2D1DeviceContext1** outDeviceContext)
+    ID2D1DeviceContext1** outDeviceContext,
+    D2D1_POINT_2F* outOffset)
 {
     if (dpi <= 0)
         ThrowHR(E_INVALIDARG);
@@ -26,10 +27,29 @@ std::shared_ptr<CanvasImageSourceDrawingSessionAdapter> CanvasImageSourceDrawing
     //
     ComPtr<ID2D1DeviceContext> deviceContext;
     POINT offset;
-    ThrowIfFailed(sisNative->BeginDraw(
+    HRESULT hr = sisNative->BeginDraw(
         updateRect,
         IID_PPV_ARGS(&deviceContext),
-        &offset));
+        &offset);
+
+    if (FAILED(hr))
+    {
+        // BeginDraw returns an an unhelpful E_FAIL if it is called from the wrong thread.
+        // We check for that and translate to RPC_E_WRONG_THREAD instead.
+        if (hr == E_FAIL)
+        {
+            ComPtr<ICoreDispatcher> dispatcher;
+            ThrowIfFailed(As<IDependencyObject>(sisNative)->get_Dispatcher(&dispatcher));
+
+            boolean hasThreadAccess;
+            ThrowIfFailed(dispatcher->get_HasThreadAccess(&hasThreadAccess));
+
+            if (!hasThreadAccess)
+                hr = RPC_E_WRONG_THREAD;
+        }
+
+        ThrowHR(hr);
+    }
 
     //
     // If this function fails then we need to call EndDraw
@@ -56,13 +76,12 @@ std::shared_ptr<CanvasImageSourceDrawingSessionAdapter> CanvasImageSourceDrawing
     offset.x -= updateRect.left;
     offset.y -= updateRect.top;
 
-    const D2D1_POINT_2F renderingSurfaceOffset = D2D1::Point2F(
+    *outOffset = D2D1_POINT_2F{
         static_cast<float>(offset.x / dpiScalingFactor),
-        static_cast<float>(offset.y / dpiScalingFactor));
+        static_cast<float>(offset.y / dpiScalingFactor) };
 
     auto adapter = std::make_shared<CanvasImageSourceDrawingSessionAdapter>(
-        sisNative,
-        renderingSurfaceOffset);
+        sisNative);
 
     //
     // XAML has given us a surface to render to, but it doesn't make any
@@ -72,8 +91,8 @@ std::shared_ptr<CanvasImageSourceDrawingSessionAdapter> CanvasImageSourceDrawing
     deviceContext->Clear(&clearColor);
 
     deviceContext->SetTransform(D2D1::Matrix3x2F::Translation(
-        renderingSurfaceOffset.x,
-        renderingSurfaceOffset.y));
+        outOffset->x,
+        outOffset->y));
 
     deviceContext->SetDpi(dpi, dpi);
 
@@ -87,21 +106,14 @@ std::shared_ptr<CanvasImageSourceDrawingSessionAdapter> CanvasImageSourceDrawing
 
 
 CanvasImageSourceDrawingSessionAdapter::CanvasImageSourceDrawingSessionAdapter(
-    ISurfaceImageSourceNativeWithD2D* sisNative,
-    D2D1_POINT_2F const& renderingSurfaceOffset)
+    ISurfaceImageSourceNativeWithD2D* sisNative)
     : m_sisNative(sisNative)
-    , m_renderingSurfaceOffset(renderingSurfaceOffset)
 {
     CheckInPointer(sisNative);
 }
 
 
-void CanvasImageSourceDrawingSessionAdapter::EndDraw()
+void CanvasImageSourceDrawingSessionAdapter::EndDraw(ID2D1DeviceContext1*)
 {
     ThrowIfFailed(m_sisNative->EndDraw());
-}
-
-D2D1_POINT_2F CanvasImageSourceDrawingSessionAdapter::GetRenderingSurfaceOffset()
-{
-    return m_renderingSurfaceOffset;
 }

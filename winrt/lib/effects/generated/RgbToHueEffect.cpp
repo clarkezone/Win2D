@@ -11,11 +11,14 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    RgbToHueEffect::RgbToHueEffect()
-        : CanvasEffect(CLSID_D2D1RgbToHue, 1, 1, true)
+    RgbToHueEffect::RgbToHueEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 1, 1, true, device, effect, static_cast<IRgbToHueEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<uint32_t>(D2D1_RGBTOHUE_PROP_OUTPUT_COLOR_SPACE, EffectHueColorSpace::Hsv);
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<uint32_t>(D2D1_RGBTOHUE_PROP_OUTPUT_COLOR_SPACE, EffectHueColorSpace::Hsv);
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY(RgbToHueEffect,
@@ -31,7 +34,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
     IMPLEMENT_EFFECT_PROPERTY_MAPPING(RgbToHueEffect,
         { L"OutputColorSpace", D2D1_RGBTOHUE_PROP_OUTPUT_COLOR_SPACE, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT })
 
-    ActivatableClass(RgbToHueEffect);
+    ActivatableClassWithFactory(RgbToHueEffect, SimpleAgileActivationFactory<RgbToHueEffect>);
 }}}}}
 
 #endif // _WIN32_WINNT_WIN10

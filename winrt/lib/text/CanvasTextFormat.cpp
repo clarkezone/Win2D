@@ -76,90 +76,17 @@ static void ThrowIfNegativeOrNan(float value)
 
 
 //
-// CanvasTextFormatAdapter implementation
-//
-
-
-ComPtr<IDWriteFactory> CanvasTextFormatAdapter::CreateDWriteFactory(DWRITE_FACTORY_TYPE type)
-{
-    ComPtr<IDWriteFactory> factory;
-    ThrowIfFailed(DWriteCreateFactory(type, __uuidof(factory), &factory));
-    return factory;
-}
-
-
-IStorageFileStatics* CanvasTextFormatAdapter::GetStorageFileStatics()
-{
-    if (!m_storageFileStatics)
-    {
-        ThrowIfFailed(GetActivationFactory(
-            HStringReference(RuntimeClass_Windows_Storage_StorageFile).Get(), 
-            &m_storageFileStatics));
-    }
-
-    return m_storageFileStatics.Get();
-}
-
-
-//
-// CanvasTextFormatManager implementation
-//
-
-CanvasTextFormatManager::CanvasTextFormatManager(std::shared_ptr<ICanvasTextFormatAdapter> adapter)
-    : CustomFontManager(adapter)
-{
-}
-
-
-ComPtr<CanvasTextFormat> CanvasTextFormatManager::Create()
-{
-    return Make<CanvasTextFormat>(shared_from_this());
-}
-
-
-ComPtr<CanvasTextFormat> CanvasTextFormatManager::Create(IDWriteTextFormat* format)
-{
-    return Make<CanvasTextFormat>(shared_from_this(), format);
-}
-
-
-
-//
 // CanvasTextFormatFactory implementation
 //
-
-
-CanvasTextFormatFactory::CanvasTextFormatFactory()
-{
-}
-
-
-std::shared_ptr<CanvasTextFormatManager> CanvasTextFormatFactory::CreateManager()
-{
-    return std::make_shared<CanvasTextFormatManager>(std::make_shared<CanvasTextFormatAdapter>());
-}
-
 
 IFACEMETHODIMP CanvasTextFormatFactory::ActivateInstance(IInspectable** object)
 {
     return ExceptionBoundary(
         [&]
         {
-            auto format = GetOrCreateManager()->Create();
+            auto format = Make<CanvasTextFormat>();
+            CheckMakeResult(format);
             ThrowIfFailed(format.CopyTo(object));
-        });
-}
-
-
-IFACEMETHODIMP CanvasTextFormatFactory::GetOrCreate(
-    IUnknown* resource,
-    IInspectable** wrapper)
-{
-    return ExceptionBoundary(
-        [&]
-        {
-            auto format = GetOrCreateManager()->Create(As<IDWriteTextFormat>(resource).Get());
-            ThrowIfFailed(format.CopyTo(wrapper));
         });
 }
 
@@ -169,8 +96,9 @@ IFACEMETHODIMP CanvasTextFormatFactory::GetOrCreate(
 //
 
 
-CanvasTextFormat::CanvasTextFormat(std::shared_ptr<CanvasTextFormatManager> manager)
-    : m_manager(manager)
+CanvasTextFormat::CanvasTextFormat()
+    : ResourceWrapper(nullptr)
+    , m_customFontManager(CustomFontManager::GetInstance())
     , m_closed(false)
     , m_direction(CanvasTextDirection::LeftToRightThenTopToBottom)
     , m_fontFamilyName(L"Segoe UI")
@@ -178,23 +106,29 @@ CanvasTextFormat::CanvasTextFormat(std::shared_ptr<CanvasTextFormatManager> mana
     , m_fontStretch(ABI::Windows::UI::Text::FontStretch_Normal)
     , m_fontStyle(ABI::Windows::UI::Text::FontStyle_Normal)
     , m_fontWeight(ToWindowsFontWeight(DWRITE_FONT_WEIGHT_NORMAL))
-    , m_incrementalTabStop(-1.0f)          
+    , m_incrementalTabStop(-1.0f)
+    , m_lineSpacingMode(CanvasLineSpacingMode::Default)
     , m_lineSpacing(-1.0f)
-    , m_lineSpacingBaseline(0.0f)
+    , m_lineSpacingBaseline(1.0f)
     , m_verticalAlignment(CanvasVerticalAlignment::Top)
     , m_horizontalAlignment(CanvasHorizontalAlignment::Left)
     , m_trimmingGranularity(CanvasTextTrimmingGranularity::None)
     , m_trimmingDelimiterCount(0)
     , m_wordWrapping(CanvasWordWrapping::Wrap)
     , m_drawTextOptions(CanvasDrawTextOptions::Default)
+    , m_verticalGlyphOrientation(CanvasVerticalGlyphOrientation::Default)
+    , m_opticalAlignment(CanvasOpticalAlignment::Default)
+    , m_lastLineWrapping(true)
 {
 }
 
 
-CanvasTextFormat::CanvasTextFormat(std::shared_ptr<CanvasTextFormatManager> manager, IDWriteTextFormat* format)
-    : m_manager(manager)
+CanvasTextFormat::CanvasTextFormat(IDWriteTextFormat1* format)
+    : ResourceWrapper(format)
+    , m_customFontManager(CustomFontManager::GetInstance())
     , m_closed(false)
-    , m_format(format)
+    , m_drawTextOptions(CanvasDrawTextOptions::Default)
+    , m_lineSpacingMode(CanvasLineSpacingMode::Default)
 {
     SetShadowPropertiesFromDWrite();
 }
@@ -203,7 +137,7 @@ CanvasTextFormat::CanvasTextFormat(std::shared_ptr<CanvasTextFormatManager> mana
 IFACEMETHODIMP CanvasTextFormat::Close()
 {
     m_closed = true;
-    return S_OK;
+    return ResourceWrapper::Close();
 }
 
 
@@ -214,27 +148,45 @@ void CanvasTextFormat::ThrowIfClosed()
 }
 
 
-IFACEMETHODIMP CanvasTextFormat::GetResource(REFIID iid, void** value)
+IFACEMETHODIMP CanvasTextFormat::GetNativeResource(ICanvasDevice* device, float dpi, REFIID iid, void** value)
 {
+    UNREFERENCED_PARAMETER(device);
+    UNREFERENCED_PARAMETER(dpi);
+
     return ExceptionBoundary(
         [&]
         {
             CheckAndClearOutPointer(value);
+            ThrowIfClosed();
             ThrowIfFailed(GetRealizedTextFormat().CopyTo(iid, value));
         });
 }
 
 
-ComPtr<IDWriteTextFormat> CanvasTextFormat::GetRealizedTextFormat()
+ComPtr<IDWriteTextFormat1> CanvasTextFormat::GetRealizedTextFormat()
 {
-    if (m_format)
-        return m_format;
+    auto lock = GetLock();
 
-    ComPtr<IDWriteFactory2> factory;
-    ThrowIfFailed(DWriteCreateFactory(
-        DWRITE_FACTORY_TYPE_SHARED,
-        __uuidof(&factory),
-        static_cast<IUnknown**>(&factory)));
+    auto& existingResource = MaybeGetResource();
+
+    if (existingResource)
+    {
+        return existingResource;
+    }
+    else
+    {
+        auto newResource = CreateRealizedTextFormat();
+
+        SetResource(newResource.Get());
+
+        return newResource;
+    }
+}
+
+
+ComPtr<IDWriteTextFormat1> CanvasTextFormat::CreateRealizedTextFormat(bool skipWordWrapping)
+{
+    auto factory = m_customFontManager->GetSharedFactory();
 
     auto uriAndFontFamily = GetUriAndFontFamily(m_fontFamilyName);
     auto const& uri = uriAndFontFamily.first;
@@ -244,8 +196,10 @@ ComPtr<IDWriteTextFormat> CanvasTextFormat::GetRealizedTextFormat()
 
     if (!fontCollection)
     {
-        fontCollection = m_manager->GetFontCollectionFromUri(uri);
+        fontCollection = m_customFontManager->GetFontCollectionFromUri(uri);
     }
+
+    ComPtr<IDWriteTextFormat> textFormatBase;
 
     ThrowIfFailed(factory->CreateTextFormat(
         static_cast<const wchar_t*>(fontFamily),
@@ -255,71 +209,125 @@ ComPtr<IDWriteTextFormat> CanvasTextFormat::GetRealizedTextFormat()
         ToFontStretch(m_fontStretch),
         m_fontSize,
         static_cast<const wchar_t*>(m_localeName),
-        &m_format));
+        &textFormatBase));
 
-    RealizeDirection();
-    RealizeIncrementalTabStop();
-    RealizeLineSpacing();
-    RealizeParagraphAlignment();
-    RealizeTextAlignment();
-    RealizeTrimming();
-    RealizeWordWrapping();
+    auto textFormat = As<IDWriteTextFormat1>(textFormatBase);
 
-    return m_format;
+    RealizeDirection(textFormat.Get());
+    RealizeIncrementalTabStop(textFormat.Get());
+    RealizeLineSpacing(textFormat.Get());
+    RealizeParagraphAlignment(textFormat.Get());
+    RealizeTextAlignment(textFormat.Get());
+    RealizeTrimming(textFormat.Get());
+
+    RealizeVerticalGlyphOrientation(textFormat.Get());
+    RealizeOpticalAlignment(textFormat.Get());
+    RealizeLastLineWrapping(textFormat.Get());
+
+    if (!skipWordWrapping) 
+        RealizeWordWrapping(textFormat.Get());
+
+    RealizeTrimmingSign(textFormat.Get());
+
+    RealizeCustomTrimmingSign(textFormat.Get());
+
+    return textFormat;
 }
 
 
-CanvasDrawTextOptions CanvasTextFormat::GetDrawTextOptions()
+ComPtr<IDWriteTextFormat> CanvasTextFormat::GetRealizedTextFormatClone(CanvasWordWrapping overrideWordWrapping)
 {
-    return m_drawTextOptions;
+    //
+    // This is called when we want to create a IDWriteTextFormat that is exactly
+    // what would be returned by GetRealizedTextFormat() except that it has an
+    // overridden word wrapping property.  This is needed by
+    // CanvasDrawingSession::DrawTextAtPointImpl which needs to set the word
+    // wrapping to NoWrap.  It needs to operate on a copy because DrawText is
+    // conceptually a read-only operation and we don't want DrawText on one
+    // thread to interfere with a DrawText on another thread using the same text
+    // format.
+    //
+
+    ThrowIfInvalid<CanvasWordWrapping>(overrideWordWrapping);
+
+    auto lock = GetLock();
+
+    if (HasResource())
+    {
+        SetShadowPropertiesFromDWrite();
+    }
+
+    auto newFormat = CreateRealizedTextFormat(true);
+
+    ThrowIfFailed(newFormat->SetWordWrapping(ToWordWrapping(overrideWordWrapping)));
+
+    return newFormat;
+}
+
+
+D2D1_DRAW_TEXT_OPTIONS CanvasTextFormat::GetDrawTextOptions()
+{
+    return static_cast<D2D1_DRAW_TEXT_OPTIONS>(m_drawTextOptions);
 }
 
 
 void CanvasTextFormat::Unrealize()
 {
     //
-    // We're about to throw away m_format, so we need to extract all the
+    // We're about to throw away our resource, so we need to extract all the
     // values stored on it into our shadow copies.
     //
-    if (m_format)
+    if (HasResource())
+    {
         SetShadowPropertiesFromDWrite();
 
-    m_format.Reset();
+        ReleaseResource();
+    }
 }
 
 
 void CanvasTextFormat::SetShadowPropertiesFromDWrite()
 {
-    assert(m_format);
+    auto& textFormat = GetResource();
 
-    ThrowIfFailed(m_format->GetFontCollection(&m_fontCollection));
+    ThrowIfFailed(textFormat->GetFontCollection(&m_fontCollection));
 
-    m_direction          = DWriteToCanvasTextDirection::Lookup(m_format->GetReadingDirection(), m_format->GetFlowDirection())->TextDirection;
-    m_fontFamilyName     = GetFontFamilyName(m_format.Get());
-    m_fontSize           = m_format->GetFontSize();
-    m_fontStretch        = ToWindowsFontStretch(m_format->GetFontStretch());
-    m_fontStyle          = ToWindowsFontStyle(m_format->GetFontStyle());
-    m_fontWeight         = ToWindowsFontWeight(m_format->GetFontWeight());
-    m_incrementalTabStop = m_format->GetIncrementalTabStop();
-    m_localeName         = GetLocaleName(m_format.Get());
-    m_verticalAlignment  = ToCanvasVerticalAlignment(m_format->GetParagraphAlignment());
-    m_horizontalAlignment = ToCanvasHorizontalAlignment(m_format->GetTextAlignment());
-    m_wordWrapping       = ToCanvasWordWrapping(m_format->GetWordWrapping());
-    m_drawTextOptions    = CanvasDrawTextOptions::Default;
+    m_direction          = DWriteToCanvasTextDirection::Lookup(textFormat->GetReadingDirection(), textFormat->GetFlowDirection())->TextDirection;
+    m_fontFamilyName     = GetFontFamilyName(textFormat.Get());
+    m_fontSize           = textFormat->GetFontSize();
+    m_fontStretch        = ToWindowsFontStretch(textFormat->GetFontStretch());
+    m_fontStyle          = ToWindowsFontStyle(textFormat->GetFontStyle());
+    m_fontWeight         = ToWindowsFontWeight(textFormat->GetFontWeight());
+    m_incrementalTabStop = textFormat->GetIncrementalTabStop();
+    m_localeName         = GetLocaleName(textFormat.Get());
+    m_verticalAlignment  = ToCanvasVerticalAlignment(textFormat->GetParagraphAlignment());
+    m_horizontalAlignment = ToCanvasHorizontalAlignment(textFormat->GetTextAlignment());
+    m_wordWrapping       = ToCanvasWordWrapping(textFormat->GetWordWrapping());
+    m_verticalGlyphOrientation = ToCanvasVerticalGlyphOrientation(textFormat->GetVerticalGlyphOrientation());
+    m_opticalAlignment         = ToCanvasOpticalAlignment(textFormat->GetOpticalAlignment());
+    m_lastLineWrapping         = !!textFormat->GetLastLineWrapping();
 
-    DWriteLineSpacing spacing(m_format.Get());
+
+    DWriteLineSpacing spacing(textFormat.Get());
     m_lineSpacing = spacing.GetAdjustedSpacing();
     m_lineSpacingBaseline = spacing.Baseline;
 
+#if WINVER > _WIN32_WINNT_WINBLUE
+    bool isUniform = m_lineSpacingMode == CanvasLineSpacingMode::Uniform;
+    m_lineSpacingMode = spacing.GetAdjustedLineSpacingMode(isUniform);
+#endif
+
     DWRITE_TRIMMING trimmingOptions{};
     ComPtr<IDWriteInlineObject> inlineObject;
-    ThrowIfFailed(m_format->GetTrimming(
+    ThrowIfFailed(textFormat->GetTrimming(
         &trimmingOptions,
         &inlineObject));
 
     m_trimmingGranularity = ToCanvasTextTrimmingGranularity(trimmingOptions.granularity);
-    m_trimmingDelimiter = ToCanvasTrimmingDelimiter(trimmingOptions.delimiter);
+    m_trimmingDelimiter = ConvertCharacterCodepointToString(trimmingOptions.delimiter);
     m_trimmingDelimiterCount = trimmingOptions.delimiterCount;
+
+    m_trimmingSignInformation.SetTrimmingSignFromResource(textFormat.Get());
 }
 
 
@@ -353,6 +361,17 @@ static bool IsSame(WinString* outputValue, HSTRING const& value)
     return outputValue->Equals(value);
 }
 
+template<typename boolean>
+static bool IsSame(bool* outputValue, boolean value)
+{
+    return *outputValue == !!value;
+}
+
+template<typename T>
+static bool IsSame(ComPtr<T>* outputValue, T* value)
+{
+    return outputValue->Get() == value;
+}
 
 template<typename T>
 static void SetFrom(T* outputValue, T const& value)
@@ -378,6 +397,30 @@ static void SetFrom(WinString* outputValue, HSTRING const& value)
     *outputValue = value;
 }
 
+template<typename BOOL>
+static void SetFrom(boolean* outputValue, BOOL value)
+{
+    *outputValue = !!value;
+}
+
+template<typename boolean>
+static void SetFrom(bool* outputValue, boolean value)
+{
+    *outputValue = !!value;
+}
+
+template<typename T>
+static void SetFrom(T** outputValue, ComPtr<T> const& value)
+{
+    ThrowIfFailed(value.CopyTo(outputValue));
+}
+
+template<typename T>
+static void SetFrom(ComPtr<T>* outputValue, T* value)
+{
+    *outputValue = value;
+}
+
 
 template<typename T, typename ST, typename FN>
 HRESULT __declspec(nothrow) CanvasTextFormat::PropertyGet(T* value, ST const& shadowValue, FN realizedGetter)
@@ -385,11 +428,15 @@ HRESULT __declspec(nothrow) CanvasTextFormat::PropertyGet(T* value, ST const& sh
     return ExceptionBoundary(
         [&]
         {
+            auto lock = GetLock();
+
             CheckInPointer(value);
             ThrowIfClosed();
 
-            if (m_format)
-                SetFrom(value, realizedGetter());
+            auto& textFormat = MaybeGetResource();
+
+            if (textFormat)
+                SetFrom(value, realizedGetter(textFormat.Get()));
             else
                 SetFrom(value, shadowValue);
         });
@@ -397,27 +444,32 @@ HRESULT __declspec(nothrow) CanvasTextFormat::PropertyGet(T* value, ST const& sh
 
 
 template<typename T, typename TT, typename FNV>
-HRESULT __declspec(nothrow) CanvasTextFormat::PropertyPut(T value, TT* dest, FNV&& validator, void(CanvasTextFormat::*realizer)())
+HRESULT __declspec(nothrow) CanvasTextFormat::PropertyPut(T value, TT* dest, FNV&& validator, void(CanvasTextFormat::*realizer)(IDWriteTextFormat1*))
 {
     return ExceptionBoundary(
         [&]
         {
+            auto lock = GetLock();
+
             validator(value);
 
             ThrowIfClosed();
 
-            if (IsSame(dest, value))
-            {
-                // Don't do anything if the value we're setting is the same
-                // as the current value.
-                return;
-            }
-
             if (!realizer)
             {
+                if (IsSame(dest, value))
+                {
+                    // Don't do anything if the value we're setting is the same
+                    // as the current value. This optimization is only valid for
+                    // properties that do not have realizers, because realized
+                    // dwrite state trumps our shadow state and can change out
+                    // from under us in the presence of interop.
+                    return;
+                }
+
                 // If there's no realizer set then we're going to have to
-                // throw away m_format (ready to be recreated the next time
-                // it is needed)
+                // throw away the dwrite resource (ready to be recreated
+                // the next time it is needed)
                 Unrealize();
             }
 
@@ -425,13 +477,19 @@ HRESULT __declspec(nothrow) CanvasTextFormat::PropertyPut(T value, TT* dest, FNV
             SetFrom(dest, value);
 
             // Realize the value on the dwrite object, if we can
-            if (m_format && realizer)
-                (this->*realizer)();
+            auto& textFormat = MaybeGetResource();
+
+            if (textFormat && realizer)
+            {
+                (this->*realizer)(textFormat.Get());
+
+                m_trimmingSignInformation.RecreateInternalTrimmingSignIfNeeded(textFormat.Get());
+            }
         });
 }
 
 template<typename T, typename TT>
-HRESULT __declspec(nothrow) CanvasTextFormat::PropertyPut(T value, TT* dest, void(CanvasTextFormat::*realizer)())
+HRESULT __declspec(nothrow) CanvasTextFormat::PropertyPut(T value, TT* dest, void(CanvasTextFormat::*realizer)(IDWriteTextFormat1*))
 {
     return PropertyPut(value, dest, [](T){}, realizer);
 }
@@ -477,13 +535,13 @@ DWriteToCanvasTextDirection const* DWriteToCanvasTextDirection::Lookup(CanvasTex
 }
 
 
-void CanvasTextFormat::RealizeDirection()
+void CanvasTextFormat::RealizeDirection(IDWriteTextFormat1* textFormat)
 {
     auto entry = DWriteToCanvasTextDirection::Lookup(m_direction);
     assert(entry);          // m_direction should always be set to a valid value
 
-    ThrowIfFailed(m_format->SetReadingDirection(entry->ReadingDirection));
-    ThrowIfFailed(m_format->SetFlowDirection(entry->FlowDirection));
+    ThrowIfFailed(textFormat->SetReadingDirection(entry->ReadingDirection));
+    ThrowIfFailed(textFormat->SetFlowDirection(entry->FlowDirection));
 }
 
 
@@ -492,9 +550,9 @@ IFACEMETHODIMP CanvasTextFormat::get_Direction(CanvasTextDirection* value)
     return PropertyGet(
         value,
         m_direction,
-        [=]
+        [](IDWriteTextFormat* textFormat)
         {
-            return DWriteToCanvasTextDirection::Lookup(m_format->GetReadingDirection(), m_format->GetFlowDirection())->TextDirection;
+            return DWriteToCanvasTextDirection::Lookup(textFormat->GetReadingDirection(), textFormat->GetFlowDirection())->TextDirection;
         });
 }
 
@@ -517,12 +575,11 @@ IFACEMETHODIMP CanvasTextFormat::get_FontFamily(HSTRING* value)
     return PropertyGet(
         value,
         m_fontFamilyName,
-        [&]
+        [&](IDWriteTextFormat*)
         {
             //
             // If this were any other simple property, this would get the
-            // font family name from the realized IDWriteTextFormat
-            // (m_format).
+            // font family name from the realized IDWriteTextFormat.
             //
             // We have no way of storing the full information required to
             // reconstruct the CanvasTextFormat's font family name (ie
@@ -549,6 +606,7 @@ IFACEMETHODIMP CanvasTextFormat::put_FontFamily(HSTRING value)
     return ExceptionBoundary(
         [&]
         {
+            auto lock = GetLock();
             ThrowIfClosed();
 
             if (IsSame(&m_fontFamilyName, value))
@@ -556,12 +614,19 @@ IFACEMETHODIMP CanvasTextFormat::put_FontFamily(HSTRING value)
 
             auto uriAndFontFamily = GetUriAndFontFamily(WinString(value));
             auto const& uri = uriAndFontFamily.first;
-            m_manager->ValidateUri(uri);
+            m_customFontManager->ValidateUri(uri);
 
             Unrealize();
             m_fontCollection.Reset();
 
             SetFrom(&m_fontFamilyName, value);
+
+            //
+            // For properties like this that change something, unrealize and 
+            // don't re-realize, we don't do anything special with the trimming 
+            // sign. The trimming sign will get re-realized along with the 
+            // rest of the text format.
+            //
         });
 }
 
@@ -575,7 +640,7 @@ IFACEMETHODIMP CanvasTextFormat::get_FontSize(float* value)
     return PropertyGet(
         value,
         m_fontSize,
-        [&] { return m_format->GetFontSize(); });
+        [](IDWriteTextFormat* textFormat) { return textFormat->GetFontSize(); });
 }
 
 
@@ -596,7 +661,7 @@ IFACEMETHODIMP CanvasTextFormat::get_FontStretch(ABI::Windows::UI::Text::FontStr
     return PropertyGet(
         value,
         m_fontStretch,
-        [&] { return ToWindowsFontStretch(m_format->GetFontStretch()); });
+        [](IDWriteTextFormat* textFormat) { return ToWindowsFontStretch(textFormat->GetFontStretch()); });
 }
 
 
@@ -617,7 +682,7 @@ IFACEMETHODIMP CanvasTextFormat::get_FontStyle(ABI::Windows::UI::Text::FontStyle
     return PropertyGet(
         value,
         m_fontStyle,
-        [&] { return ToWindowsFontStyle(m_format->GetFontStyle()); });
+        [](IDWriteTextFormat* textFormat) { return ToWindowsFontStyle(textFormat->GetFontStyle()); });
 }
 
 
@@ -638,7 +703,7 @@ IFACEMETHODIMP CanvasTextFormat::get_FontWeight(ABI::Windows::UI::Text::FontWeig
     return PropertyGet(
         value,
         m_fontWeight,
-        [&] { return ToWindowsFontWeight(m_format->GetFontWeight()); });
+        [](IDWriteTextFormat* textFormat) { return ToWindowsFontWeight(textFormat->GetFontWeight()); });
 }
 
 
@@ -659,7 +724,7 @@ IFACEMETHODIMP CanvasTextFormat::get_IncrementalTabStop(float* value)
     return PropertyGet(
         value,
         m_incrementalTabStop,
-        [&] { return m_format->GetIncrementalTabStop(); });
+        [](IDWriteTextFormat* textFormat) { return textFormat->GetIncrementalTabStop(); });
 }
 
 
@@ -673,12 +738,12 @@ IFACEMETHODIMP CanvasTextFormat::put_IncrementalTabStop(float value)
 }
 
 
-void CanvasTextFormat::RealizeIncrementalTabStop()
+void CanvasTextFormat::RealizeIncrementalTabStop(IDWriteTextFormat1* textFormat)
 {
     // Negative value indicates that it hasn't been set yet, so we want to
     // use dwrite's default.
     if (m_incrementalTabStop >= 0.0f)
-        ThrowIfFailed(m_format->SetIncrementalTabStop(m_incrementalTabStop));
+        ThrowIfFailed(textFormat->SetIncrementalTabStop(m_incrementalTabStop));
 }
 
 //
@@ -690,9 +755,9 @@ IFACEMETHODIMP CanvasTextFormat::get_LineSpacing(float* value)
     return PropertyGet(
         value,
         m_lineSpacing,
-        [&] 
+        [](IDWriteTextFormat* textFormat)
         { 
-            return DWriteLineSpacing(m_format.Get()).GetAdjustedSpacing();
+            return DWriteLineSpacing(textFormat).GetAdjustedSpacing();
         });
 }
 
@@ -715,7 +780,7 @@ IFACEMETHODIMP CanvasTextFormat::get_LineSpacingBaseline(float* value)
     return PropertyGet(
         value,
         m_lineSpacingBaseline,
-        [&] { return DWriteLineSpacing(m_format.Get()).Baseline; });
+        [](IDWriteTextFormat* textFormat) { return DWriteLineSpacing(textFormat).Baseline; });
 }
 
 
@@ -729,9 +794,13 @@ IFACEMETHODIMP CanvasTextFormat::put_LineSpacingBaseline(float value)
 }
 
 
-void CanvasTextFormat::RealizeLineSpacing()
+void CanvasTextFormat::RealizeLineSpacing(IDWriteTextFormat1* textFormat)
 {
-    DWriteLineSpacing::Set(m_format.Get(), m_lineSpacing, m_lineSpacingBaseline);
+    DWriteLineSpacing::Set(
+        textFormat, 
+        m_lineSpacingMode,
+        m_lineSpacing, 
+        m_lineSpacingBaseline);
 }
 
 
@@ -744,9 +813,9 @@ IFACEMETHODIMP CanvasTextFormat::get_LocaleName(HSTRING* value)
     return PropertyGet(
         value,
         m_localeName,
-        [&]
+        [](IDWriteTextFormat* textFormat)
         {
-            return GetLocaleName(m_format.Get());
+            return GetLocaleName(textFormat);
         });
 }
 
@@ -768,7 +837,7 @@ IFACEMETHODIMP CanvasTextFormat::get_VerticalAlignment(CanvasVerticalAlignment* 
     return PropertyGet(
         value,
         m_verticalAlignment,
-        [&] { return ToCanvasVerticalAlignment(m_format->GetParagraphAlignment()); });
+        [](IDWriteTextFormat* textFormat) { return ToCanvasVerticalAlignment(textFormat->GetParagraphAlignment()); });
 }
 
 
@@ -782,9 +851,9 @@ IFACEMETHODIMP CanvasTextFormat::put_VerticalAlignment(CanvasVerticalAlignment v
 }
 
 
-void CanvasTextFormat::RealizeParagraphAlignment()
+void CanvasTextFormat::RealizeParagraphAlignment(IDWriteTextFormat1* textFormat)
 {
-    ThrowIfFailed(m_format->SetParagraphAlignment(ToParagraphAlignment(m_verticalAlignment)));
+    ThrowIfFailed(textFormat->SetParagraphAlignment(ToParagraphAlignment(m_verticalAlignment)));
 }
 
 //
@@ -797,7 +866,7 @@ IFACEMETHODIMP CanvasTextFormat::get_HorizontalAlignment(CanvasHorizontalAlignme
     return PropertyGet(
         value,
         m_horizontalAlignment,
-        [&] { return ToCanvasHorizontalAlignment(m_format->GetTextAlignment()); });
+        [](IDWriteTextFormat* textFormat) { return ToCanvasHorizontalAlignment(textFormat->GetTextAlignment()); });
 }
 
 
@@ -810,9 +879,9 @@ IFACEMETHODIMP CanvasTextFormat::put_HorizontalAlignment(CanvasHorizontalAlignme
         &CanvasTextFormat::RealizeTextAlignment);
 }
 
-void CanvasTextFormat::RealizeTextAlignment()
+void CanvasTextFormat::RealizeTextAlignment(IDWriteTextFormat1* textFormat)
 {
-    ThrowIfFailed(m_format->SetTextAlignment(ToTextAlignment(m_horizontalAlignment)));        
+    ThrowIfFailed(textFormat->SetTextAlignment(ToTextAlignment(m_horizontalAlignment)));        
 }
 
 //
@@ -824,7 +893,7 @@ IFACEMETHODIMP CanvasTextFormat::get_TrimmingGranularity(CanvasTextTrimmingGranu
     return PropertyGet(
         value,
         m_trimmingGranularity,
-        [&] { return ToCanvasTextTrimmingGranularity(DWriteTrimming(m_format.Get()).Options.granularity); });
+        [](IDWriteTextFormat* textFormat) { return ToCanvasTextTrimmingGranularity(DWriteTrimming(textFormat).Options.granularity); });
 }
 
 
@@ -846,7 +915,7 @@ IFACEMETHODIMP CanvasTextFormat::get_TrimmingDelimiter(HSTRING* value)
     return PropertyGet(
         value,
         m_trimmingDelimiter,
-        [&] { return ToCanvasTrimmingDelimiter(DWriteTrimming(m_format.Get()).Options.delimiter); });
+        [](IDWriteTextFormat* textFormat) { return ConvertCharacterCodepointToString(DWriteTrimming(textFormat).Options.delimiter); });
 }
 
 
@@ -868,7 +937,7 @@ IFACEMETHODIMP CanvasTextFormat::get_TrimmingDelimiterCount(int32_t* value)
     return PropertyGet(
         value,
         m_trimmingDelimiterCount,
-        [&] { return static_cast<int32_t>(DWriteTrimming(m_format.Get()).Options.delimiterCount); });
+        [](IDWriteTextFormat* textFormat) { return static_cast<int32_t>(DWriteTrimming(textFormat).Options.delimiterCount); });
 }
 
 
@@ -882,16 +951,21 @@ IFACEMETHODIMP CanvasTextFormat::put_TrimmingDelimiterCount(int32_t value)
 }
 
 
-void CanvasTextFormat::RealizeTrimming()
+void CanvasTextFormat::RealizeTrimming(IDWriteTextFormat1* textFormat)
 {
     DWRITE_TRIMMING trimmingOptions{};
+
     trimmingOptions.granularity = ToTrimmingGranularity(m_trimmingGranularity);
     trimmingOptions.delimiter = ToTrimmingDelimiter(m_trimmingDelimiter);
     trimmingOptions.delimiterCount = m_trimmingDelimiterCount;
 
-    ThrowIfFailed(m_format->SetTrimming(
+    DWRITE_TRIMMING unused{};
+    ComPtr<IDWriteInlineObject> trimmingSign;
+    textFormat->GetTrimming(&unused, &trimmingSign);
+
+    ThrowIfFailed(textFormat->SetTrimming(
         &trimmingOptions,
-        nullptr));        
+        trimmingSign.Get()));
 }
 
 
@@ -904,7 +978,7 @@ IFACEMETHODIMP CanvasTextFormat::get_WordWrapping(CanvasWordWrapping* value)
     return PropertyGet(
         value,
         m_wordWrapping,
-        [&] { return ToCanvasWordWrapping(m_format->GetWordWrapping()); });
+        [](IDWriteTextFormat* textFormat) { return ToCanvasWordWrapping(textFormat->GetWordWrapping()); });
 }
 
 
@@ -918,9 +992,9 @@ IFACEMETHODIMP CanvasTextFormat::put_WordWrapping(CanvasWordWrapping value)
 }
 
 
-void CanvasTextFormat::RealizeWordWrapping()
+void CanvasTextFormat::RealizeWordWrapping(IDWriteTextFormat1* textFormat)
 {
-    ThrowIfFailed(m_format->SetWordWrapping(ToWordWrapping(m_wordWrapping)));        
+    ThrowIfFailed(textFormat->SetWordWrapping(ToWordWrapping(m_wordWrapping)));        
 }
 
 //
@@ -955,6 +1029,255 @@ IFACEMETHODIMP CanvasTextFormat::put_Options(CanvasDrawTextOptions value)
                 ThrowHR(E_INVALIDARG);
 
             m_drawTextOptions = value;
+        });
+}
+
+//
+// CanvasTextFormat.LineSpacingMethod
+//
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+
+IFACEMETHODIMP CanvasTextFormat::get_LineSpacingMode(CanvasLineSpacingMode* value)
+{
+    bool allowUniformToBePreserved = m_lineSpacingMode == CanvasLineSpacingMode::Uniform;
+
+    return PropertyGet(
+        value,
+        m_lineSpacingMode,
+        [=](IDWriteTextFormat* textFormat) { return DWriteLineSpacing(textFormat).GetAdjustedLineSpacingMode(allowUniformToBePreserved); });
+}
+
+
+IFACEMETHODIMP CanvasTextFormat::put_LineSpacingMode(CanvasLineSpacingMode value)
+{
+    return PropertyPut(
+        value, 
+        &m_lineSpacingMode,
+        ThrowIfInvalid<CanvasLineSpacingMode>,
+        &CanvasTextFormat::RealizeLineSpacing);
+}
+
+#endif
+
+
+IFACEMETHODIMP CanvasTextFormat::get_VerticalGlyphOrientation(CanvasVerticalGlyphOrientation* value)
+{
+    return PropertyGet(
+        value,
+        m_verticalGlyphOrientation,
+        [](IDWriteTextFormat1* textFormat) { return ToCanvasVerticalGlyphOrientation(textFormat->GetVerticalGlyphOrientation()); });
+}
+
+
+IFACEMETHODIMP CanvasTextFormat::put_VerticalGlyphOrientation(CanvasVerticalGlyphOrientation value)
+{
+    return PropertyPut(
+        value,
+        &m_verticalGlyphOrientation,
+        ThrowIfInvalid<CanvasVerticalGlyphOrientation>,
+        &CanvasTextFormat::RealizeVerticalGlyphOrientation);
+}
+
+void CanvasTextFormat::RealizeVerticalGlyphOrientation(IDWriteTextFormat1* textFormat)
+{
+    ThrowIfFailed(textFormat->SetVerticalGlyphOrientation(ToVerticalGlyphOrientation(m_verticalGlyphOrientation)));
+}
+
+IFACEMETHODIMP CanvasTextFormat::get_OpticalAlignment(CanvasOpticalAlignment* value)
+{
+    return PropertyGet(
+        value,
+        m_opticalAlignment,
+        [](IDWriteTextFormat1* textFormat) { return ToCanvasOpticalAlignment(textFormat->GetOpticalAlignment()); });
+}
+
+IFACEMETHODIMP CanvasTextFormat::put_OpticalAlignment(CanvasOpticalAlignment value)
+{
+    return PropertyPut(
+        value,
+        &m_opticalAlignment,
+        ThrowIfInvalid<CanvasOpticalAlignment>,
+        &CanvasTextFormat::RealizeOpticalAlignment);
+}
+
+void CanvasTextFormat::RealizeOpticalAlignment(IDWriteTextFormat1* textFormat)
+{
+    ThrowIfFailed(textFormat->SetOpticalAlignment(ToOpticalAlignment(m_opticalAlignment)));
+}
+
+IFACEMETHODIMP CanvasTextFormat::get_LastLineWrapping(boolean* value)
+{
+    return PropertyGet(
+        value,
+        m_lastLineWrapping,
+        [](IDWriteTextFormat1* textFormat) { return textFormat->GetLastLineWrapping(); });
+}
+
+IFACEMETHODIMP CanvasTextFormat::put_LastLineWrapping(boolean value)
+{
+    return PropertyPut(
+        value,
+        &m_lastLineWrapping,
+        &CanvasTextFormat::RealizeLastLineWrapping);
+}
+
+void CanvasTextFormat::RealizeLastLineWrapping(IDWriteTextFormat1* textFormat)
+{
+    ThrowIfFailed(textFormat->SetLastLineWrapping(m_lastLineWrapping));
+}
+
+IFACEMETHODIMP CanvasTextFormat::get_TrimmingSign(CanvasTrimmingSign* value)
+{
+    return PropertyGet(
+        value,
+        m_trimmingSignInformation.GetTrimmingSignShadowState(),
+        [=](IDWriteTextFormat1* textFormat) 
+        {
+            return m_trimmingSignInformation.GetTrimmingSignFromResource(textFormat);
+        });
+}
+
+IFACEMETHODIMP CanvasTextFormat::put_TrimmingSign(CanvasTrimmingSign value)
+{
+    return PropertyPut(
+        value,
+        m_trimmingSignInformation.GetAddressOfTrimmingSign(),
+        &CanvasTextFormat::RealizeTrimmingSign);
+}
+
+IFACEMETHODIMP CanvasTextFormat::get_CustomTrimmingSign(ICanvasTextInlineObject** value)
+{
+    return PropertyGet(
+        value,
+        m_trimmingSignInformation.GetCustomTrimmingSignShadowState(),
+        [=](IDWriteTextFormat1* textFormat) 
+        {
+            return m_trimmingSignInformation.GetCustomTrimmingSignFromResource(textFormat);
+        });
+}
+
+IFACEMETHODIMP CanvasTextFormat::put_CustomTrimmingSign(ICanvasTextInlineObject* value)
+{
+    return PropertyPut(
+        value,
+        m_trimmingSignInformation.GetAddressOfCustomTrimmingSign(),
+        &CanvasTextFormat::RealizeCustomTrimmingSign);
+}
+
+void CanvasTextFormat::RealizeTrimmingSign(IDWriteTextFormat1* textFormat)
+{
+    m_trimmingSignInformation.RealizeTrimmingSign(textFormat);
+}
+
+void CanvasTextFormat::RealizeCustomTrimmingSign(IDWriteTextFormat1* textFormat)
+{
+    m_trimmingSignInformation.RealizeCustomTrimmingSign(textFormat);
+}
+
+
+static bool TryGetLocalizedName(
+    wchar_t const* locale,
+    ComPtr<IDWriteLocalizedStrings> const& familyNames,
+    WinString* nameIfFound)
+{
+    uint32_t index;
+    BOOL found;
+    ThrowIfFailed(familyNames->FindLocaleName(locale, &index, &found));
+    if (found)
+    {
+        *nameIfFound = GetTextFromLocalizedStrings(index, familyNames);
+    }
+    return !!found;
+}
+
+
+static bool TryGetLocalizedNameUsingLocaleList(
+    IVectorView<HSTRING>* localeList,
+    ComPtr<IDWriteLocalizedStrings> const& familyNames,
+    WinString* nameIfFound)
+{
+    if (!localeList) 
+        return false;
+
+    uint32_t localeListSize;
+    ThrowIfFailed(localeList->get_Size(&localeListSize));
+
+    for (uint32_t localeIndex = 0; localeIndex < localeListSize; ++localeIndex)
+    {
+        WinString locale;
+        ThrowIfFailed(localeList->GetAt(localeIndex, locale.GetAddressOf()));
+
+        if (TryGetLocalizedName(static_cast<wchar_t const*>(locale), familyNames, nameIfFound))
+            return true;
+    }
+
+    return false;
+}
+
+
+static WinString GetFamilyName(
+    ComPtr<IDWriteLocalizedStrings> const& familyNames,
+    IVectorView<HSTRING>* localeList) // Optional
+{
+    //
+    // This returns one of the following, by order of priority:
+    // - passed-in list of locales by order of preference
+    // - en-us
+    // - whatever's available
+
+    WinString result;
+
+    if (TryGetLocalizedNameUsingLocaleList(localeList, familyNames, &result)) 
+        return result;
+
+    if (TryGetLocalizedName(L"en-us", familyNames, &result)) 
+        return result;
+
+    return GetTextFromLocalizedStrings(0, familyNames);
+}
+
+
+IFACEMETHODIMP CanvasTextFormatFactory::GetSystemFontFamilies(
+    uint32_t* valueCount,
+    HSTRING** valueElements)
+{
+    return GetSystemFontFamiliesFromLocaleList(nullptr, valueCount, valueElements);
+}
+
+
+IFACEMETHODIMP CanvasTextFormatFactory::GetSystemFontFamiliesFromLocaleList(
+    IVectorView<HSTRING>* localeList,
+    uint32_t* valueCount,
+    HSTRING** valueElements)
+{
+    return ExceptionBoundary(
+        [&]
+        {
+            CheckInPointer(valueCount);
+            CheckAndClearOutPointer(valueElements);
+            
+            auto factory = CustomFontManager::GetInstance()->GetSharedFactory();
+
+            ComPtr<IDWriteFontCollection> systemFontCollection;
+            ThrowIfFailed(factory->GetSystemFontCollection(&systemFontCollection));
+
+            uint32_t familyCount = systemFontCollection->GetFontFamilyCount();
+
+            ComArray<WinString> stringArray(familyCount);
+
+            for (uint32_t i = 0; i < familyCount; ++i)
+            {
+                ComPtr<IDWriteFontFamily> fontFamily;
+                ThrowIfFailed(systemFontCollection->GetFontFamily(i, &fontFamily));
+
+                ComPtr<IDWriteLocalizedStrings> familyNames;
+                ThrowIfFailed(fontFamily->GetFamilyNames(&familyNames));
+
+                stringArray[i] = GetFamilyName(familyNames, localeList);
+            }
+
+            stringArray.Detach(valueCount, valueElements);
         });
 }
 

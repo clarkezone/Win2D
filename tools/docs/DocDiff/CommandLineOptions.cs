@@ -3,7 +3,6 @@
 // Licensed under the MIT License. See LICENSE.txt in the project root for license information.
 
 using System.Collections.Generic;
-using Shared;
 
 namespace DocDiff
 {
@@ -14,5 +13,6 @@ namespace DocDiff
         public readonly List<string> AmlSrc = new List<string>();
 
         public string LogMissingDocs;
+        public string DocSrcPath;
     }
 }

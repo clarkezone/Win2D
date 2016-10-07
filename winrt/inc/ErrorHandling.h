@@ -101,6 +101,14 @@ inline void ThrowHR(HRESULT hr, HSTRING message)
     ThrowHR(hr);
 }
 
+__declspec(noreturn) __declspec(noinline)
+inline void ThrowHR(HRESULT hr, wchar_t const* message)
+{
+    using ::Microsoft::WRL::Wrappers::HStringReference;
+
+    ThrowHR(hr, HStringReference(message).Get());
+}
+
 //
 // Throws if the HR fails.  This is the workhorse helper for converting calls to
 // functions that return HRESULTs to exceptions. eg:
@@ -161,23 +169,27 @@ inline void CheckAndClearOutPointer(T** ptr)
 // Therefore the only way that Make() will return an error is if an allocation
 // fails.
 //
+__declspec(noreturn) __declspec(noinline)
+inline void ThrowBadAlloc()
+{
+    throw std::bad_alloc();
+}
+
 inline void CheckMakeResult(bool result)
 {
     if (!result)
-        throw std::bad_alloc();
+        ThrowBadAlloc();
 }
-
 
 //
 // Converts exceptions in the callable code into HRESULTs.
 //
-template<typename CALLABLE>
-HRESULT ExceptionBoundary(CALLABLE&& fn)
+__declspec(noinline)
+inline HRESULT ThrownExceptionToHResult()
 {
     try
     {
-        fn();
-        return S_OK;
+        throw;
     }
     catch (HResultException const& e)
     {
@@ -190,5 +202,19 @@ HRESULT ExceptionBoundary(CALLABLE&& fn)
     catch (...)
     {
         return E_UNEXPECTED;
+    }
+}
+
+template<typename CALLABLE>
+HRESULT ExceptionBoundary(CALLABLE&& fn)
+{
+    try
+    {
+        fn();
+        return S_OK;
+    }
+    catch (...)
+    {
+        return ThrownExceptionToHResult();
     }
 }

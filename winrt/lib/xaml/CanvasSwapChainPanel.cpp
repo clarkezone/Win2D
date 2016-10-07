@@ -32,7 +32,7 @@ ComPtr<IInspectable> CanvasSwapChainPanelAdapter::CreateSwapChainPanel(IInspecta
     return swapChainPanelInspectable;
 }
 
-class CanvasSwapChainPanelFactory : public ActivationFactory<>,
+class CanvasSwapChainPanelFactory : public AgileActivationFactory<>,
                                     private LifespanTracker<CanvasSwapChainPanelFactory>
 {
     //
@@ -116,7 +116,7 @@ IFACEMETHODIMP CanvasSwapChainPanel::put_SwapChain(ICanvasSwapChain* value)
             {
                 auto swapChainResourceWrapper = As<ICanvasResourceWrapperNative>(value);
 
-                ThrowIfFailed(swapChainResourceWrapper->GetResource(IID_PPV_ARGS(&dxgiSwapChain)));
+                ThrowIfFailed(swapChainResourceWrapper->GetNativeResource(nullptr, 0, IID_PPV_ARGS(&dxgiSwapChain)));
             }
 
             ThrowIfFailed(swapChainPanelNative->SetSwapChain(dxgiSwapChain.Get()));

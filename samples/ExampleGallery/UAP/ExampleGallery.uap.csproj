@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="14.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <PropertyGroup>
@@ -16,6 +16,7 @@
     <SynthesizeLinkMetadata>true</SynthesizeLinkMetadata>
     <ProjectTypeGuids>{A5A43C5B-DE2A-4C0C-9213-0A381AF9435A};{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}</ProjectTypeGuids>
     <EnableDotNetNativeCompatibleProfile>true</EnableDotNetNativeCompatibleProfile>
+    <UapDefaultAssetScale>100</UapDefaultAssetScale>
   </PropertyGroup>
   <Import Project="..\..\..\build\Win2D.cs.props" />
   <PropertyGroup>
@@ -90,6 +91,10 @@
       <Project>{8cf21e5d-e0a2-4fe7-8e2b-a025cf52dcfb}</Project>
       <Name>winrt.dll.uap</Name>
     </ProjectReference>
+    <ProjectReference Include="..\Direct3DInterop\UAP\ExampleGallery.Direct3DInterop.uap.vcxproj">
+      <Project>{a81f96d0-4924-40e3-a463-3cb9ee55aa93}</Project>
+      <Name>ExampleGallery.Direct3DInterop.uap</Name>
+    </ProjectReference>
     <ProjectReference Include="..\Effects\ExampleGallery.Effects.csproj">
       <Project>{2b157b97-cbf7-4014-8655-1456f2807f43}</Project>
       <Name>ExampleGallery.Effects</Name>
@@ -98,7 +103,7 @@
       <Project>{d77eb5be-c840-4ade-b4f6-1ba9512c4768}</Project>
       <Name>ExampleGallery.BackgroundTask.uap</Name>
     </ProjectReference>
-    <SDKReference Include="WindowsMobile, Version=10.0.10240.0">
+    <SDKReference Include="WindowsMobile, Version=10.0.14393.0">
       <Name>Windows Mobile Extensions for the UWP</Name>
     </SDKReference>
   </ItemGroup>
@@ -109,7 +114,23 @@
     <Compile Include="CameraEffectExample.xaml.cs">
       <DependentUpon>CameraEffectExample.xaml</DependentUpon>
     </Compile>
+    <Compile Include="GradientMeshExample.xaml.cs">
+      <DependentUpon>GradientMeshExample.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="InkExample.xaml.cs">
+      <DependentUpon>InkExample.xaml</DependentUpon>
+    </Compile>
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="SpriteBatchPerf.xaml.cs">
+      <DependentUpon>SpriteBatchPerf.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="SpriteSheets\SpriteSheet.cs" />
+    <Compile Include="SpriteSheets\SpriteSheets.xaml.cs">
+      <DependentUpon>SpriteSheets.xaml</DependentUpon>
+    </Compile>
+    <Compile Include="VirtualBitmapExample.xaml.cs">
+      <DependentUpon>VirtualBitmapExample.xaml</DependentUpon>
+    </Compile>
   </ItemGroup>
   <ItemGroup>
     <AppxManifest Include="ExampleGallery.uap.appxmanifest">
@@ -126,8 +147,20 @@
     <Content Include="Assets\Square71x71Logo.scale-100.png" />
     <Content Include="Assets\StoreLogo.scale-100.png" />
     <Content Include="Assets\WideLogo.scale-100.png" />
+    <Content Include="Assets\InkThumbnailStrokes.bin" />
+    <Content Include="SpriteSheets\ForestTiles.png" />
+    <Content Include="SpriteSheets\WizardIdleRight.png" />
+    <Content Include="SpriteSheets\WizardWalkRight.png" />
     <Content Include="Thumbnails\CameraEffectNarrow.png" />
     <Content Include="Thumbnails\CameraEffectWide.png" />
+    <Content Include="Thumbnails\GradientMeshNarrow.png" />
+    <Content Include="Thumbnails\GradientMeshWide.png" />
+    <Content Include="Thumbnails\InkNarrow.png" />
+    <Content Include="Thumbnails\InkWide.png" />
+    <Content Include="Thumbnails\SpriteBatchPerformanceNarrow.png" />
+    <Content Include="Thumbnails\SpriteBatchPerformanceWide.png" />
+    <Content Include="Thumbnails\SpriteSheetsNarrow.png" />
+    <Content Include="Thumbnails\SpriteSheetsWide.png" />
     <Content Include="Thumbnails\VideoEffectNarrow.png" />
     <Content Include="Thumbnails\VideoEffectWide.png" />
     <Content Include="$(AssetDir)Symbols.ttf">
@@ -136,6 +169,8 @@
     <Content Include="$(AssetDir)imageTiger.jpg">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <Content Include="Thumbnails\VirtualBitmapNarrow.png" />
+    <Content Include="Thumbnails\VirtualBitmapWide.png" />
   </ItemGroup>
   <ItemGroup>
     <Page Include="BasicVideoEffectExample.xaml">
@@ -146,7 +181,27 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
+    <Page Include="GradientMeshExample.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="InkExample.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
     <Page Include="PlatformResources.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Page Include="SpriteBatchPerf.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Page Include="SpriteSheets\SpriteSheets.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Page Include="VirtualBitmapExample.xaml">
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
     </Page>

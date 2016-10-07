@@ -35,8 +35,8 @@ namespace
         typedef ITypedEventHandler<IAnyControlInterface*, CanvasCreateResourcesEventArgs*> createResourcesEventHandler_t;        
     };
 
-    [uuid(8BEBD9A8-8512-4C76-8FB7-BDF923F8D4E1)]
-    struct IAnyControlInterface : public IInspectable
+    struct __declspec(uuid("8BEBD9A8-8512-4C76-8FB7-BDF923F8D4E1"))
+    IAnyControlInterface : public IInspectable
     {
         IFACEMETHOD(put_ClearColor)(Color) = 0;
         IFACEMETHOD(get_ClearColor)(Color*) = 0;
@@ -47,6 +47,14 @@ namespace
         IFACEMETHOD(get_ReadyToDraw)(boolean*) = 0;
         IFACEMETHOD(get_Size)(Size*) = 0;
         IFACEMETHOD(RemoveFromVisualTree)() = 0;
+        IFACEMETHOD(get_UseSharedDevice)(boolean*) = 0;
+        IFACEMETHOD(put_UseSharedDevice)(boolean) = 0;
+        IFACEMETHOD(get_ForceSoftwareRenderer)(boolean*) = 0;
+        IFACEMETHOD(put_ForceSoftwareRenderer)(boolean) = 0;
+        IFACEMETHOD(get_CustomDevice)(ICanvasDevice**) = 0;
+        IFACEMETHOD(put_CustomDevice)(ICanvasDevice*) = 0;
+        IFACEMETHOD(get_DpiScale)(float*) = 0;
+        IFACEMETHOD(put_DpiScale)(float) = 0;
     };
 
     class IAnyAdapter : public IBaseControlAdapter<AnyTraits>
@@ -60,9 +68,9 @@ namespace
     class AnyDerivedControl 
         : public RuntimeClass<
             RuntimeClassFlags<WinRtClassicComMix>, 
-            MixIn<AnyDerivedControl, BaseControl<AnyTraits>>,
+            MixIn<AnyDerivedControl, BaseControlWithDrawHandler<AnyTraits>>,
             ComposableBase<>>,
-          public BaseControl<AnyTraits>
+          public BaseControlWithDrawHandler<AnyTraits>
     {
         InspectableClass(L"AnyDerivedControl", BaseTrust);
 
@@ -70,7 +78,7 @@ namespace
         using BaseControl::RenderTarget;
 
         AnyDerivedControl(std::shared_ptr<IAnyAdapter> adapter)
-            : BaseControl(adapter, false)
+            : BaseControlWithDrawHandler(adapter, false)
         {
         }
 
@@ -99,7 +107,7 @@ namespace
             return CreateDrawEventArgsMethod.WasCalled(drawingSession, isRunningSlowly);
         }
 
-        virtual void Changed(Lock const&, ChangeReason) override final
+        virtual void Changed(ChangeReason) override final
         {
             return ChangedMethod.WasCalled();
         }
@@ -130,12 +138,12 @@ namespace
         }
 
         template<typename FN>
-        void CallRunWithRenderTarget(Size const& size, FN&& fn)
+        void CallRunWithRenderTarget(FN&& fn)
         {
             CallCounter<> expectCallback(L"RunWithRenderTarget callback");
             expectCallback.SetExpectedCalls(1);
 
-            RunWithRenderTarget(size, DeviceCreationOptions{},
+            RunWithRenderTarget(
                 [&] (AnyRenderTarget* target, ICanvasDevice*, Color const& clearColor, bool callDrawHandlers)
                 {
                     expectCallback.WasCalled();
@@ -212,8 +220,8 @@ TEST_CLASS(BaseControl_Interaction_With_RecreatableDeviceManager)
 
     TEST_METHOD_EX(BaseControl_WhenDeviceIsNewlyCreated_ANewRenderTargetIsCreated)
     {
-        Size anySize{1,2};
-
+        Size anySize{ 1, 2 };
+        
         auto firstDevice = Make<StubCanvasDevice>();
         auto secondDevice = Make<StubCanvasDevice>();
 
@@ -235,7 +243,10 @@ TEST_CLASS(BaseControl_Interaction_With_RecreatableDeviceManager)
                 renderTarget->Target = firstRenderTarget;
             });
 
-        f.Control->CallRunWithRenderTarget(anySize,
+        f.Control->ChangedMethod.SetExpectedCalls(1);
+        f.UserControl->Resize(anySize);
+        
+        f.Control->CallRunWithRenderTarget(
             [&] (AnyRenderTarget* target, Color const&, bool)
             {
                 Assert::IsTrue(IsSameInstance(firstRenderTarget.Get(), target));
@@ -254,7 +265,7 @@ TEST_CLASS(BaseControl_Interaction_With_RecreatableDeviceManager)
                 renderTarget->Target = secondRenderTarget;
             });
 
-        f.Control->CallRunWithRenderTarget(anySize,
+        f.Control->CallRunWithRenderTarget(
             [&] (AnyRenderTarget* target, Color const&, bool)
             {
                 Assert::IsTrue(IsSameInstance(secondRenderTarget.Get(), target));
@@ -263,8 +274,6 @@ TEST_CLASS(BaseControl_Interaction_With_RecreatableDeviceManager)
 
     TEST_METHOD_EX(BaseControl_WhenDeviceIsNotNewlyCreated_RenderTargetIsPersisted)
     {
-        Size anySize{1,2};
-
         auto device = Make<StubCanvasDevice>();
 
         auto target = Make<AnyRenderTarget>();
@@ -282,7 +291,7 @@ TEST_CLASS(BaseControl_Interaction_With_RecreatableDeviceManager)
                 renderTarget->Target = target;
             });
 
-        f.Control->CallRunWithRenderTarget(anySize,
+        f.Control->CallRunWithRenderTarget(
             [&] (AnyRenderTarget* passedTarget, Color const&, bool)
             {
                 Assert::IsTrue(IsSameInstance(target.Get(), passedTarget));
@@ -297,10 +306,53 @@ TEST_CLASS(BaseControl_Interaction_With_RecreatableDeviceManager)
                 Assert::IsTrue(IsSameInstance(target.Get(), renderTarget->Target.Get()));
             });
 
-        f.Control->CallRunWithRenderTarget(anySize,
+        f.Control->CallRunWithRenderTarget(
             [&] (AnyRenderTarget* passedTarget, Color const&, bool)
             {
                 Assert::IsTrue(IsSameInstance(target.Get(), passedTarget));
             });
+    }
+};
+
+
+TEST_CLASS(BaseControl_LoadedAndUnloaded_OutOfOrder)
+{
+    struct Fixture : public BasicControlFixture<AnyTraits>
+    {
+        Fixture()
+        {
+            CreateAdapter();
+            CreateControl();
+
+            this->Control->ChangedMethod.AllowAnyCall();
+        }
+    };
+
+    TEST_METHOD_EX(BaseControl_WhenLoadedCalledTwice_SecondLoadIsIgnored)
+    {
+        Fixture f;
+
+        // First load event actually does our init work.
+        f.Control->LoadedMethod.SetExpectedCalls(1);
+        f.Load();
+        Expectations::Instance()->Validate();
+
+        // Second load event is ignored.
+        f.Load();
+
+        // First unload event is ignored.
+        f.RaiseUnloadedEvent();
+
+        // Second unload event actually does our cleanup work.
+        f.Control->UnloadedMethod.SetExpectedCalls(1);
+        f.RaiseUnloadedEvent();
+    }
+
+    TEST_METHOD_EX(BaseControl_WhenUnloadedBeforeLoaded_BothAreIgnored)
+    {
+        Fixture f;
+
+        f.RaiseUnloadedEvent();
+        f.Load();
     }
 };

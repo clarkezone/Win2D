@@ -18,6 +18,7 @@ using Windows.Foundation;
 using Windows.UI;
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
+using Microsoft.Graphics.Canvas.Brushes;
 
 #if WINDOWS_UWP
 using Windows.Graphics.Effects;
@@ -33,6 +34,7 @@ namespace ExampleGallery
             Blend,
             Border,
             Brightness,
+            ColorManagement,
             ColorMatrix,
             Composite,
             ConvolveMatrix,
@@ -50,20 +52,25 @@ namespace ExampleGallery
             Tile,
             Transform3D,
 #if WINDOWS_UWP
+            AlphaMask,
             ChromaKey,
             Contrast,
+            CrossFade,
             EdgeDetection,
             Emboss,
             Exposure,
             Grayscale,
             HighlightsAndShadows,
             Invert,
+            Opacity,
             Posterize,
             RgbToHue,
             Sepia,
             Sharpen,
             Straighten,
+            TableTransfer3D,
             TemperatureAndTint,
+            Tint,
             Vignette,
 #endif
         }
@@ -185,6 +192,10 @@ namespace ExampleGallery
                     effect = CreateBrightness();
                     break;
 
+                case EffectType.ColorManagement:
+                    effect = CreateColorManagement();
+                    break;
+
                 case EffectType.ColorMatrix:
                     effect = CreateColorMatrix();
                     break;
@@ -251,7 +262,11 @@ namespace ExampleGallery
 
 #if WINDOWS_UWP
                 // The following effects are new in the Universal Windows Platform.
-                // They are not supported on Windows 8.1 or Phone 8.1.";
+                // They are not supported on Windows 8.1 or Phone 8.1.
+
+                case EffectType.AlphaMask:
+                    effect = CreateAlphaMask();
+                    break;
 
                 case EffectType.ChromaKey:
                     effect = CreateChromaKey();
@@ -259,6 +274,10 @@ namespace ExampleGallery
 
                 case EffectType.Contrast:
                     effect = CreateContrast();
+                    break;
+
+                case EffectType.CrossFade:
+                    effect = CreateCrossFade();
                     break;
 
                 case EffectType.EdgeDetection:
@@ -285,6 +304,10 @@ namespace ExampleGallery
                     effect = CreateInvert();
                     break;
 
+                case EffectType.Opacity:
+                    effect = CreateOpacity();
+                    break;
+
                 case EffectType.Posterize:
                     effect = CreatePosterize();
                     break;
@@ -305,8 +328,16 @@ namespace ExampleGallery
                     effect = CreateStraighten();
                     break;
 
+                case EffectType.TableTransfer3D:
+                    effect = CreateTableTransfer3D();
+                    break;
+
                 case EffectType.TemperatureAndTint:
                     effect = CreateTemperatureAndTint();
+                    break;
+
+                case EffectType.Tint:
+                    effect = CreateTint();
                     break;
 
                 case EffectType.Vignette:
@@ -414,6 +445,44 @@ namespace ExampleGallery
             };
 
             return brightnessEffect;
+        }
+
+        private ICanvasImage CreateColorManagement()
+        {
+            var srgb = new ColorManagementProfile(CanvasColorSpace.Srgb);
+            var scrgb = new ColorManagementProfile(CanvasColorSpace.ScRgb);
+
+            var srgbToScRgb = new ColorManagementEffect
+            {
+                Source = bitmapTiger,
+                SourceColorProfile = srgb,
+                OutputColorProfile = scrgb,
+            };
+
+            var scRgbToSrgb = new ColorManagementEffect
+            {
+                Source = bitmapTiger,
+                SourceColorProfile = scrgb,
+                OutputColorProfile = srgb,
+            };
+
+            animationFunction = elapsedTime => { };
+
+            currentEffectSize = bitmapTiger.Size.ToVector2() * new Vector2(1, 2.1f);
+
+            return new CompositeEffect
+            {
+                Sources =
+                {
+                    AddTextOverlay(srgbToScRgb, 0, 0, "Srgb -> ScRgb"),
+
+                    new Transform2DEffect
+                    {
+                        Source = AddTextOverlay(scRgbToSrgb, 0, 0, "ScRgb -> Srgb"),
+                        TransformMatrix = Matrix3x2.CreateTranslation(bitmapTiger.Size.ToVector2() * new Vector2(0, 1.1f))
+                    }
+                }
+            };
         }
 
         private ICanvasImage CreateColorMatrix()
@@ -990,6 +1059,50 @@ namespace ExampleGallery
 #if WINDOWS_UWP
 
         const string requiresWin10 = "This effect is new in the\nUniversal Windows Platform.\nIt is not supported on \nWindows 8.1 or Phone 8.1.";
+        const string requiresWin10_14393 = "This effect is new in\nWindows 10 Anniversary Update.\nIt is not supported on\nolder versions of Windows.";
+
+        private ICanvasImage CreateAlphaMask()
+        {
+            if (!AlphaMaskEffect.IsSupported)
+            {
+                return CreateNotSupportedMessage(requiresWin10_14393);
+            }
+
+            textLabel = requiresWin10_14393;
+
+            // Draw an alpha gradient into a command list.
+            var alphaGradientBrush = new CanvasRadialGradientBrush(canvas, Colors.Black, Colors.Transparent)
+            {
+                Center = bitmapTiger.Size.ToVector2() / 2,
+
+                RadiusX = (float)bitmapTiger.Size.Width,
+                RadiusY = (float)bitmapTiger.Size.Height
+            };
+
+            var alphaMask = new CanvasCommandList(canvas);
+
+            using (var drawingSession = alphaMask.CreateDrawingSession())
+            {
+                drawingSession.FillRectangle(bitmapTiger.Bounds, alphaGradientBrush);
+            }
+
+            // Apply the alpha mask to the tiger bitmap.
+            var alphaMaskEffect = new AlphaMaskEffect
+            {
+                Source = bitmapTiger,
+                AlphaMask = alphaMask
+            };
+
+            // Composite the alpha masked image on top of a background checker pattern.
+            var compositeEffect = new CompositeEffect
+            {
+                Sources = { CreateCheckeredBackground(), alphaMaskEffect }
+            };
+
+            animationFunction = elapsedTime => { };
+
+            return compositeEffect;
+        }
 
         private ICanvasImage CreateChromaKey()
         {
@@ -1003,39 +1116,9 @@ namespace ExampleGallery
             };
 
             // Composite the chromakeyed image on top of a background checker pattern.
-            Color[] twoByTwoChecker =
-            {
-                Colors.LightGray, Colors.DarkGray,
-                Colors.DarkGray,  Colors.LightGray,
-            };
-
             var compositeEffect = new CompositeEffect
             {
-                Sources =
-                {
-                    // Create the checkered background by scaling up a tiled 2x2 bitmap.
-                    new CropEffect
-                    {
-                        Source = new DpiCompensationEffect
-                        {
-                            Source = new ScaleEffect
-                            {
-                                Source = new BorderEffect
-                                {
-                                    Source = CanvasBitmap.CreateFromColors(canvas, twoByTwoChecker, 2, 2),
-                                    ExtendX = CanvasEdgeBehavior.Wrap,
-                                    ExtendY = CanvasEdgeBehavior.Wrap
-                                },
-                                Scale = new Vector2(8, 8),
-                                InterpolationMode = CanvasImageInterpolation.NearestNeighbor
-                            }
-                        },
-                        SourceRectangle = bitmapTiger.Bounds
-                    },
-
-                    // Composite the chromakey result on top of the background.
-                    chromaKeyEffect
-                }
+                Sources = { CreateCheckeredBackground(), chromaKeyEffect }
             };
 
             // Animation changes the chromakey matching tolerance.
@@ -1063,6 +1146,36 @@ namespace ExampleGallery
             };
 
             return contrastEffect;
+        }
+
+        private ICanvasImage CreateCrossFade()
+        {
+            if (!CrossFadeEffect.IsSupported)
+            {
+                return CreateNotSupportedMessage(requiresWin10_14393);
+            }
+
+            textLabel = requiresWin10_14393;
+
+            var upsideDownTiger = new Transform2DEffect
+            {
+                Source = bitmapTiger,
+                TransformMatrix = Matrix3x2.CreateScale(1, -1, bitmapTiger.Size.ToVector2() / 2)
+            };
+
+            var crossFadeEffect = new CrossFadeEffect
+            {
+                Source1 = bitmapTiger,
+                Source2 = upsideDownTiger
+            };
+
+            // Animation changes the crossfade amount.
+            animationFunction = elapsedTime =>
+            {
+                crossFadeEffect.CrossFade = 0.5f + (float)Math.Sin(elapsedTime * 2) / 2;
+            };
+
+            return crossFadeEffect;
         }
 
         private ICanvasImage CreateEdgeDetection()
@@ -1163,6 +1276,35 @@ namespace ExampleGallery
             {
                 Source = bitmapTiger
             };
+        }
+
+        private ICanvasImage CreateOpacity()
+        {
+            if (!OpacityEffect.IsSupported)
+            {
+                return CreateNotSupportedMessage(requiresWin10_14393);
+            }
+
+            textLabel = requiresWin10_14393;
+
+            var opacityEffect = new OpacityEffect
+            {
+                Source = bitmapTiger
+            };
+
+            // Composite the fading tiger on top of a background checker pattern.
+            var compositeEffect = new CompositeEffect
+            {
+                Sources = { CreateCheckeredBackground(), opacityEffect }
+            };
+
+            // Animation changes the opacity.
+            animationFunction = elapsedTime =>
+            {
+                opacityEffect.Opacity = 0.5f + (float)Math.Sin(elapsedTime * 2) / 2;
+            };
+
+            return compositeEffect;
         }
 
         private ICanvasImage CreatePosterize()
@@ -1283,6 +1425,66 @@ namespace ExampleGallery
             return straightenEffect;
         }
 
+        private ICanvasImage CreateTableTransfer3D()
+        {
+            textLabel = requiresWin10;
+
+            animationFunction = elapsedTime => { };
+
+            var transferTable = CreateTransferTableFromFunction(canvas, 16, 16, 16, DesaturateAllButTheReds);
+
+            return new TableTransfer3DEffect
+            {
+                Source = bitmapTiger,
+                Table = transferTable
+            };
+        }
+
+        // Color transfer function desaturates most colors, but increases the saturation of reddish input values.
+        private static Vector3 DesaturateAllButTheReds(Vector3 color)
+        {
+            float redness = color.X - (color.Y + color.Z) / 2;
+
+            float wantedSaturation = (float)Math.Max(0, Math.Pow(redness, 3) * 24);
+
+            Vector3 desaturatedColor = new Vector3(Vector3.Dot(color, Vector3.One) / 3);
+
+            return Vector3.Lerp(desaturatedColor, color, wantedSaturation);
+        }
+
+        // Helper creates an EffectTransferTable3D by evaluating the specified transfer function for every location within the table.
+        private static EffectTransferTable3D CreateTransferTableFromFunction(ICanvasResourceCreator resourceCreator, int sizeB, int sizeG, int sizeR, Func<Vector3, Vector3> transferFunction)
+        {
+            var tableColors = new List<Color>();
+
+            var maxExtents = new Vector3(sizeR, sizeG, sizeB) - Vector3.One;
+
+            for (int r = 0; r < sizeR; r++)
+            {
+                for (int g = 0; g < sizeG; g++)
+                {
+                    for (int b = 0; b < sizeB; b++)
+                    {
+                        Vector3 sourceColor = new Vector3(r, g, b) / maxExtents;
+
+                        Vector3 outputColor = transferFunction(sourceColor);
+
+                        tableColors.Add(ToColor(outputColor));
+                    }
+                }
+            }
+
+            return EffectTransferTable3D.CreateFromColors(resourceCreator, tableColors.ToArray(), sizeB, sizeG, sizeR);
+        }
+
+        // Converts an RGB color value from Vector3 to Windows.UI.Color format.
+        private static Color ToColor(Vector3 value)
+        {
+            var scaled = Vector3.Clamp(value, Vector3.Zero, Vector3.One) * 255;
+
+            return Color.FromArgb(255, (byte)scaled.X, (byte)scaled.Y, (byte)scaled.Z);
+        }
+
         private ICanvasImage CreateTemperatureAndTint()
         {
             textLabel = requiresWin10;
@@ -1300,6 +1502,33 @@ namespace ExampleGallery
             };
 
             return temperatureAndTintEffect;
+        }
+
+        private ICanvasImage CreateTint()
+        {
+            if (!TintEffect.IsSupported)
+            {
+                return CreateNotSupportedMessage(requiresWin10_14393);
+            }
+
+            textLabel = requiresWin10_14393;
+
+            var tintEffect = new TintEffect
+            {
+                Source = bitmapTiger
+            };
+
+            // Animation changes the tint color.
+            animationFunction = elapsedTime =>
+            {
+                var r = (byte)(128 + Math.Sin(elapsedTime * 3) * 127);
+                var g = (byte)(128 + Math.Sin(elapsedTime * 4) * 127);
+                var b = (byte)(128 + Math.Sin(elapsedTime * 5) * 127);
+
+                tintEffect.Color = Color.FromArgb(255, r, g, b);
+            };
+
+            return tintEffect;
         }
 
         private ICanvasImage CreateVignette()
@@ -1326,6 +1555,56 @@ namespace ExampleGallery
             return vignetteEffect;
         }
 
+        private ICanvasImage CreateCheckeredBackground()
+        {
+            // Create the checkered background by scaling up a tiled 2x2 bitmap.
+            Color[] twoByTwoChecker =
+            {
+                Colors.LightGray, Colors.DarkGray,
+                Colors.DarkGray,  Colors.LightGray,
+            };
+
+            return new CropEffect
+            {
+                Source = new DpiCompensationEffect
+                {
+                    Source = new ScaleEffect
+                    {
+                        Source = new BorderEffect
+                        {
+                            Source = CanvasBitmap.CreateFromColors(canvas, twoByTwoChecker, 2, 2),
+                            ExtendX = CanvasEdgeBehavior.Wrap,
+                            ExtendY = CanvasEdgeBehavior.Wrap
+                        },
+                        Scale = new Vector2(8, 8),
+                        InterpolationMode = CanvasImageInterpolation.NearestNeighbor
+                    }
+                },
+                SourceRectangle = bitmapTiger.Bounds
+            };
+        }
+
+        private ICanvasImage CreateNotSupportedMessage(string message)
+        {
+            var commandList = new CanvasCommandList(canvas);
+
+            var textFormat = new CanvasTextFormat
+            {
+                FontSize = 16,
+                HorizontalAlignment = CanvasHorizontalAlignment.Center,
+                VerticalAlignment = CanvasVerticalAlignment.Center
+            };
+
+            using (var ds = commandList.CreateDrawingSession())
+            {
+                ds.DrawText(message, bitmapTiger.Bounds, Colors.Red, textFormat);
+            }
+
+            animationFunction = elapsedTime => { };
+
+            return commandList;
+        }
+
 #endif  // WINDOWS_UWP
 
         private ICanvasImage AddSoftEdgedCrop(ICanvasImage effect)
@@ -1349,14 +1628,14 @@ namespace ExampleGallery
             };
         }
 
-        private ICanvasImage AddTextOverlay(ICanvasImage effect, float x, float y)
+        private ICanvasImage AddTextOverlay(ICanvasImage effect, float x, float y, string text = null)
         {
             var textOverlay = new CanvasRenderTarget(canvas, 200, 30);
 
             using (var ds = textOverlay.CreateDrawingSession())
             {
                 ds.Clear(Color.FromArgb(0, 0, 0, 0));
-                ds.DrawText(effect.GetType().Name.Replace("Effect", ""), 0, 0, Colors.White);
+                ds.DrawText(text ?? effect.GetType().Name.Replace("Effect", ""), 0, 0, Colors.White);
             }
 
             return new Transform2DEffect

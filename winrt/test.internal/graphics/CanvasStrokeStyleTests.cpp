@@ -162,6 +162,9 @@ public:
 
         Assert::AreEqual(CanvasDashStyle::Dot, dashStyle);
         Assert::AreEqual(D2D1_DASH_STYLE_DOT, testFactory->m_dashStyle);
+
+        // Passing null data pointer for a non-empty array is illegal.
+        Assert::AreEqual(E_INVALIDARG, canvasStrokeStyle->put_CustomDashStyle(1, nullptr));
     }
 
     class RealizationBehaviorVerifier
@@ -301,6 +304,9 @@ public:
             float customDashPattern[4] = { 1, 2, 3, 4 };
             Assert::AreEqual(RO_E_CLOSED, canvasStrokeStyle->put_CustomDashStyle(4, customDashPattern));
             Assert::AreEqual(RO_E_CLOSED, canvasStrokeStyle->put_TransformBehavior(CanvasStrokeTransformBehavior::Normal));
+
+            ComPtr<IUnknown> resource;
+            Assert::AreEqual(RO_E_CLOSED, canvasStrokeStyle->GetNativeResource(nullptr, 0, IID_PPV_ARGS(resource.ReleaseAndGetAddressOf())));
         }
     }
 

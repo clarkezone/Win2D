@@ -9,6 +9,7 @@ namespace canvas
     class MockD3D11Device : public RuntimeClass<
         RuntimeClassFlags<ClassicCom>,
         ID3D11Device, 
+        ID3D10Multithread,
         ChainInterfaces<IDXGIDevice3, IDXGIDevice2, IDXGIDevice1, IDXGIDevice> >
     {
     public:
@@ -17,6 +18,8 @@ namespace canvas
         MockD3D11Device()
         {
             GetDeviceRemovedReasonMethod.AllowAnyCall();
+
+            GetFeatureLevelMethod.AllowAnyCall([] { return D3D_FEATURE_LEVEL_9_1; });
         }
 
         HRESULT STDMETHODCALLTYPE CreateBuffer(
@@ -265,13 +268,7 @@ namespace canvas
             return E_NOTIMPL;
         }
 
-        HRESULT STDMETHODCALLTYPE CheckFeatureSupport(
-            D3D11_FEATURE Feature,
-            _Out_writes_bytes_(FeatureSupportDataSize)  void *pFeatureSupportData,
-            UINT FeatureSupportDataSize)
-        {
-            return E_NOTIMPL;
-        }
+        MOCK_METHOD3(CheckFeatureSupport, HRESULT(D3D11_FEATURE, void *, UINT));
 
         HRESULT STDMETHODCALLTYPE GetPrivateData(
             _In_  REFGUID guid,
@@ -296,10 +293,7 @@ namespace canvas
             return E_NOTIMPL;
         }
 
-        D3D_FEATURE_LEVEL STDMETHODCALLTYPE GetFeatureLevel(void)
-        {
-            return static_cast<D3D_FEATURE_LEVEL>(-1);
-        }
+        MOCK_METHOD0(GetFeatureLevel, D3D_FEATURE_LEVEL());
 
         UINT STDMETHODCALLTYPE GetCreationFlags(void)
         {
@@ -329,11 +323,7 @@ namespace canvas
 
         // Below are DXGI functions.
 
-        HRESULT STDMETHODCALLTYPE GetAdapter(
-            _Out_  IDXGIAdapter **pAdapter)
-        {
-            return E_NOTIMPL;
-        }
+        MOCK_METHOD1(GetAdapter, HRESULT(IDXGIAdapter**));
 
         HRESULT STDMETHODCALLTYPE CreateSurface(
             _In_  const DXGI_SURFACE_DESC *pDesc,
@@ -421,5 +411,10 @@ namespace canvas
         {
         }
 
+        // ID3D10Multithread
+        MOCK_METHOD0(Enter, void());
+        MOCK_METHOD0(Leave, void());
+        MOCK_METHOD1(SetMultithreadProtected, BOOL(BOOL));
+        MOCK_METHOD0(GetMultithreadProtected, BOOL());
     };
 }

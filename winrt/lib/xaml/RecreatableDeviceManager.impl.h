@@ -178,9 +178,9 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
 
                 runWithDeviceFunction(m_device.Get(), flags);
             }
-            catch (DeviceLostException const&)
+            catch (DeviceLostException const& e)
             {
-                HandleDeviceLostException();
+                HandleDeviceLostException(e.GetHr());
             }
         }
 
@@ -218,6 +218,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
 
             if (!m_currentOperationIsPending && m_changedCallback)
             {
+                lock.unlock();
                 m_changedCallback(ChangeReason::Other);
             }
         }
@@ -241,9 +242,9 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
                 {
                     ThrowIfFailed(value->Invoke(sender, eventArgs.Get()));
                 }
-                catch (DeviceLostException const&)
+                catch (DeviceLostException const& e)
                 {
-                    HandleDeviceLostException();
+                    HandleDeviceLostException(e.GetHr());
                 }
             }
 
@@ -318,9 +319,9 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
                 {
                     ProcessCurrentOperationResult();
                 }
-                catch (DeviceLostException const&)
+                catch (DeviceLostException const& e)
                 {
-                    HandleDeviceLostException();
+                    HandleDeviceLostException(e.GetHr());
 
                     // If it was just the committed device that was lost,
                     // m_device might still be valid, but if it isn't we can't
@@ -387,7 +388,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             {
                 auto deviceStatics = As<ICanvasDeviceStatics>(m_canvasDeviceFactory);
 
-                ThrowIfFailed(deviceStatics->GetSharedDevice(deviceCreationOptions.ForceSoftwareRenderer, &device));
+                ThrowIfFailed(deviceStatics->GetSharedDeviceWithForceSoftwareRenderer(deviceCreationOptions.ForceSoftwareRenderer, &device));
             }
             else
             {
@@ -401,14 +402,10 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             return device;
         }
 
-        void HandleDeviceLostException()
+        void HandleDeviceLostException(HRESULT hr)
         {
             // This function must be called from inside a catch block.
             assert(std::current_exception());
-
-            // No m_device means that this exception has already been handled.
-            if (!m_device)
-                return;
 
             if (m_committedDevice)
             {
@@ -422,6 +419,21 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
                     throw;
                 }
             }
+
+            //
+            // When the exception we're handling was thrown, we also called RoOriginateError.
+            //
+            // We need to clear this.  
+            //
+            // Otherwise, if any other errors occur that don't call RoOriginateError, 
+            // this stored error state will override any subsequent errors, resulting
+            // in confusing UnhandledException reporting.
+            //
+            RoTransformError(hr, S_OK, nullptr);
+
+            // No m_device means that this exception has already been handled.
+            if (!m_device)
+                return;
 
             // At this point, the committed device is definitely lost
             assert(!m_committedDevice || m_committedDevice->IsUnusable());
@@ -507,12 +519,10 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
 
         void TrackAsyncAction(IAsyncAction* action)
         {
-            using ::Microsoft::WRL::Wrappers::HStringReference;
-
             std::unique_lock<std::recursive_mutex> lock(m_currentOperationMutex);
 
             if (m_currentOperation)
-                ThrowHR(E_FAIL, HStringReference(Strings::MultipleAsyncCreateResourcesNotSupported).Get());
+                ThrowHR(E_FAIL, Strings::MultipleAsyncCreateResourcesNotSupported);
 
             auto onCompleted = Callback<IAsyncActionCompletedHandler>(this, &RecreatableDeviceManager::OnAsynchronousCreateResourcesCompleted);
             CheckMakeResult(onCompleted);

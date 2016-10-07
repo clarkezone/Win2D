@@ -53,6 +53,30 @@ static ComPtr<IAsyncAction> StartThread(ComPtr<IWorkItemHandler>&& handler)
 }
 
 //
+// As per https://msdn.microsoft.com/en-us/library/xcb2z8hs.aspx
+//
+static void SetThreadName(LPCSTR szThreadName)
+{
+    #pragma pack(push, 8)
+    struct THREADNAME_INFO
+    {
+        DWORD dwType;
+        LPCSTR szName;
+        DWORD dwThreadID;
+        DWORD dwFlags;
+    };
+    #pragma pack(pop)
+
+    THREADNAME_INFO info{ 0x1000, szThreadName, 0xFFFFFFFF, 0 };
+
+    __try
+    {
+        RaiseException(0x406D1388, 0, sizeof(info) / sizeof(ULONG_PTR), reinterpret_cast<ULONG_PTR*>(&info));
+    }
+    __except(EXCEPTION_CONTINUE_EXECUTION) { }
+}
+
+//
 // The implementation of IGameLoopThread.
 //
 class GameLoopThread : public IGameLoopThread
@@ -141,7 +165,16 @@ public:
         if (m_startDispatcher)
         {
             ComPtr<IAsyncAction> action;
-            ThrowIfFailed(m_dispatcher->RunAsync(CoreDispatcherPriority_Low, handler, &action));
+            HRESULT hr = m_dispatcher->RunAsync(CoreDispatcherPriority_Low, handler, &action);
+
+            // Work around MSFT:8381339. CoreDispatcher.RunAsync can fail with E_INVALIDARG
+            // when an internal counter wraps. We can recover from this by a simple retry.
+            if (hr == E_INVALIDARG)
+            {
+                hr = m_dispatcher->RunAsync(CoreDispatcherPriority_Low, handler, &action);
+            }
+
+            ThrowIfFailed(hr);
             return action;
         }
         else
@@ -177,6 +210,8 @@ private:
 
     void ThreadMain(ComPtr<ISwapChainPanel> swapChainPanel)
     {
+        SetThreadName(Strings::GameLoopThreadName);
+
         auto lock = GetLock();
 
         m_dispatcher = CreateCoreDispatcher(swapChainPanel.Get());

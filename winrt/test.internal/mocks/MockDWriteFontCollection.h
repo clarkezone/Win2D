@@ -7,22 +7,26 @@
 namespace canvas
 {
     class MockDWriteFontCollection : public RuntimeClass<
-        RuntimeClassFlags<ClassicCom>,
+        RuntimeClassFlags<ClassicCom>,        
+#if WINVER > _WIN32_WINNT_WINBLUE
+        ChainInterfaces<IDWriteFontCollection1, IDWriteFontCollection>>
+#else
         IDWriteFontCollection>
+#endif
     {
     public: 
-        CALL_COUNTER_WITH_MOCK(GetFontFamilyCountMethod, UINT32());
-        CALL_COUNTER_WITH_MOCK(GetFontFamilyMethod, HRESULT(UINT32, IDWriteFontFamily**));
-        CALL_COUNTER_WITH_MOCK(FindFamilyNameMethod, HRESULT(WCHAR const*, UINT32*, BOOL*));
+        CALL_COUNTER_WITH_MOCK(GetFontFamilyCountMethod, uint32_t());
+        CALL_COUNTER_WITH_MOCK(GetFontFamilyMethod, HRESULT(uint32_t, IDWriteFontFamily**));
+        CALL_COUNTER_WITH_MOCK(FindFamilyNameMethod, HRESULT(WCHAR const*, uint32_t*, BOOL*));
         CALL_COUNTER_WITH_MOCK(GetFontFromFontFaceMethod, HRESULT(IDWriteFontFace*, IDWriteFont**));
 
-        IFACEMETHODIMP_(UINT32) GetFontFamilyCount() override
+        IFACEMETHODIMP_(uint32_t) GetFontFamilyCount() override
         {
             return GetFontFamilyCountMethod.WasCalled();
         }
 
         IFACEMETHODIMP GetFontFamily(
-            UINT32 index,
+            uint32_t index,
             IDWriteFontFamily** fontFamily) override
         {
             return GetFontFamilyMethod.WasCalled(index, fontFamily);
@@ -30,7 +34,7 @@ namespace canvas
 
         IFACEMETHODIMP FindFamilyName(
             WCHAR const* familyName,
-            UINT32* index,
+            uint32_t* index,
             BOOL* exists) override
         {
             return FindFamilyNameMethod.WasCalled(familyName, index, exists);
@@ -42,5 +46,15 @@ namespace canvas
         {
             return GetFontFromFontFaceMethod.WasCalled(fontFace, font);
         }
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+        MOCK_METHOD1(GetFontSet, HRESULT(IDWriteFontSet**));
+
+        IFACEMETHODIMP GetFontFamily(uint32_t, IDWriteFontFamily1**) override
+        {
+            Assert::Fail(L"Unexpected call to GetFontSet");
+            return E_NOTIMPL;
+        }
+#endif
     };
 }

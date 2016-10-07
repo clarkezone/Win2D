@@ -17,8 +17,7 @@ using namespace ::Microsoft::WRL::Wrappers;
 // CanvasAnimatedControlAdapter
 //
 
-class CanvasAnimatedControlAdapter : public BaseControlAdapter<CanvasAnimatedControlTraits>,
-    public std::enable_shared_from_this<CanvasAnimatedControlAdapter>
+class CanvasAnimatedControlAdapter : public BaseControlAdapter<CanvasAnimatedControlTraits>
 {
     ComPtr<ICanvasSwapChainFactory> m_canvasSwapChainFactory;
     std::shared_ptr<CanvasSwapChainPanelAdapter> m_canvasSwapChainPanelAdapter;
@@ -73,6 +72,30 @@ public:
             &swapChain));
 
         return static_cast<CanvasSwapChain*>(swapChain.Get());
+    }
+
+    virtual ComPtr<IShape> CreateDesignModeShape() override
+    {
+        ComPtr<IActivationFactory> rectangleFactory;
+
+        ThrowIfFailed(GetActivationFactory(
+            HStringReference(RuntimeClass_Windows_UI_Xaml_Shapes_Rectangle).Get(),
+            &rectangleFactory));
+        
+        ComPtr<IInspectable> rectangleInspectable;
+        ThrowIfFailed(rectangleFactory->ActivateInstance(&rectangleInspectable));
+
+        ComPtr<IActivationFactory> brushFactory;
+        ThrowIfFailed(GetActivationFactory(
+            HStringReference(RuntimeClass_Windows_UI_Xaml_Media_SolidColorBrush).Get(),
+            &brushFactory));
+
+        ComPtr<IInspectable> brushInspectable;
+        ThrowIfFailed(brushFactory->ActivateInstance(&brushInspectable));
+
+        ThrowIfFailed(As<IShape>(rectangleInspectable)->put_Fill(As<IBrush>(brushInspectable).Get()));
+
+        return As<IShape>(rectangleInspectable);
     }
 
     virtual std::unique_ptr<CanvasGameLoop> CreateAndStartGameLoop(CanvasAnimatedControl* control, ISwapChainPanel* swapChainPanel) override

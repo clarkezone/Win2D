@@ -4,6 +4,7 @@
 
 #include "pch.h"
 #include <lib/geometry/CanvasPathBuilder.h>
+#include <lib/text/CanvasFontFace.h>
 #include "mocks/MockD2DRectangleGeometry.h"
 #include "mocks/MockD2DEllipseGeometry.h"
 #include "mocks/MockD2DRoundedRectangleGeometry.h"
@@ -11,7 +12,16 @@
 #include "mocks/MockD2DGeometrySink.h"
 #include "mocks/MockD2DTransformedGeometry.h"
 #include "mocks/MockD2DGeometryGroup.h"
+#include "mocks/MockDWriteFont.h"
 #include "stubs/StubGeometrySink.h"
+#include "stubs/StubCanvasTextLayoutAdapter.h"
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+#include "Mocks/MockD2DInk.h"
+#include "Mocks/MockD2DInkStyle.h"
+#include "mocks/MockDWriteFontFaceReference.h"
+#include "Stubs/StubInkAdapter.h"
+#endif
 
 static const D2D1_MATRIX_3X2_F sc_someD2DTransform = { 1, 2, 3, 4, 5, 6 };
 static const D2D1_MATRIX_3X2_F sc_identityD2DTransform = { 1, 0, 0, 1, 0, 0 };
@@ -21,6 +31,17 @@ static const D2D1_TRIANGLE sc_triangle1 = { { 1, 2 }, { 3, 4 }, { 5, 6 } };
 static const D2D1_TRIANGLE sc_triangle2 = { { 7, 8 }, { 9, 10 }, { 11, 12 } };
 static const D2D1_TRIANGLE sc_triangle3 = { { 13, 14 }, { 15, 16 }, { 17, 18 } };
 
+#if WINVER > _WIN32_WINNT_WINBLUE
+typedef MockDWriteFontFaceReference MockDWriteFontFaceContainer;
+#else
+typedef MockDWriteFont MockDWriteFontFaceContainer;
+#endif
+
+ComPtr<CanvasFontFace> CreateSimpleFontFace()
+{
+    auto resource = Make<MockDWriteFontFaceContainer>();
+    return Make<CanvasFontFace>(resource.Get());
+}
 
 TEST_CLASS(CanvasGeometryTests)
 {
@@ -29,11 +50,9 @@ public:
     struct Fixture
     {
         ComPtr<StubCanvasDevice> Device;
-        std::shared_ptr<CanvasGeometryManager> Manager;
 
         Fixture()
             : Device(Make<StubCanvasDevice>())
-            , Manager(std::make_shared<CanvasGeometryManager>())
         {
             Device->CreateRectangleGeometryMethod.AllowAnyCall(
                 [](D2D1_RECT_F const&)
@@ -48,7 +67,7 @@ public:
     {
         Fixture f;
 
-        auto canvasGeometry = f.Manager->Create(f.Device.Get(), Rect{});
+        auto canvasGeometry = CanvasGeometry::CreateNew(f.Device.Get(), Rect{});
 
         ASSERT_IMPLEMENTS_INTERFACE(canvasGeometry, ICanvasGeometry);
         ASSERT_IMPLEMENTS_INTERFACE(canvasGeometry, ABI::Windows::Foundation::IClosable);
@@ -69,7 +88,7 @@ public:
                 return Make<MockD2DRectangleGeometry>();
             });
 
-        f.Manager->Create(f.Device.Get(), expectedRect);
+        CanvasGeometry::CreateNew(f.Device.Get(), expectedRect);
     }
 
     TEST_METHOD_EX(CanvasGeometry_CreatedWithCorrectD2DEllipseResource)
@@ -85,7 +104,7 @@ public:
                 return Make<MockD2DEllipseGeometry>();
             });
             
-        f.Manager->Create(f.Device.Get(), Vector2{ testEllipse.point.x, testEllipse.point.y }, testEllipse.radiusX, testEllipse.radiusY);
+        CanvasGeometry::CreateNew(f.Device.Get(), Vector2{ testEllipse.point.x, testEllipse.point.y }, testEllipse.radiusX, testEllipse.radiusY);
     }
 
     TEST_METHOD_EX(CanvasGeometry_CreatedWithCorrectD2DRoundedRectangleResource)
@@ -105,7 +124,7 @@ public:
                 return Make<MockD2DRoundedRectangleGeometry>();
             });
 
-        f.Manager->Create(f.Device.Get(), expectedRect, expectedRadiusX, expectedRadiusY);
+        CanvasGeometry::CreateNew(f.Device.Get(), expectedRect, expectedRadiusX, expectedRadiusY);
     }
 
     class CreatePolygonFixture : public Fixture
@@ -117,7 +136,7 @@ public:
             : currentVertex(0)
         {
             Device->CreatePathGeometryMethod.SetExpectedCalls(1,
-                [=]()
+                [=]
                 {
                     auto pathGeometry = Make<MockD2DPathGeometry>();
 
@@ -170,7 +189,7 @@ public:
 
         CreatePolygonFixture f(3, testVertices);
 
-        f.Manager->Create(f.Device.Get(), 3, testVertices);
+        CanvasGeometry::CreateNew(f.Device.Get(), 3, testVertices);
     }
 
     TEST_METHOD_EX(CanvasGeometry_CreatePolygon_OneVertex)
@@ -179,21 +198,21 @@ public:
 
         CreatePolygonFixture f(1, &testVertex);
 
-        f.Manager->Create(f.Device.Get(), 1, &testVertex);
+        CanvasGeometry::CreateNew(f.Device.Get(), 1, &testVertex);
     }
 
     TEST_METHOD_EX(CanvasGeometry_CreatePolygon_ZeroVertices)
     {
         CreatePolygonFixture f(0, nullptr);
 
-        f.Manager->Create(f.Device.Get(), 0, nullptr);
+        CanvasGeometry::CreateNew(f.Device.Get(), 0, nullptr);
     }
 
     TEST_METHOD_EX(CanvasGeometry_CreatePolygon_NullVertexArray)
     {
         Fixture f;
 
-        ExpectHResultException(E_INVALIDARG, [&]{ f.Manager->Create(f.Device.Get(), 1, nullptr); });
+        ExpectHResultException(E_INVALIDARG, [&]{ CanvasGeometry::CreateNew(f.Device.Get(), 1, nullptr); });
     }
 
     class GeometryGroupFixture : public Fixture
@@ -214,7 +233,7 @@ public:
             {
                 Resource r;
                 r.D2DGeometry = Make<MockD2DRectangleGeometry>();
-                r.CanvasGeometry = Manager->GetOrCreate(Device.Get(), r.D2DGeometry.Get());
+                r.CanvasGeometry = Make<CanvasGeometry>(Device.Get(), r.D2DGeometry.Get());
                 m_resources.push_back(r);
 
                 m_rawCanvasData.push_back(r.CanvasGeometry.Get());
@@ -263,7 +282,7 @@ public:
                     return Make<MockD2DGeometryGroup>();
                 });
 
-            f.Manager->Create(f.Device.Get(), geometryCount, f.GetGeometries(), CanvasFilledRegionDetermination::Winding);
+            CanvasGeometry::CreateNew(f.Device.Get(), geometryCount, f.GetGeometries(), CanvasFilledRegionDetermination::Winding);
         }
     }
 
@@ -281,7 +300,7 @@ public:
                 return Make<MockD2DGeometryGroup>();
             });
 
-        auto geometryGroup = f.Manager->Create(f.Device.Get(), 0, nullptr, CanvasFilledRegionDetermination::Winding);
+        auto geometryGroup = CanvasGeometry::CreateNew(f.Device.Get(), 0, nullptr, CanvasFilledRegionDetermination::Winding);
         Assert::IsNotNull(geometryGroup.Get());
     }
 
@@ -289,7 +308,7 @@ public:
     {
         Fixture f;
 
-        ExpectHResultException(E_INVALIDARG, [&]{ f.Manager->Create(f.Device.Get(), 1, nullptr, CanvasFilledRegionDetermination::Winding); });
+        ExpectHResultException(E_INVALIDARG, [&]{ CanvasGeometry::CreateNew(f.Device.Get(), 1, nullptr, CanvasFilledRegionDetermination::Winding); });
     }
 
     TEST_METHOD_EX(CanvasGeometry_ZeroSizedGeometryGroup_NonNullInputArray)
@@ -297,7 +316,7 @@ public:
         Fixture f;
 
         auto d2dGeometry = Make<MockD2DRectangleGeometry>();
-        ComPtr<ICanvasGeometry> canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), d2dGeometry.Get());
+        ComPtr<ICanvasGeometry> canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), d2dGeometry.Get());
 
         f.Device->CreateGeometryGroupMethod.SetExpectedCalls(1,
             [&f](D2D1_FILL_MODE fillMode, ID2D1Geometry** geometries, uint32_t geometryCount)
@@ -309,7 +328,7 @@ public:
                 return Make<MockD2DGeometryGroup>();
             });
 
-        auto geometryGroup = f.Manager->Create(f.Device.Get(), 0, canvasGeometry.GetAddressOf(), CanvasFilledRegionDetermination::Winding);
+        auto geometryGroup = CanvasGeometry::CreateNew(f.Device.Get(), 0, canvasGeometry.GetAddressOf(), CanvasFilledRegionDetermination::Winding);
         Assert::IsNotNull(geometryGroup.Get());
     }
 
@@ -319,7 +338,7 @@ public:
 
         f.DeleteResourceAtIndex(2);
 
-        ExpectHResultException(E_INVALIDARG, [&]{ f.Manager->Create(f.Device.Get(), 3, f.GetGeometries(), CanvasFilledRegionDetermination::Winding); });
+        ExpectHResultException(E_INVALIDARG, [&]{ CanvasGeometry::CreateNew(f.Device.Get(), 3, f.GetGeometries(), CanvasFilledRegionDetermination::Winding); });
     }
 
     class GeometryOperationsFixture_DoesNotOutputToTempPathBuilder : public Fixture
@@ -341,9 +360,9 @@ public:
             , StrokeStyle(Make<CanvasStrokeStyle>())
             , m_factory(Make<StubD2DFactoryWithCreateStrokeStyle>())
         {
-            RectangleGeometry = Manager->GetOrCreate(Device.Get(), D2DRectangleGeometry.Get());
+            RectangleGeometry = Make<CanvasGeometry>(Device.Get(), D2DRectangleGeometry.Get());
 
-            EllipseGeometry = Manager->GetOrCreate(Device.Get(), D2DEllipseGeometry.Get());
+            EllipseGeometry = Make<CanvasGeometry>(Device.Get(), D2DEllipseGeometry.Get());
 
             StrokeStyle->put_LineJoin(CanvasLineJoin::MiterOrBevel);            
 
@@ -354,7 +373,7 @@ public:
                 });
             
             Device->CreatePathGeometryMethod.AllowAnyCall(
-                []()
+                []
                 {
                     auto pathGeometry = Make<MockD2DPathGeometry>();
 
@@ -388,7 +407,7 @@ public:
             SinkForTemporaryPath->CloseMethod.AllowAnyCall();
 
             Device->CreatePathGeometryMethod.SetExpectedCalls(1,
-                [this]()
+                [this]
                 {
                     TemporaryPathGeometry->OpenMethod.SetExpectedCalls(1,
                         [this](ID2D1GeometrySink** out)
@@ -438,14 +457,14 @@ public:
 
         f.D2DRectangleGeometry->CombineWithGeometryMethod.SetExpectedCalls(1,
             [&](ID2D1Geometry* geometry, D2D1_COMBINE_MODE combineMode, CONST D2D1_MATRIX_3X2_F* transform, FLOAT tol, ID2D1SimplifiedGeometrySink* sink)
-        {
-            Assert::AreEqual(static_cast<ID2D1Geometry*>(f.D2DEllipseGeometry.Get()), geometry);
-            Assert::AreEqual(D2D1_COMBINE_MODE_INTERSECT, combineMode);
-            Assert::AreEqual(sc_someD2DTransform, *transform);
-            Assert::AreEqual(2.0f, tol);
-            Assert::AreEqual<ID2D1SimplifiedGeometrySink*>(f.SinkForTemporaryPath.Get(), sink);
-            return S_OK;
-        });
+            {
+                Assert::AreEqual(static_cast<ID2D1Geometry*>(f.D2DEllipseGeometry.Get()), geometry);
+                Assert::AreEqual(D2D1_COMBINE_MODE_INTERSECT, combineMode);
+                Assert::AreEqual(sc_someD2DTransform, *transform);
+                Assert::AreEqual(2.0f, tol);
+                Assert::AreEqual<ID2D1SimplifiedGeometrySink*>(f.SinkForTemporaryPath.Get(), sink);
+                return S_OK;
+            });
 
         ComPtr<ICanvasGeometry> g;
         Assert::AreEqual(S_OK, f.RectangleGeometry->CombineWithUsingFlatteningTolerance(f.EllipseGeometry.Get(), sc_someTransform, CanvasGeometryCombine::Intersect, 2.0f, &g));
@@ -1208,8 +1227,8 @@ public:
     {
         GeometryOperationsFixture_DoesNotOutputToTempPathBuilder f;
 
-        auto canvasGeometry = f.Manager->Create(f.Device.Get(), Rect{});
-        auto otherCanvasGeometry = f.Manager->Create(f.Device.Get(), Rect{});
+        auto canvasGeometry = CanvasGeometry::CreateNew(f.Device.Get(), Rect{});
+        auto otherCanvasGeometry = CanvasGeometry::CreateNew(f.Device.Get(), Rect{});
         auto pb = Make<CanvasPathBuilder>(f.Device.Get());
 
         auto strokeStyle = Make<CanvasStrokeStyle>();
@@ -1296,7 +1315,7 @@ public:
     {
         Fixture f;
 
-        auto canvasGeometry = f.Manager->Create(f.Device.Get(), Rect{});
+        auto canvasGeometry = CanvasGeometry::CreateNew(f.Device.Get(), Rect{});
 
         ComPtr<ICanvasDevice> device;
         Assert::AreEqual(S_OK, canvasGeometry->get_Device(&device));
@@ -1308,7 +1327,7 @@ public:
     {
         Fixture f;
 
-        auto canvasGeometry = f.Manager->Create(f.Device.Get(), Rect{});
+        auto canvasGeometry = CanvasGeometry::CreateNew(f.Device.Get(), Rect{});
 
         Assert::AreEqual(E_INVALIDARG, canvasGeometry->get_Device(nullptr));
     }
@@ -1317,7 +1336,7 @@ public:
     {
         Fixture f;
 
-        auto canvasGeometry = f.Manager->Create(f.Device.Get(), Rect{});
+        auto canvasGeometry = CanvasGeometry::CreateNew(f.Device.Get(), Rect{});
 
         Assert::AreEqual(E_INVALIDARG, canvasGeometry->SendPathTo(nullptr));
 
@@ -1328,7 +1347,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -1354,7 +1373,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -1378,7 +1397,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -1414,7 +1433,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -1444,7 +1463,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -1479,7 +1498,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -1507,7 +1526,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -1550,7 +1569,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -1580,7 +1599,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -1606,7 +1625,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -1631,7 +1650,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -1665,7 +1684,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -1693,7 +1712,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -1725,7 +1744,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -1752,7 +1771,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -1792,7 +1811,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -1821,7 +1840,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -1846,7 +1865,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -1870,7 +1889,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -1895,7 +1914,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -1919,7 +1938,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -1944,7 +1963,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -1968,7 +1987,7 @@ public:
         Fixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto canvasGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto canvasGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [&](ID2D1GeometrySink* internalSink)
@@ -2010,4 +2029,201 @@ public:
 
         Assert::AreEqual(S_OK, canvasGeometry->SendPathTo(geometrySink.Get()));
     }
+
+    TEST_METHOD_EX(CanvasGeometry_CreateText_NullArg)
+    {
+        Fixture f;
+
+        auto canvasGeometryFactory = Make<CanvasGeometryFactory>();
+        auto textlayoutAdapter = std::make_shared<StubCanvasTextLayoutAdapter>();
+        auto textFormat = Make<CanvasTextFormat>();
+        auto stubTextLayout = CanvasTextLayout::CreateNew(f.Device.Get(), WinString(L"A string"), textFormat.Get(), 0.0f, 0.0f);
+
+        Assert::AreEqual(E_INVALIDARG, canvasGeometryFactory->CreateText(stubTextLayout.Get(), nullptr));
+    }
+
+    TEST_METHOD_EX(CanvasGeometry_CreateGlyphRun_NullArg)
+    {
+        Fixture f;
+        auto fontFace = CreateSimpleFontFace();
+        ComPtr<ICanvasGeometry> geometry;
+        CanvasGlyph glyph{};
+
+        auto canvasGeometryFactory = Make<CanvasGeometryFactory>();
+
+        Assert::AreEqual(E_INVALIDARG, canvasGeometryFactory->CreateGlyphRun(
+            nullptr,
+            Vector2{},
+            fontFace.Get(),
+            0.0f,
+            1,
+            &glyph,
+            false,
+            0,
+            CanvasTextMeasuringMode::Natural,
+            CanvasGlyphOrientation::Upright,
+            &geometry));
+
+        Assert::AreEqual(E_INVALIDARG, canvasGeometryFactory->CreateGlyphRun(
+            f.Device.Get(),
+            Vector2{},
+            nullptr,
+            0.0f,
+            1,
+            &glyph,
+            false,
+            0,
+            CanvasTextMeasuringMode::Natural,
+            CanvasGlyphOrientation::Upright,
+            &geometry));
+
+        Assert::AreEqual(E_INVALIDARG, canvasGeometryFactory->CreateGlyphRun(
+            f.Device.Get(),
+            Vector2{},
+            fontFace.Get(),
+            0.0f,
+            1,
+            nullptr,
+            false,
+            0,
+            CanvasTextMeasuringMode::Natural,
+            CanvasGlyphOrientation::Upright,
+            &geometry));
+
+        Assert::AreEqual(E_INVALIDARG, canvasGeometryFactory->CreateGlyphRun(
+            f.Device.Get(),
+            Vector2{},
+            fontFace.Get(),
+            0.0f,
+            1,
+            &glyph,
+            false,
+            0,
+            CanvasTextMeasuringMode::Natural,
+            CanvasGlyphOrientation::Upright,
+            nullptr));
+    }
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+
+    static void TestCreateInk(
+        D2D1_MATRIX_3X2_F const& expectedTransform,
+        float expectedFlatteningTolerance,
+        std::function<HRESULT(CanvasGeometryFactory*, ICanvasResourceCreator*, MockStrokeCollection*, ICanvasGeometry**)> createFunction)
+    {
+        GeometryOperationsFixture_OutputsToTempPathBuilder f;
+
+        ComPtr<ICanvasGeometry> canvasGeometry;
+        auto canvasGeometryFactory = Make<CanvasGeometryFactory>();
+
+        auto d2dInk = Make<MockD2DInk>();
+        auto d2dInkStyle = Make<MockD2DInkStyle>();
+        auto inkStrokes = Make<MockStrokeCollection>();
+
+        auto inkAdapter = std::make_shared<StubInkAdapter>();
+        InkAdapter::SetInstance(inkAdapter);
+
+        // CreateInk should create a temporary command list.
+        auto d2dCommandList = Make<MockD2DCommandList>();
+
+        f.Device->CreateCommandListMethod.SetExpectedCalls(1, [&] { return d2dCommandList; });
+
+        // The ink should be drawn into the command list.
+        auto d2dDeviceContext = Make<StubD2DDeviceContextWithGetFactory>();
+
+        f.Device->CreateDeviceContextForDrawingSessionMethod.SetExpectedCalls(1, [&] { return d2dDeviceContext; });
+
+        d2dDeviceContext->BeginDrawMethod.SetExpectedCalls(1);
+        d2dDeviceContext->EndDrawMethod.SetExpectedCalls(1);
+        d2dDeviceContext->SetTextAntialiasModeMethod.SetExpectedCalls(1);
+
+        d2dDeviceContext->SetTargetMethod.SetExpectedCalls(1, [&](ID2D1Image* target)
+        {
+            Assert::IsTrue(IsSameInstance(d2dCommandList.Get(), target));
+        });
+
+        d2dDeviceContext->m_factory->MockCreateDrawingStateBlock = [](auto, auto, ID2D1DrawingStateBlock1** result)
+        {
+            *result = nullptr;
+            return S_OK;
+        };
+
+        d2dDeviceContext->SaveDrawingStateMethod.SetExpectedCalls(1);
+        d2dDeviceContext->RestoreDrawingStateMethod.SetExpectedCalls(1);
+
+        inkAdapter->GetInkRenderer()->DrawMethod.SetExpectedCalls(1, [&](IUnknown* deviceContext, IUnknown* strokeCollection, BOOL highContrast)
+        {
+            Assert::IsTrue(IsSameInstance(d2dDeviceContext.Get(), deviceContext));
+            Assert::IsTrue(IsSameInstance(inkStrokes.Get(), strokeCollection));
+            Assert::IsFalse(!!highContrast);
+
+            return S_OK;
+        });
+
+        d2dCommandList->CloseMethod.SetExpectedCalls(1);
+
+        // The command list should be streamed into a geometry sink.
+        d2dCommandList->StreamMethod.SetExpectedCalls(1, [&](ID2D1CommandSink* sink)
+        {
+            ThrowIfFailed(As<ID2D1CommandSink2>(sink)->DrawInk(d2dInk.Get(), nullptr, d2dInkStyle.Get()));
+
+            return S_OK;
+        });
+
+        // When the command list streaming calls DrawInk, that should pass through to ID2D1Ink::StreamAsGeometry.
+        d2dInk->StreamAsGeometryMethod.SetExpectedCalls(1, [&](ID2D1InkStyle* inkStyle, D2D1_MATRIX_3X2_F const* worldTransform, FLOAT flatteningTolerance, ID2D1SimplifiedGeometrySink* geometrySink)
+        {
+            Assert::IsTrue(IsSameInstance(d2dInkStyle.Get(), inkStyle));
+            Assert::AreEqual(expectedTransform, *worldTransform);
+            Assert::AreEqual(expectedFlatteningTolerance, flatteningTolerance);
+            Assert::IsTrue(IsSameInstance(f.SinkForTemporaryPath.Get(), geometrySink));
+
+            return S_OK;
+        });
+
+        ThrowIfFailed(createFunction(canvasGeometryFactory.Get(), f.Device.Get(), inkStrokes.Get(), &canvasGeometry));
+    }
+
+    TEST_METHOD_EX(CanvasGeometry_CreateInk)
+    {
+        TestCreateInk(
+            sc_identityD2DTransform,
+            D2D1_DEFAULT_FLATTENING_TOLERANCE,
+            [](CanvasGeometryFactory* geometryFactory, ICanvasResourceCreator* resourceCreator, MockStrokeCollection* inkStrokes, ICanvasGeometry** geometry)
+            {
+                return geometryFactory->CreateInk(resourceCreator, inkStrokes, geometry);
+            });
+    }
+
+    TEST_METHOD_EX(CanvasGeometry_CreateInkWithTransformAndFlatteningTolerance)
+    {
+        const float someFlatteningTolerance = 23;
+
+        TestCreateInk(
+            sc_someD2DTransform,
+            someFlatteningTolerance,
+            [=](CanvasGeometryFactory* geometryFactory, ICanvasResourceCreator* resourceCreator, MockStrokeCollection* inkStrokes, ICanvasGeometry** geometry)
+            {
+                return geometryFactory->CreateInkWithTransformAndFlatteningTolerance(resourceCreator, inkStrokes, sc_someTransform, someFlatteningTolerance, geometry);
+            });
+    }
+
+    TEST_METHOD_EX(CanvasGeometry_CreateInk_NullArg)
+    {
+        Fixture f;
+
+        auto canvasGeometryFactory = Make<CanvasGeometryFactory>();
+        auto inkStrokes = Make<MockStrokeCollection>();
+        ComPtr<ICanvasGeometry> geometry;
+
+        Assert::AreEqual(E_INVALIDARG, canvasGeometryFactory->CreateInk(nullptr, inkStrokes.Get(), &geometry));
+        Assert::AreEqual(E_INVALIDARG, canvasGeometryFactory->CreateInk(f.Device.Get(), nullptr, &geometry));
+        Assert::AreEqual(E_INVALIDARG, canvasGeometryFactory->CreateInk(f.Device.Get(), inkStrokes.Get(), nullptr));
+
+        Assert::AreEqual(E_INVALIDARG, canvasGeometryFactory->CreateInkWithTransformAndFlatteningTolerance(nullptr, inkStrokes.Get(), Matrix3x2{}, 0, &geometry));
+        Assert::AreEqual(E_INVALIDARG, canvasGeometryFactory->CreateInkWithTransformAndFlatteningTolerance(f.Device.Get(), nullptr, Matrix3x2{}, 0, &geometry));
+        Assert::AreEqual(E_INVALIDARG, canvasGeometryFactory->CreateInkWithTransformAndFlatteningTolerance(f.Device.Get(), inkStrokes.Get(), Matrix3x2{}, 0, nullptr));
+    }
+
+#endif
 };

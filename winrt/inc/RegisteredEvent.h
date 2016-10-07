@@ -21,7 +21,7 @@ public:
 
         Microsoft::WRL::ComPtr<SOURCE> source(eventSource);
         m_unregisterFunction = 
-            [source, removeMethod, token]()
+            [source, removeMethod, token]
             {
                 ThrowIfFailed((source.Get()->*removeMethod)(token));
             };
@@ -43,6 +43,7 @@ public:
 
     RegisteredEvent& operator=(RegisteredEvent&& other)
     {
+        Release();
         m_unregisterFunction = other.m_unregisterFunction;
         other.m_unregisterFunction = nullptr;
         return *this;

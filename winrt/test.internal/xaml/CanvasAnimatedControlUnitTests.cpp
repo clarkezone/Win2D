@@ -4,6 +4,10 @@
 
 #include "pch.h"
 
+#include "stubs/StubDxgiSwapChain.h"
+
+#include "MockXamlSolidColorBrush.h"
+
 static Color const AnyColor                 {   1,   2,   3,   4 };
 static Color const AnyOtherColor            {   5,   6,   7,   8 };
 static Color const AnyOpaqueColor           { 255,   2,   3,   4 };
@@ -13,10 +17,15 @@ static Color const AnyOtherTranslucentColor { 250, 249, 248, 247 };
 
 static auto const TicksPerFrame = StepTimer::TicksPerSecond / 60;
 
+static float dpiTestCases[] = {
+    50,
+    DEFAULT_DPI,
+    200 };
+
 class FixtureWithSwapChainAccess : public CanvasAnimatedControlFixture
 {
 protected:
-    ComPtr<MockDxgiSwapChain> m_dxgiSwapChain;
+    ComPtr<StubDxgiSwapChain> m_dxgiSwapChain;
 
 public:
     FixtureWithSwapChainAccess()
@@ -26,44 +35,46 @@ public:
 
     void ResetSwapChain()
     {
-        m_dxgiSwapChain = Make<MockDxgiSwapChain>();
+        m_dxgiSwapChain = Make<StubDxgiSwapChain>();
 
         m_dxgiSwapChain->Present1Method.AllowAnyCall();
 
         m_dxgiSwapChain->GetDesc1Method.AllowAnyCall(
             [=](DXGI_SWAP_CHAIN_DESC1* desc)
-        {
-            desc->Width = 1;
-            desc->Height = 1;
-            desc->Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-            desc->BufferCount = 2;
-            desc->AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-            return S_OK;
-        });
+            {
+                desc->Width = 1;
+                desc->Height = 1;
+                desc->Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+                desc->BufferCount = 2;
+                desc->AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+                return S_OK;
+            });
 
         m_dxgiSwapChain->GetBufferMethod.AllowAnyCall(
             [=](UINT index, const IID& iid, void** out)
-        {
-            Assert::AreEqual(__uuidof(IDXGISurface2), iid);
-            auto surface = Make<MockDxgiSurface>();
+            {
+                Assert::AreEqual(__uuidof(IDXGISurface2), iid);
+                auto surface = Make<MockDxgiSurface>();
 
-            return surface.CopyTo(reinterpret_cast<IDXGISurface2**>(out));
-        });
+                return surface.CopyTo(reinterpret_cast<IDXGISurface2**>(out));
+            });
 
         Adapter->CreateCanvasSwapChainMethod.AllowAnyCall(
             [=](ICanvasDevice* device, float width, float height, float dpi, CanvasAlphaMode alphaMode)
-        {
-            StubCanvasDevice* stubDevice = static_cast<StubCanvasDevice*>(device); // Ensured by test construction
-
-            stubDevice->CreateSwapChainForCompositionMethod.AllowAnyCall([=](int32_t, int32_t, DirectXPixelFormat, int32_t, CanvasAlphaMode)
             {
-                return m_dxgiSwapChain;
+                StubCanvasDevice* stubDevice = static_cast<StubCanvasDevice*>(device); // Ensured by test construction
+
+                stubDevice->CreateSwapChainForCompositionMethod.AllowAnyCall([=](int32_t, int32_t, DirectXPixelFormat, int32_t, CanvasAlphaMode)
+                {
+                    return m_dxgiSwapChain;
+                });
+
+                auto canvasSwapChain = ResourceManager::GetOrCreate(device, m_dxgiSwapChain.Get(), dpi);
+
+                ComPtr<CanvasSwapChain> typedPtr = static_cast<CanvasSwapChain*>(As<ICanvasSwapChain>(canvasSwapChain).Get());
+
+                return typedPtr;
             });
-
-            auto canvasSwapChain = Adapter->SwapChainManager->GetOrCreate(device, m_dxgiSwapChain.Get(), DEFAULT_DPI);
-
-            return canvasSwapChain;
-        });
     }
 };
 
@@ -79,7 +90,7 @@ public:
     MockDispatchedHandler()
     {
         m_handler = Callback<AddFtmBase<IDispatchedHandler>::Type>(
-            [=]()
+            [=]
             {
                 return OnInvoke.WasCalled();
             });
@@ -305,15 +316,14 @@ TEST_CLASS(CanvasAnimatedControlTests)
     TEST_METHOD_EX(CanvasAnimatedControl_RecreatedSwapChainHasCorrectAlphaMode)
     {
         CanvasAnimatedControlFixture f;
-        auto swapChainManager = f.Adapter->SwapChainManager;
         f.Load();
         f.Adapter->DoChanged();
         
         f.Adapter->CreateCanvasSwapChainMethod.SetExpectedCalls(1, 
-            [swapChainManager](ICanvasDevice* device, float width, float height, float dpi, CanvasAlphaMode alphaMode)
+            [](ICanvasDevice* device, float width, float height, float dpi, CanvasAlphaMode alphaMode)
             {
                 Assert::AreEqual(CanvasAlphaMode::Ignore, alphaMode);
-                return CanvasAnimatedControlFixture::CreateTestSwapChain(swapChainManager, device);
+                return CanvasAnimatedControlFixture::CreateTestSwapChain(device);
             });
 
         Assert::AreEqual(S_OK, f.Control->put_ClearColor(AnyOpaqueColor));
@@ -321,10 +331,10 @@ TEST_CLASS(CanvasAnimatedControlTests)
         f.Adapter->DoChanged();
 
         f.Adapter->CreateCanvasSwapChainMethod.SetExpectedCalls(1,
-            [swapChainManager](ICanvasDevice* device, float width, float height, float dpi, CanvasAlphaMode alphaMode)
+            [](ICanvasDevice* device, float width, float height, float dpi, CanvasAlphaMode alphaMode)
             {
                 Assert::AreEqual(CanvasAlphaMode::Premultiplied, alphaMode);
-                return CanvasAnimatedControlFixture::CreateTestSwapChain(swapChainManager, device);
+                return CanvasAnimatedControlFixture::CreateTestSwapChain(device);
             });
 
         Assert::AreEqual(S_OK, f.Control->put_ClearColor(AnyTranslucentColor));
@@ -335,7 +345,6 @@ TEST_CLASS(CanvasAnimatedControlTests)
     TEST_METHOD_EX(CanvasAnimatedControl_RedundantClearColorChangesDoNotCauseRecreation)
     {
         CanvasAnimatedControlFixture f;
-        auto swapChainManager = f.Adapter->SwapChainManager;
         f.Load();
         f.Adapter->DoChanged();
         
@@ -548,16 +557,226 @@ TEST_CLASS(CanvasAnimatedControlTests)
             int sleepCount = 0;
             f.Adapter->m_sleepFn =
                 [&](DWORD timeInMs)
-            {
-                Assert::AreEqual(static_cast<DWORD>(16), timeInMs);
-                sleepCount++;
-            };
+                {
+                    Assert::AreEqual(static_cast<DWORD>(16), timeInMs);
+                    sleepCount++;
+                };
 
             f.Adapter->ProgressTime(TicksPerFrame);
             f.Execute(Size{ 0, 0 });
 
             Assert::AreEqual(ResizeFixture::TickCountForExecute, sleepCount);
         }
+    }
+
+    TEST_METHOD_EX(CanvasAnimatedControl_SeesConsistentSizeInUpdateRenderHandlers)
+    {
+        ResizeFixture f;
+        
+        Size initialSize{ 1, 1 };
+        Size otherSize{ 2, 2 };
+        
+        MockEventHandler<Animated_UpdateEventHandler> onUpdate(L"OnUpdate");
+        MockEventHandler<Animated_DrawEventHandler> onDraw(L"OnDraw");
+        f.AddUpdateHandler(onUpdate.Get());
+        f.AddDrawHandler(onDraw.Get());
+        
+        Size sizeSeenByUpdate, sizeSeenByDraw;
+
+        onUpdate.SetExpectedCalls(2,
+            [&](ICanvasAnimatedControl* c, ICanvasAnimatedUpdateEventArgs*)
+            {
+                // Calling Resize here simulates the UI thread receiving a
+                // resize event while a game loop tick is running.
+                //
+                // We want to ensure that Update/Draw see the same size for the
+                // control within a single tick.
+                f.UserControl->Resize(otherSize);
+                
+                ThrowIfFailed(c->get_Size(&sizeSeenByUpdate));
+                return S_OK;
+            });
+
+        onDraw.SetExpectedCalls(2,
+            [&](ICanvasAnimatedControl* c, ICanvasAnimatedDrawEventArgs*)
+            {
+                ThrowIfFailed(c->get_Size(&sizeSeenByDraw));
+                return S_OK;
+            });
+
+        ThrowIfFailed(f.Control->put_IsFixedTimeStep(FALSE));
+
+        f.UserControl->Resize(initialSize);
+        f.Adapter->Tick();
+
+        Assert::AreEqual(initialSize, sizeSeenByUpdate);
+        Assert::AreEqual(initialSize, sizeSeenByDraw);
+        
+        f.Adapter->Tick();
+
+        Assert::AreEqual(otherSize, sizeSeenByUpdate);
+        Assert::AreEqual(otherSize, sizeSeenByDraw);
+    }
+
+    class DpiFixture : public ResizeFixture
+    {
+    public:
+        float m_controlSize;
+        MockEventHandler<Animated_CreateResourcesEventHandler> m_createResourcesEventHandler;
+
+        DpiFixture(float controlSize = 1000)
+            : m_controlSize(controlSize)
+            , m_createResourcesEventHandler(L"CreateResources", ExpectedEventParams::Both)
+        {
+            // Set an initial size. Commit it using a resize event.
+            UserControl->Resize(Size{ m_controlSize, m_controlSize });
+
+            // Process the resize event.
+            m_dxgiSwapChain->ResizeBuffersMethod.AllowAnyCall();
+            Adapter->Tick();
+            Adapter->ProgressTime(TicksPerFrame);
+
+            // An event handler needs to be registered for a drawing session to be constructed.
+            auto onDrawFn =
+                Callback<Animated_DrawEventHandler>([](ICanvasAnimatedControl*, ICanvasAnimatedDrawEventArgs*) { return S_OK; });
+            EventRegistrationToken drawEventToken;
+            ThrowIfFailed(Control->add_Draw(onDrawFn.Get(), &drawEventToken));
+
+            // CR is raised once immediately after adding, because this control's been Loaded already.
+            m_createResourcesEventHandler.AllowAnyCall();
+            AddCreateResourcesHandler(m_createResourcesEventHandler.Get());
+        }
+
+        void SetDpiAndFireEvent(float dpi)
+        {
+            Adapter->LogicalDpi = dpi;
+            Adapter->RaiseDpiChangedEvent();
+        }
+
+        void DoNotExpectResizeBuffers()
+        {
+            m_dxgiSwapChain->ResizeBuffersMethod.SetExpectedCalls(0);
+        }
+    };
+
+    TEST_METHOD_EX(CanvasAnimatedControl_AfterDpiChange_NoSizeChange_DoNotExpectResize_UntilTargetRecreation)
+    {
+        for (auto dpiCase : dpiTestCases)
+        {
+            DpiFixture f;
+
+            f.DoNotExpectResizeBuffers();
+
+            f.SetDpiAndFireEvent(dpiCase);
+
+            f.Adapter->Tick();
+
+            if (dpiCase == DEFAULT_DPI)
+                continue;
+
+            float expectedPixelSize = static_cast<float>(SizeDipsToPixels(f.m_controlSize, dpiCase));
+            f.ExpectOneResizeBuffers(Size{ expectedPixelSize, expectedPixelSize });
+            f.Adapter->DoChanged();
+        }
+    }
+
+    TEST_METHOD_EX(CanvasAnimatedControl_AfterDpiChange_DeviceContextHasDpiSet)
+    {
+        for (auto dpiCase : dpiTestCases)
+        {
+            DpiFixture f;
+
+            auto deviceContext = Make<StubD2DDeviceContext>(nullptr);
+            f.Adapter->InitialDevice->CreateDeviceContextForDrawingSessionMethod.AllowAnyCall(
+                [&]
+                {
+                    return deviceContext;
+                });
+
+            f.SetDpiAndFireEvent(dpiCase);
+
+            f.Adapter->Tick(); // Allow game loop thread to stop
+            f.Adapter->DoChanged(); // Schedule game loop thread to start again
+
+            deviceContext->SetDpiMethod.SetExpectedCalls(1,
+                [&](float dpiX, float dpiY)
+                {
+                    Assert::AreEqual(dpiCase, dpiX);
+                    Assert::AreEqual(dpiCase, dpiY);
+                });
+            f.Adapter->ProgressTime(TicksPerFrame);
+
+            // Target will get re-created (or resized) with correct DPI.
+            f.Adapter->Tick(); 
+        }
+    }
+
+    TEST_METHOD_EX(CanvasAnimatedControl_ZeroSizedControl_DpiChange_DoesNotResize)
+    {
+        DpiFixture f(0);
+
+        f.DoNotExpectResizeBuffers();
+
+        float someDpi = 123.0f;
+        f.SetDpiAndFireEvent(someDpi);
+
+        f.Adapter->Tick();
+        f.Adapter->DoChanged();
+    }
+
+    TEST_METHOD_EX(CanvasAnimatedControl_AfterDpiChange_ExpectCreateResources)
+    {
+        for (auto dpiCase : dpiTestCases)
+        {
+            DpiFixture f;
+
+            f.SetDpiAndFireEvent(dpiCase);
+
+            if (dpiCase != DEFAULT_DPI)
+                f.m_createResourcesEventHandler.SetExpectedCalls(1);
+
+            f.Adapter->Tick();
+            f.Adapter->DoChanged();
+        }
+    }
+
+    TEST_METHOD_EX(CanvasAnimatedControl_AfterDpiChange_CreateResourcesHasCorrectParameter)
+    {
+        DpiFixture f;
+
+        f.SetDpiAndFireEvent(200.0f);
+
+        f.m_createResourcesEventHandler.SetExpectedCalls(1,
+            [&](ICanvasAnimatedControl*, ICanvasCreateResourcesEventArgs* eventArgs)
+            {
+                CanvasCreateResourcesReason reason = (CanvasCreateResourcesReason)-1;
+                Assert::AreEqual(S_OK, eventArgs->get_Reason(&reason));
+                Assert::AreEqual(CanvasCreateResourcesReason::DpiChanged, reason);
+
+                return S_OK;
+            });
+
+        f.Adapter->Tick();
+        f.Adapter->DoChanged();
+    }
+
+    TEST_METHOD_EX(CanvasAnimatedControl_ChangeToNonDefaultDpi_ThenResize_ResizeUsesCorrectDpi)
+    {
+        DpiFixture f;
+
+        f.SetDpiAndFireEvent(DEFAULT_DPI * 2);
+
+        // Reach steady state
+        f.Adapter->Tick(); 
+        f.Adapter->DoChanged(); 
+        f.Adapter->Tick();
+
+        // Issue a resize
+        f.UserControl->Resize(Size{ 123, 456 });
+
+        // Process the resize event.
+        f.ExpectOneResizeBuffers(Size{ 123 * 2, 456 * 2 });
+        f.Adapter->Tick();
     }
 
     class DeviceLostFixture : public FixtureWithSwapChainAccess
@@ -724,7 +943,7 @@ TEST_CLASS(CanvasAnimatedControlTests)
 
         auto customDevice = Make<StubCanvasDevice>();
         Assert::AreEqual(S_OK, f.Control->put_CustomDevice(customDevice.Get()));
-        customDevice->CreateDeviceContextMethod.AllowAnyCall(
+        customDevice->CreateDeviceContextForDrawingSessionMethod.AllowAnyCall(
             [=]
             {
                 return Make<StubD2DDeviceContext>(nullptr);
@@ -753,7 +972,7 @@ TEST_CLASS(CanvasAnimatedControlTests)
 
         auto customDevice = Make<StubCanvasDevice>();
         Assert::AreEqual(S_OK, f.Control->put_CustomDevice(customDevice.Get()));
-        customDevice->CreateDeviceContextMethod.AllowAnyCall(
+        customDevice->CreateDeviceContextForDrawingSessionMethod.AllowAnyCall(
             [=]
             {
                 return Make<StubD2DDeviceContext>(nullptr);
@@ -763,10 +982,10 @@ TEST_CLASS(CanvasAnimatedControlTests)
 
         f.OnDraw.SetExpectedCalls(1,
             [&](ICanvasAnimatedControl*, ICanvasAnimatedDrawEventArgs*)
-        {
-            customDevice->MarkAsLost();
-            return DXGI_ERROR_DEVICE_REMOVED;
-        });
+            {
+                customDevice->MarkAsLost();
+                return DXGI_ERROR_DEVICE_REMOVED;
+            });
 
         f.DoChangedAndTick(); // Allow for device lost to be noticed.
         f.Adapter->DoChanged(); // Control's device lost handler is called.
@@ -785,7 +1004,7 @@ TEST_CLASS(CanvasAnimatedControlTests)
         DeviceLostFixture f;
 
         auto customDevice = Make<StubCanvasDevice>();
-        customDevice->CreateDeviceContextMethod.AllowAnyCall(
+        customDevice->CreateDeviceContextForDrawingSessionMethod.AllowAnyCall(
             [=]
             {
                 return Make<StubD2DDeviceContext>(nullptr);
@@ -796,16 +1015,16 @@ TEST_CLASS(CanvasAnimatedControlTests)
 
         f.OnDraw.SetExpectedCalls(1,
             [&](ICanvasAnimatedControl*, ICanvasAnimatedDrawEventArgs*)
-        {
-            customDevice->MarkAsLost();
-            return DXGI_ERROR_DEVICE_REMOVED;
-        });
+            {
+                customDevice->MarkAsLost();
+                return DXGI_ERROR_DEVICE_REMOVED;
+            });
 
         f.DoChangedAndTick(); // Allow for device lost to be noticed.
         f.Adapter->DoChanged(); // Control's device lost handler is called.
 
         auto otherCustomDevice = Make<StubCanvasDevice>();
-        otherCustomDevice->CreateDeviceContextMethod.AllowAnyCall(
+        otherCustomDevice->CreateDeviceContextForDrawingSessionMethod.AllowAnyCall(
             [&]
             {
                 return Make<StubD2DDeviceContext>(nullptr);
@@ -1666,7 +1885,7 @@ TEST_CLASS(CanvasAnimatedControlTests)
         f.RenderSingleFrame();
     }
 
-    TEST_METHOD_EX(CanvasAnimatedControl_RenderThreadWaitsForVBlank)
+    TEST_METHOD_EX(CanvasAnimatedControl_FixedTimeStep_RenderThreadWaitsForVBlank_IfNoDraw)
     {
         CanvasAnimatedControlFixture f;
         f.Load();
@@ -1674,8 +1893,15 @@ TEST_CLASS(CanvasAnimatedControlTests)
 
         auto mockDxgiOutput = Make<MockDxgiOutput>();
 
+        // First ticks always updates/draws/presents, so we don't expect a
+        // vblank.
+        f.Adapter->Tick();
+
+
+        // Second tick, because we didn't progress time, will no
+        // update/draw/present, and so instead will wait on a vblank.
         f.Device->GetPrimaryDisplayOutputMethod.SetExpectedCalls(1,
-            [&]()
+            [&]
             {
                 return mockDxgiOutput;
             });
@@ -1685,61 +1911,24 @@ TEST_CLASS(CanvasAnimatedControlTests)
         f.Adapter->Tick();
     }
 
-    TEST_METHOD_EX(CanvasAnimatedControl_RenderThreadWaitsForVBlank_BeforeDrawOrUpdateOrAsyncActions)
+    TEST_METHOD_EX(CanvasAnimatedControl_VariableTimeStep_AlwaysWaitsForVBlank)
     {
         CanvasAnimatedControlFixture f;
         f.Load();
         f.Adapter->DoChanged();
+        ThrowIfFailed(f.Control->put_IsFixedTimeStep(false));
 
         auto mockDxgiOutput = Make<MockDxgiOutput>();
-        f.Device->GetPrimaryDisplayOutputMethod.SetExpectedCalls(1,
-            [&]()
+
+        f.Device->GetPrimaryDisplayOutputMethod.SetExpectedCalls(2,
+            [&]
             {
                 return mockDxgiOutput;
             });
 
-        int order = 0;
+        mockDxgiOutput->WaitForVBlankMethod.SetExpectedCalls(2);
 
-        mockDxgiOutput->WaitForVBlankMethod.SetExpectedCalls(1,
-            [&]()
-            {
-                Assert::AreEqual(0, order);
-                order++;
-                return S_OK;
-            });
-
-        MockDispatchedHandler dispatchedHandler;
-        dispatchedHandler.OnInvoke.SetExpectedCalls(1,
-            [&]()
-            {
-                Assert::AreEqual(1, order);
-                order++;
-                return S_OK;
-            });
-        dispatchedHandler.RunOnGameLoopThreadAsync(f.Control);
-
-        MockEventHandler<Animated_UpdateEventHandler> OnUpdate;
-        OnUpdate = MockEventHandler<Animated_UpdateEventHandler>(L"Update", ExpectedEventParams::Both);
-        f.AddUpdateHandler(OnUpdate.Get());
-        OnUpdate.SetExpectedCalls(1,
-            [&](ICanvasAnimatedControl*, ICanvasAnimatedUpdateEventArgs*)
-            {
-                Assert::AreEqual(2, order);
-                order++;
-                return S_OK;
-            });
-                
-        MockEventHandler<Animated_DrawEventHandler> OnDraw;
-        OnDraw = MockEventHandler<Animated_DrawEventHandler>(L"Draw", ExpectedEventParams::Both);
-        f.AddDrawHandler(OnDraw.Get());
-        OnDraw.SetExpectedCalls(1,
-            [&](ICanvasAnimatedControl*, ICanvasAnimatedDrawEventArgs*)
-            {
-                Assert::AreEqual(3, order);
-                order++;
-                return S_OK;
-            });
-
+        f.Adapter->Tick();
         f.Adapter->Tick();
     }
 
@@ -1942,12 +2131,10 @@ TEST_CLASS(CanvasAnimatedControlChangedAction)
             CreateAdapter();
             CreateControl();
             
-            auto swapChainManager = std::make_shared<MockCanvasSwapChainManager>();
-
             Adapter->CreateCanvasSwapChainMethod.AllowAnyCall(
                 [=] (ICanvasDevice*, float, float, float, CanvasAlphaMode)
                 {
-                    return swapChainManager->CreateMock();
+                    return Make<MockCanvasSwapChain>();
                 });
         }
 
@@ -2041,8 +2228,7 @@ TEST_CLASS(CanvasAnimatedControlRenderLoop)
 
         Fixture()
         {
-            auto swapChainManager = std::make_shared<MockCanvasSwapChainManager>();
-            SwapChain = swapChainManager->CreateMock();
+            SwapChain = Make<MockCanvasSwapChain>();
 
             SwapChain->put_TransformMethod.AllowAnyCall();
 
@@ -2669,7 +2855,7 @@ TEST_CLASS(CanvasAnimatedControl_AppAccessingWorkerThreadTests)
         for (int i = 0; i < actionCount; ++i)
         {
             dispatchedHandlers[i].OnInvoke.SetExpectedCalls(1,
-                [i, &callbackIndex] () 
+                [i, &callbackIndex] 
                 {
                     Assert::AreEqual(i, callbackIndex); 
                     callbackIndex++; 
@@ -3177,5 +3363,179 @@ TEST_CLASS(CanvasAnimatedControl_AppAccessingWorkerThreadTests)
 
         f.Load();
         f.RaiseUnloadedEvent();
+    }
+};
+
+TEST_CLASS(CanvasAnimatedControl_DpiScaling)
+{
+    class DpiScalingFixture : public FixtureWithSwapChainAccess
+    {
+    public:
+        DpiScalingFixture(float logicalDpi = DEFAULT_DPI)
+        {
+            Adapter->LogicalDpi = logicalDpi;
+        }
+
+        void ExpectCreateSwapChainWithDpi(float expectedDpi)
+        {
+            Adapter->CreateCanvasSwapChainMethod.SetExpectedCalls(1, 
+                [=](ICanvasDevice* device, float width, float height, float dpi, CanvasAlphaMode alphaMode)
+                {
+                    StubCanvasDevice* stubDevice = static_cast<StubCanvasDevice*>(device); // Ensured by test construction
+                    stubDevice->CreateSwapChainForCompositionMethod.AllowAnyCall([=](int32_t, int32_t, DirectXPixelFormat, int32_t, CanvasAlphaMode)
+                    {
+                        return m_dxgiSwapChain;
+                    });
+
+                    Assert::AreEqual(dpi, expectedDpi);
+
+                    return Make<CanvasSwapChain>(device, m_dxgiSwapChain.Get(), dpi, false);
+                });
+        }
+
+        void ExpectResizeBuffersWithDpi(float expectedDpi)
+        {
+            const float dpiScale = expectedDpi / DEFAULT_DPI;
+            const uint32_t expectedWidthInPixels = static_cast<uint32_t>(FixtureWithSwapChainAccess::InitialWidth * dpiScale);
+            const uint32_t expectedHeightInPixels = static_cast<uint32_t>(FixtureWithSwapChainAccess::InitialHeight * dpiScale);
+
+            m_dxgiSwapChain->ResizeBuffersMethod.SetExpectedCalls(1,
+                [=](UINT bufferCount,
+                    UINT width,
+                    UINT height,
+                    DXGI_FORMAT newFormat,
+                    UINT swapChainFlags)
+                {
+                    Assert::AreEqual(expectedWidthInPixels, width);
+                    Assert::AreEqual(expectedHeightInPixels, height);
+                    return S_OK;
+                });
+        }
+
+        void EnsureSwapChain()
+        {
+            Load();
+            Adapter->DoChanged();
+        }
+    };
+
+
+    TEST_METHOD_EX(CanvasAnimatedControl_DpiScaling_Affects_SwapChainDpi_InitialCreate)
+    {
+        for (auto testCase : dpiScalingTestCases)
+        {
+            DpiScalingFixture f(testCase.Dpi);
+
+            f.Control->put_DpiScale(testCase.DpiScale);
+            f.ExpectCreateSwapChainWithDpi(testCase.DpiScale * testCase.Dpi);
+
+            f.EnsureSwapChain();
+        }
+    }
+
+    TEST_METHOD_EX(CanvasAnimatedControl_DpiScaling_Affects_SwapChainDpi_ResizeBuffers)
+    {
+        for (auto testCase : dpiScalingTestCases)
+        {
+            DpiScalingFixture f(testCase.Dpi);
+            f.EnsureSwapChain();
+
+            f.Adapter->ProgressTime(TicksPerFrame);
+
+            f.Control->put_DpiScale(testCase.DpiScale);
+
+            f.Adapter->Tick(); // Render thread notices the dpi scale change, and stops
+
+            f.ExpectResizeBuffersWithDpi(testCase.DpiScale * testCase.Dpi);
+            f.Adapter->DoChanged();
+        }
+    }
+};
+
+//
+// In the XAML designer, background threads, dispatchers and swapchains are not
+// supported.  Since CanvasAnimatedControl relies on these it doesn't work well
+// in the designer.  At the very least we want the clear color to be displayed.
+//
+TEST_CLASS(CanvasAnimatedControl_DesignMode)
+{
+    struct Fixture : public CanvasAnimatedControlFixture
+    {
+        Fixture()
+        {
+            Adapter->DesignModeEnabled = true;
+
+            CreateControl();
+        }
+    };
+
+    TEST_METHOD_EX(CanvasAnimatedControl_DesignMode_ContentIsARectangle)
+    {
+        Fixture f;
+
+        ComPtr<IUIElement> actualContent;
+        ThrowIfFailed(f.UserControl->get_Content(&actualContent));
+
+        Assert::IsTrue(IsSameInstance(actualContent.Get(), f.Adapter->GetShape()));        
+    }
+
+    TEST_METHOD_EX(CanvasAnimatedControl_DesignMode_MostOperationsAreNoOps)
+    {
+        Fixture f;
+
+        f.Load();
+        f.Adapter->DoChanged();
+
+        // In test.internal, RemoveFromVisualTree will fail because we don't
+        // actually have an underlying XAML control to remove.  However, this
+        // method should not AV: it should fail with this specific error code.
+        Assert::AreEqual(E_NOINTERFACE, f.Control->RemoveFromVisualTree());
+        
+        f.RaiseUnloadedEvent();
+    }
+
+    TEST_METHOD_EX(CanvasAnimatedControl_DesignMode_CreateCoreIndependentInputSource_Fails)
+    {
+        Fixture f;
+
+        auto anyDeviceTypes = static_cast<CoreInputDeviceTypes>(123);
+        auto anyReturnValue = reinterpret_cast<ICoreInputSourceBase**>(456);
+
+        Assert::AreEqual(E_NOTIMPL, f.Control->CreateCoreIndependentInputSource(anyDeviceTypes, anyReturnValue));
+    }
+
+    TEST_METHOD_EX(CanvasAnimatedControl_DesignMode_SettingClearColor_SetsTheRectanglesFillColor)
+    {
+        Fixture f;
+
+        Color anyColor{ 1, 2, 3, 4 };
+
+        auto brush = Make<MockXamlSolidColorBrush>();
+
+        f.Adapter->GetShape()->get_FillMethod.SetExpectedCalls(2,
+            [&] (IBrush** b)
+            {
+                return brush.CopyTo(b);
+            });
+
+        brush->put_ColorMethod.SetExpectedCalls(1,
+            [&] (Color color)
+            {
+                Assert::AreEqual(anyColor, color);
+                return S_OK;
+            });
+        
+        ThrowIfFailed(f.Control->put_ClearColor(anyColor));
+
+        brush->get_ColorMethod.SetExpectedCalls(1,
+            [&] (Color* color)
+            {
+                *color = anyColor;
+                return S_OK;
+            });
+
+        Color retrievedColor;
+        ThrowIfFailed(f.Control->get_ClearColor(&retrievedColor));
+        Assert::AreEqual(anyColor, retrievedColor);
     }
 };

@@ -20,56 +20,14 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         return ExceptionBoundary(
             [&]
             {
-                auto cl = GetManager()->Create(resourceCreator);
+                CheckInPointer(resourceCreator);
+                
+                ComPtr<ICanvasDevice> device;
+                ThrowIfFailed(resourceCreator->get_Device(&device));
+                
+                auto cl = CanvasCommandList::CreateNew(device.Get());
                 ThrowIfFailed(cl.CopyTo(commandList));
             });
-    }
-
-
-    IFACEMETHODIMP CanvasCommandListFactory::GetOrCreate(
-        ICanvasDevice* device,
-        IUnknown* resource,
-        IInspectable** wrapper)
-    {
-        return ExceptionBoundary(
-            [&]
-            {
-                CheckInPointer(device);
-                CheckInPointer(resource);
-                CheckAndClearOutPointer(wrapper);
-
-                auto cl = GetManager()->GetOrCreate(device, As<ID2D1CommandList>(resource).Get());
-                ThrowIfFailed(cl.CopyTo(wrapper));
-            });
-    }
-
-
-    //
-    // CanvasCommandListManager
-    //
-
-
-    ComPtr<CanvasCommandList> CanvasCommandListManager::CreateNew(
-        ICanvasResourceCreator* resourceCreator)
-    {
-        ComPtr<ICanvasDevice> device;
-        ThrowIfFailed(resourceCreator->get_Device(&device));
-        
-        auto d2dCommandList = As<ICanvasDeviceInternal>(device)->CreateCommandList();
-
-        auto cl = Make<CanvasCommandList>(shared_from_this(), device.Get(), d2dCommandList.Get());
-        CheckMakeResult(cl);
-        return cl;
-    }
-
-
-    ComPtr<CanvasCommandList> CanvasCommandListManager::CreateWrapper(
-        ICanvasDevice* device,
-        ID2D1CommandList* resource)
-    {
-        auto cl = Make<CanvasCommandList>(shared_from_this(), device, resource);
-        CheckMakeResult(cl);
-        return cl;
     }
 
 
@@ -78,13 +36,26 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
     //
 
 
+    ComPtr<CanvasCommandList> CanvasCommandList::CreateNew(
+        ICanvasDevice* device)
+    {
+        auto d2dCommandList = As<ICanvasDeviceInternal>(device)->CreateCommandList();
+
+        auto cl = Make<CanvasCommandList>(device, d2dCommandList.Get(), false);
+        CheckMakeResult(cl);
+        return cl;
+    }
+
+
     CanvasCommandList::CanvasCommandList(
-        std::shared_ptr<CanvasCommandListManager> manager, 
         ICanvasDevice* device,
-        ID2D1CommandList* d2dCommandList)
-        : ResourceWrapper(manager, d2dCommandList)
+        ID2D1CommandList* d2dCommandList,
+        bool hasInteropBeenUsed)
+        : ResourceWrapper(d2dCommandList)
         , m_device(device)
         , m_d2dCommandListIsClosed(false)
+        , m_hasInteropBeenUsed(hasInteropBeenUsed)
+        , m_hasActiveDrawingSession(std::make_shared<bool>())
     {
     }
 
@@ -98,18 +69,20 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
                 CheckAndClearOutPointer(drawingSession);
 
                 if (m_d2dCommandListIsClosed)
-                    ThrowHR(E_INVALIDARG, HStringReference(Strings::CommandListCannotBeDrawnToAfterItHasBeenUsed).Get());
+                    ThrowHR(E_INVALIDARG, Strings::CommandListCannotBeDrawnToAfterItHasBeenUsed);
+
+                if (*m_hasActiveDrawingSession)
+                    ThrowHR(E_FAIL, Strings::CannotCreateDrawingSessionUntilPreviousOneClosed);
 
                 auto& d2dCommandList = GetResource();
                 auto& device = m_device.EnsureNotClosed();
 
-                auto deviceContext = As<ICanvasDeviceInternal>(device)->CreateDeviceContext();
+                auto deviceContext = As<ICanvasDeviceInternal>(device)->CreateDeviceContextForDrawingSession();
                 deviceContext->SetTarget(d2dCommandList.Get());
 
-                auto drawingSessionManager = CanvasDrawingSessionFactory::GetOrCreateManager();
                 auto adapter = std::make_shared<SimpleCanvasDrawingSessionAdapter>(deviceContext.Get());
 
-                auto ds = drawingSessionManager->Create(device.Get(), deviceContext.Get(), adapter);
+                auto ds = CanvasDrawingSession::CreateNew(deviceContext.Get(), adapter, device.Get(), m_hasActiveDrawingSession);
 
                 ThrowIfFailed(ds.CopyTo(drawingSession));
             });
@@ -137,50 +110,79 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
 
     IFACEMETHODIMP CanvasCommandList::GetBounds(
-        ICanvasDrawingSession* drawingSession,
+        ICanvasResourceCreator* resourceCreator,
         Rect* bounds)
     {
-        return GetImageBoundsImpl(this, drawingSession, nullptr, bounds);
+        return GetImageBoundsImpl(this, resourceCreator, nullptr, bounds);
     }
 
 
     IFACEMETHODIMP CanvasCommandList::GetBoundsWithTransform(
-        ICanvasDrawingSession* drawingSession,
+        ICanvasResourceCreator* resourceCreator,
         Numerics::Matrix3x2 transform,
         Rect* bounds)
     {
-        return GetImageBoundsImpl(this, drawingSession, &transform, bounds);
+        return GetImageBoundsImpl(this, resourceCreator, &transform, bounds);
     }
 
+    bool IsD2DCommandListClosed(
+        ID2D1CommandList* d2dCommandList,
+        ICanvasDevice* device,
+        ID2D1DeviceContext* d2dDeviceContext)
+    {
+        D2D1_RECT_F unusedBounds;
+        
+        // If the caller did not provide a device context, get one from the CanvasDevice.
+        DeviceContextLease lease;
+
+        if (!d2dDeviceContext)
+        {
+            lease = As<ICanvasDeviceInternal>(device)->GetResourceCreationDeviceContext();
+            d2dDeviceContext = lease.Get();
+        }
+
+        return d2dDeviceContext->GetImageLocalBounds(d2dCommandList, &unusedBounds) != D2DERR_WRONG_STATE;
+    }
 
     ComPtr<ID2D1Image> CanvasCommandList::GetD2DImage(
-        ID2D1DeviceContext*)
+        ICanvasDevice* device,
+        ID2D1DeviceContext* deviceContext,
+        GetImageFlags,
+        float /*targetDpi*/,
+        float* realizedDpi)
     {
         auto& commandList = GetResource();
+
         if (!m_d2dCommandListIsClosed)
         {
-            HRESULT hr = commandList->Close();
-
-            // D2DERR_WRONG_STATE means that this CL was already closed.  This
-            // might happen if we were interopping with an existing
-            // D2D1CommandList.  We ignore this error.
-            if (hr != D2DERR_WRONG_STATE && FAILED(hr))
-                ThrowHR(hr);
+            // This command list might have been interopped, and could actually 
+            // already be closed but we haven't 'realized' it yet.
+            // Unfortunately, the act of calling Close on it again will mess up the 
+            // state of any device context we're trying to draw this
+            // command list to.
+            // Therefore, we do a check before closing it.
+            //
+            if (!m_hasInteropBeenUsed || !IsD2DCommandListClosed(commandList.Get(), device, deviceContext))
+            {
+                ThrowIfFailed(commandList->Close());
+            }
 
             m_d2dCommandListIsClosed = true;
         }
+
+        if (realizedDpi)
+            *realizedDpi = 0;
+
         return commandList;
     }
 
-
-    ICanvasImageInternal::RealizedEffectNode CanvasCommandList::GetRealizedEffectNode(
-        ID2D1DeviceContext* deviceContext,
-        float targetDpi)
+    IFACEMETHODIMP CanvasCommandList::GetNativeResource(ICanvasDevice* device, float dpi, REFIID iid, void** outResource)
     {
-        UNREFERENCED_PARAMETER(targetDpi);
+        m_hasInteropBeenUsed = true;
 
-        return RealizedEffectNode{ GetD2DImage(deviceContext), 0, 0 };
+        return __super::GetNativeResource(device, dpi, iid, outResource);
     }
+
 
     ActivatableClassWithFactory(CanvasCommandList, CanvasCommandListFactory);
 

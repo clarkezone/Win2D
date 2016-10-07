@@ -7,14 +7,16 @@ using Microsoft.Graphics.Canvas.UI;
 using Microsoft.Graphics.Canvas.UI.Xaml;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Numerics;
 using System.Threading.Tasks;
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
+using Windows.UI.Xaml.Controls.Primitives;
 
 namespace ExampleGallery
 {
-    public sealed partial class ParticleExample : UserControl
+    public sealed partial class ParticleExample : UserControl, INotifyPropertyChanged
     {
         public enum ParticleMode
         {
@@ -26,6 +28,7 @@ namespace ExampleGallery
 
         public ParticleMode CurrentMode { get; set; }
 
+        public bool UseSpriteBatch { get; set; }
 
         // This example uses three different particle systems.
         ParticleSystem smokePlume = new SmokePlumeParticleSystem();
@@ -41,6 +44,8 @@ namespace ExampleGallery
         const float TimeBetweenSmokePlumePuffs = .5f;
         float timeTillPuff = 0.0f;
 
+        public event PropertyChangedEventHandler PropertyChanged;
+
 
         public ParticleExample()
         {
@@ -50,6 +55,24 @@ namespace ExampleGallery
 
         void CreateResources(CanvasAnimatedControl sender, CanvasCreateResourcesEventArgs args)
         {
+            if (args.Reason == CanvasCreateResourcesReason.DpiChanged)
+                return;
+
+            if (args.Reason == CanvasCreateResourcesReason.FirstTime)
+            {
+                bool spriteBatchSupported = false;
+
+#if WINDOWS_UWP
+                spriteBatchSupported = CanvasSpriteBatch.IsSupported(sender.Device);
+#endif
+
+                UseSpriteBatch = spriteBatchSupported;
+                if (PropertyChanged != null)
+                    PropertyChanged(this, new PropertyChangedEventArgs("UseSpriteBatch"));
+
+                UseSpriteBatchCheckBox.Visibility = spriteBatchSupported ? Visibility.Visible : Visibility.Collapsed;
+            }
+
             args.TrackAsyncAction(CreateResourcesAsync(sender).AsAsyncAction());
         }
 
@@ -139,9 +162,16 @@ namespace ExampleGallery
         {
             var ds = args.DrawingSession;
 
-            smokePlume.Draw(ds);
-            smoke.Draw(ds);
-            explosion.Draw(ds);
+            smokePlume.Draw(ds, UseSpriteBatch);
+            smoke.Draw(ds, UseSpriteBatch);
+            explosion.Draw(ds, UseSpriteBatch);
+        }
+
+
+        public void SliderValueChanged(object sender, RangeBaseValueChangedEventArgs args)
+        {
+            if (canvas != null)
+                canvas.DpiScale = (float)(args.NewValue);
         }
 
 

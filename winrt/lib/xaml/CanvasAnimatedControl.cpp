@@ -9,6 +9,7 @@
 using namespace ::ABI::Microsoft::Graphics::Canvas;
 using namespace ::ABI::Microsoft::Graphics::Canvas::UI;
 using namespace ::ABI::Microsoft::Graphics::Canvas::UI::Xaml;
+using namespace ::ABI::Microsoft::Graphics::Canvas::UI::Xaml::Media;
 using namespace ::Microsoft::WRL::Wrappers;
 
 //
@@ -112,7 +113,7 @@ IFACEMETHODIMP CanvasAnimatedDrawEventArgs::get_Timing(CanvasTimingInformation* 
 // CanvasAnimatedControlFactory
 //
 
-class CanvasAnimatedControlFactory : public ActivationFactory<>,
+class CanvasAnimatedControlFactory : public AgileActivationFactory<>,
                                      private LifespanTracker<CanvasAnimatedControlFactory>
 {
     std::weak_ptr<ICanvasAnimatedControlAdapter> m_adapter;
@@ -143,13 +144,11 @@ public:
 //
 
 CanvasAnimatedControl::CanvasAnimatedControl(std::shared_ptr<ICanvasAnimatedControlAdapter> adapter)
-    : BaseControl<CanvasAnimatedControlTraits>(adapter, false)
+    : BaseControlWithDrawHandler<CanvasAnimatedControlTraits>(adapter, false)
     , m_stepTimer(adapter)
     , m_hasUpdated(false)
 {
-    CreateSwapChainPanel();
-
-    auto swapChainPanel = As<ISwapChainPanel>(m_canvasSwapChainPanel);
+    CreateContentControl();
 
     m_sharedState.IsStepTimerFixedStep = m_stepTimer.IsFixedTimeStep();
     m_sharedState.TargetElapsedTime = m_stepTimer.GetTargetElapsedTicks();
@@ -159,6 +158,46 @@ CanvasAnimatedControl::~CanvasAnimatedControl()
 {
     // These should all have been canceled on unload
     assert(m_sharedState.PendingAsyncActions.empty());
+}
+
+IFACEMETHODIMP CanvasAnimatedControl::put_ClearColor(
+    Color value)
+{
+    if (m_designModeShape)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                ComPtr<IBrush> brush;
+                ThrowIfFailed(m_designModeShape->get_Fill(&brush));
+
+                ThrowIfFailed(As<ISolidColorBrush>(brush)->put_Color(value));
+            });
+    }
+    else
+    {
+        return BaseControlWithDrawHandler::put_ClearColor(value);
+    }
+}
+
+IFACEMETHODIMP CanvasAnimatedControl::get_ClearColor(
+    Color* value)
+{
+    if (m_designModeShape)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                ComPtr<IBrush> brush;
+                ThrowIfFailed(m_designModeShape->get_Fill(&brush));
+
+                ThrowIfFailed(As<ISolidColorBrush>(brush)->get_Color(value));
+            });
+    }
+    else
+    {
+        return BaseControlWithDrawHandler::get_ClearColor(value);
+    }
 }
 
 IFACEMETHODIMP CanvasAnimatedControl::add_Update(
@@ -229,8 +268,7 @@ IFACEMETHODIMP CanvasAnimatedControl::put_IsFixedTimeStep(boolean value)
     return ExceptionBoundary(
         [&]
         {
-            auto lock = GetLock();
-
+            auto lock = Lock(m_sharedStateMutex);
             m_sharedState.IsStepTimerFixedStep = !!value;
         });
 }
@@ -242,8 +280,7 @@ IFACEMETHODIMP CanvasAnimatedControl::get_IsFixedTimeStep(boolean* value)
         {
             CheckInPointer(value);
 
-            auto lock = GetLock();
-
+            auto lock = Lock(m_sharedStateMutex);
             *value = m_sharedState.IsStepTimerFixedStep; 
         });
 }
@@ -253,13 +290,12 @@ IFACEMETHODIMP CanvasAnimatedControl::put_TargetElapsedTime(TimeSpan value)
     return ExceptionBoundary(
         [&]
         {
-            auto lock = GetLock();
-
             if (value.Duration <= 0)
             {
-                ThrowHR(E_INVALIDARG, HStringReference(Strings::ExpectedPositiveNonzero).Get());
+                ThrowHR(E_INVALIDARG, Strings::ExpectedPositiveNonzero);
             }
 
+            auto lock = Lock(m_sharedStateMutex);
             m_sharedState.TargetElapsedTime = value.Duration;
         });
 }
@@ -271,8 +307,7 @@ IFACEMETHODIMP CanvasAnimatedControl::get_TargetElapsedTime(TimeSpan* value)
         {
             CheckInPointer(value);
 
-            auto lock = GetLock();
-
+            auto lock = Lock(m_sharedStateMutex);
             assert(m_sharedState.TargetElapsedTime <= INT64_MAX);
 
             TimeSpan timeSpan = {};
@@ -286,7 +321,7 @@ IFACEMETHODIMP CanvasAnimatedControl::put_Paused(boolean value)
     return ExceptionBoundary(
         [&]
         {
-            auto lock = GetLock();
+            auto lock = Lock(m_sharedStateMutex);
 
             bool oldState = m_sharedState.IsPaused;
             m_sharedState.IsPaused = !!value;
@@ -308,7 +343,8 @@ IFACEMETHODIMP CanvasAnimatedControl::put_Paused(boolean value)
                     m_sharedState.TimeSpentPaused += std::max(0LL, (currentTime - m_sharedState.TimeWhenPausedWasSet));
                     assert(m_sharedState.TimeSpentPaused >= 0);
 
-                    Changed(lock);
+                    lock.unlock();
+                    Changed(ChangeReason::Other);
                 }
                 else
                 {
@@ -325,9 +361,32 @@ IFACEMETHODIMP CanvasAnimatedControl::get_Paused(boolean* value)
         {
             CheckInPointer(value);
 
-            auto lock = GetLock();
-
+            auto lock = Lock(m_sharedStateMutex);
             *value = m_sharedState.IsPaused;
+        });
+}
+
+IFACEMETHODIMP CanvasAnimatedControl::get_Size(Size* value)
+{
+    return ExceptionBoundary(
+        [&]
+        {
+            CheckInPointer(value);
+
+            // While a game loop tick is running we want to only return the size
+            // that this tick is operating with.  This avoids a race condition
+            // where, mid tick, the control is resized, resulting in get_Size
+            // returning a value that's different to the size of the swap chain
+            // that'll be drawn to.
+            auto lock = Lock(m_sharedStateMutex);
+            if (m_sharedState.IsInTick)
+            {
+                *value = m_sharedState.SizeSeenByGameLoop;
+                return;
+            }
+            lock.unlock();
+
+            *value = GetCurrentSize();
         });
 }
 
@@ -336,15 +395,17 @@ IFACEMETHODIMP CanvasAnimatedControl::Invalidate()
     return ExceptionBoundary(
         [&]
         {
-            auto lock = GetLock();
+            auto lock = Lock(m_sharedStateMutex);
 
             auto wasInvalidated = m_sharedState.Invalidated;
             
             m_sharedState.Invalidated = true;
 
+            lock.unlock();
+
             if (!wasInvalidated)
             {
-                Changed(lock);
+                Changed(ChangeReason::Other);
             }
         });
 }
@@ -354,7 +415,7 @@ IFACEMETHODIMP CanvasAnimatedControl::ResetElapsedTime()
     return ExceptionBoundary(
         [&]
         {
-            auto lock = GetLock();
+            auto lock = Lock(m_sharedStateMutex);
 
             m_sharedState.ShouldResetElapsedTime = true;
         });
@@ -367,6 +428,14 @@ IFACEMETHODIMP CanvasAnimatedControl::CreateCoreIndependentInputSource(
     return ExceptionBoundary(
         [&]
         {
+            if (!m_canvasSwapChainPanel)
+            {
+                assert(GetAdapter()->IsDesignModeEnabled());
+                // When running in the designer there is no swap chain panel and
+                // we don't support CreateCoreIndependentInputSource.
+                ThrowHR(E_NOTIMPL);
+            }
+            
             auto swapChainPanel = As<ISwapChainPanel>(m_canvasSwapChainPanel);
             ThrowIfFailed(swapChainPanel->CreateCoreIndependentInputSource(deviceTypes, returnValue));
         });
@@ -377,6 +446,13 @@ IFACEMETHODIMP CanvasAnimatedControl::RemoveFromVisualTree()
     HRESULT hr = ExceptionBoundary(
         [&]
         {
+            // In the designer there is no swap chain panel.
+            if (!m_canvasSwapChainPanel)
+            {
+                assert(GetAdapter()->IsDesignModeEnabled());
+                return;
+            }
+            
             ThrowIfFailed(m_canvasSwapChainPanel->RemoveFromVisualTree());
             m_canvasSwapChainPanel.Reset();
         });
@@ -384,7 +460,7 @@ IFACEMETHODIMP CanvasAnimatedControl::RemoveFromVisualTree()
     if (FAILED(hr))
         return hr;
 
-    return BaseControl::RemoveFromVisualTree();
+    return BaseControlWithDrawHandler::RemoveFromVisualTree();
 }
 
 IFACEMETHODIMP CanvasAnimatedControl::get_HasGameLoopThreadAccess(boolean* value)
@@ -421,7 +497,7 @@ IFACEMETHODIMP CanvasAnimatedControl::RunOnGameLoopThreadAsync(
             CheckInPointer(callback);
             CheckAndClearOutPointer(asyncAction);
 
-            auto lock = GetLock();
+            auto lock = Lock(m_sharedStateMutex);
 
             auto newAsyncAction = Make<AnimatedControlAsyncAction>(callback);
             CheckMakeResult(newAsyncAction);
@@ -458,7 +534,8 @@ IFACEMETHODIMP CanvasAnimatedControl::RunOnGameLoopThreadAsync(
             // loop, otherwise we won't get around to running the callback.
             if (m_sharedState.IsPaused)
             {
-                Changed(lock);
+                lock.unlock();
+                Changed(ChangeReason::Other);
             }
         });
 }
@@ -474,9 +551,9 @@ void CanvasAnimatedControl::CreateOrUpdateRenderTarget(
     bool alphaModeChanged = (renderTarget->AlphaMode != newAlphaMode);
     bool dpiChanged = (renderTarget->Dpi != newDpi);
     bool sizeChanged = (renderTarget->Size != newSize);
-    bool needsCreate = needsTarget || alphaModeChanged || dpiChanged;
+    bool needsCreate = needsTarget || alphaModeChanged;
 
-    if (!needsCreate && !sizeChanged)
+    if (!needsCreate && !sizeChanged && !dpiChanged)
         return;
 
     if (newSize.Width <= 0 || newSize.Height <= 0)
@@ -485,11 +562,12 @@ void CanvasAnimatedControl::CreateOrUpdateRenderTarget(
         *renderTarget = RenderTarget{};
         ThrowIfFailed(m_canvasSwapChainPanel->put_SwapChain(nullptr));
     }
-    else if (sizeChanged && !needsCreate)
+    else if ((sizeChanged || dpiChanged) && !needsCreate)
     {
-        ThrowIfFailed(renderTarget->Target->ResizeBuffersWithWidthAndHeight(newSize.Width, newSize.Height));
+        ThrowIfFailed(renderTarget->Target->ResizeBuffersWithWidthAndHeightAndDpi(newSize.Width, newSize.Height, newDpi));
 
         renderTarget->Size = newSize;
+        renderTarget->Dpi = newDpi;
     }
     else
     {
@@ -523,6 +601,15 @@ ComPtr<CanvasAnimatedDrawEventArgs> CanvasAnimatedControl::CreateDrawEventArgs(
 void CanvasAnimatedControl::Loaded()
 {
     assert(!m_gameLoop);
+
+    // When running in the designer there isn't a swap chain panel - and we
+    // don't create the game loop.
+    if (!m_canvasSwapChainPanel)
+    {
+        assert(GetAdapter()->IsDesignModeEnabled());
+        return;
+    }
+    
     m_gameLoop = GetAdapter()->CreateAndStartGameLoop(this, As<ISwapChainPanel>(m_canvasSwapChainPanel).Get());
 }
 
@@ -558,12 +645,12 @@ void CanvasAnimatedControl::ApplicationSuspending(ISuspendingEventArgs* args)
     //     deferral altogether, but deferring that decision to the existing mechanisms
     //     inside Changed allows sharing a single suspend codepath for all possible states.
     //
-    Changed(GetLock());
+    Changed(ChangeReason::Other);
 }
 
 void CanvasAnimatedControl::ApplicationResuming()
 {
-    Changed(GetLock());
+    Changed(ChangeReason::Other);
 }
 
 void CanvasAnimatedControl::WindowVisibilityChanged()
@@ -574,19 +661,19 @@ void CanvasAnimatedControl::WindowVisibilityChanged()
     //
 }
 
-void CanvasAnimatedControl::Changed(Lock const& lock, ChangeReason reason)
+void CanvasAnimatedControl::Changed(ChangeReason reason)
 {
     //
     // This may be called from any thread.
     //
-
-    MustOwnLock(lock);
 
     //
     // Early out if we are in an inactive state where there is no possible work to be done.
     //
     if (!IsLoaded() && !m_suspendingDeferral)
         return;
+
+    auto lock = Lock(m_sharedStateMutex);
 
     switch (reason)
     {
@@ -625,7 +712,7 @@ void CanvasAnimatedControl::Changed(Lock const& lock, ChangeReason reason)
 
     WeakRef weakSelf = AsWeak(this);
     auto callback = Callback<AddFtmBase<IDispatchedHandler>::Type>(
-        [weakSelf] () mutable
+        [weakSelf]() mutable
         {
             return ExceptionBoundary(
                 [&]
@@ -652,12 +739,11 @@ void CanvasAnimatedControl::ChangedImpl()
     // This method, as an action, is always run on the UI thread.
     //
 
-    auto lock = GetLock();
+    auto lock = Lock(m_sharedStateMutex);
 
     bool needsDraw = m_sharedState.NeedsDraw || m_sharedState.Invalidated;
     bool isPaused = m_sharedState.IsPaused;
     bool hasPendingActions = !m_sharedState.PendingAsyncActions.empty();
-    DeviceCreationOptions deviceCreationOptions = GetDeviceCreationOptions(lock);
 
     lock.unlock();
 
@@ -759,7 +845,7 @@ void CanvasAnimatedControl::ChangedImpl()
     //
     // Try and start the update/render thread
     //
-    RunWithRenderTarget(GetCurrentSize(), deviceCreationOptions,
+    RunWithRenderTarget(
         [&] (CanvasSwapChain* target, ICanvasDevice*, Color const& clearColor, bool areResourcesCreated)
         {
             // The clearColor passed to us is ignored since this needs to be
@@ -799,15 +885,25 @@ void CanvasAnimatedControl::ChangedImpl()
         });
 }
 
-void CanvasAnimatedControl::CreateSwapChainPanel()
+void CanvasAnimatedControl::CreateContentControl()
 {
-    auto swapChainPanelAdapter = GetAdapter();
-    m_canvasSwapChainPanel = swapChainPanelAdapter->CreateCanvasSwapChainPanel();
+    auto adapter = GetAdapter();
 
-    auto swapChainPanelAsUIElement = As<IUIElement>(m_canvasSwapChainPanel);
+    ComPtr<IUIElement> content;
+
+    if (adapter->IsDesignModeEnabled())
+    {
+        m_designModeShape = adapter->CreateDesignModeShape();
+        content = As<IUIElement>(m_designModeShape);
+    }
+    else
+    {
+        m_canvasSwapChainPanel = adapter->CreateCanvasSwapChainPanel();
+        content = As<IUIElement>(m_canvasSwapChainPanel);
+    }
 
     auto thisAsUserControl = As<IUserControl>(GetComposableBase());
-    ThrowIfFailed(thisAsUserControl->put_Content(swapChainPanelAsUIElement.Get()));
+    ThrowIfFailed(thisAsUserControl->put_Content(content.Get()));
 }
 
 void CanvasAnimatedControl::IssueAsyncActions(
@@ -847,7 +943,7 @@ void CanvasAnimatedControl::IssueAsyncActions(
         //
         if (FAILED(actionsResult))
         {
-            auto lock = GetLock();
+            auto lock = Lock(m_sharedStateMutex);
 
             m_sharedState.PendingAsyncActions.insert(m_sharedState.PendingAsyncActions.begin(), actionIter+1, pendingActions.end());
 
@@ -862,7 +958,7 @@ void CanvasAnimatedControl::CancelAsyncActions()
 {
     std::vector<ComPtr<AnimatedControlAsyncAction>> actions;
 
-    auto lock = GetLock();
+    auto lock = Lock(m_sharedStateMutex);
     std::swap(actions, m_sharedState.PendingAsyncActions);
     lock.unlock();
 
@@ -886,47 +982,16 @@ bool CanvasAnimatedControl::Tick(
     CanvasSwapChain* swapChain, 
     bool areResourcesCreated)
 {
+    EventWrite_CanvasAnimatedControl_Tick_Start();
+    auto tickEnd = MakeScopeWarden([] { EventWrite_CanvasAnimatedControl_Tick_Stop(); });
+
     RenderTarget* renderTarget = GetCurrentRenderTarget();
 
-    //
-    // On hardware rendering, the control synchronizes to vertical blank 
-    // in order to
-    //
-    // 1) Reduce the amount of busy-spinning for targetElapsedTime on fixed timestep 
-    // 2) Avoid performing imperceptible work on variable timestep.
-    //
-    // Unlike an awaitable timer for the swap chain object, this
-    // behaves identically regardless of whether any Present was
-    // actually issued.
-    //
-    // The exact behavior depends on the device of this control- whether
-    // it is hardware or software. CanvasAnimatedControl does not typically 
-    // run on software 'render-only' mode. It may run on basic display, but that has 
-    // no special implications for synching with v-blank. 
-    //
-    // The only way it may be initialized with WARP render-only is if
-    // something is malfunctioning in the system's driver, causing
-    // WARP to be used as a fallback (see CanvasDeviceManager::MakeD3D11Device). 
-    // 
-    // In the future, we may allow the app to use its own device with
-    // the control, making the software path to be more accessible to an app.
-    //
-    // On a software render-only device, the display is not accessible and
-    // IDXGIAdapter::EnumOutputs will fail. In this case, WaitForVerticalBlank
-    // will yield.
-    //
-    if (swapChain)
-    {
-        ThrowIfFailed(swapChain->WaitForVerticalBlank());
-    }
-    else
-    {
-        //
-        // If there is no swap chain available, 
-        // a sleep is used instead to avoid pegging the CPU.
-        //
-        GetAdapter()->Sleep(static_cast<DWORD>(StepTimer::TicksToMilliseconds(StepTimer::DefaultTargetElapsedTime)));
-    }
+    if (IsSuspended())
+        return false;
+
+    if (!IsLoaded())
+        return false;
 
     //
     // Access shared state that's shared between the UI thread and the
@@ -934,13 +999,24 @@ bool CanvasAnimatedControl::Tick(
     // lock for as little time as possible.
     //
 
-    auto lock = GetLock();
+    Color clearColor;
+    Size currentSize;
+    float currentDpi;
+    GetClearColorSizeAndDpi(&clearColor, &currentSize, &currentDpi);
 
-    if (IsSuspended())
-        return false;
+    auto lock = Lock(m_sharedStateMutex);
 
-    if (!IsLoaded())
-        return false;
+    m_sharedState.SizeSeenByGameLoop = currentSize;
+    m_sharedState.IsInTick = true;
+
+    auto tickEnd2 = MakeScopeWarden(
+        [&]
+        {
+            if (!lock.owns_lock())
+                lock.lock();
+            
+            m_sharedState.IsInTick = false;
+        });
 
     m_stepTimer.SetTargetElapsedTicks(m_sharedState.TargetElapsedTime);
     m_stepTimer.SetFixedTimeStep(m_sharedState.IsStepTimerFixedStep);
@@ -953,10 +1029,6 @@ bool CanvasAnimatedControl::Tick(
     bool deviceNeedsReCreationWithNewOptions = m_sharedState.DeviceNeedsReCreationWithNewOptions;
     m_sharedState.DeviceNeedsReCreationWithNewOptions = false;
     m_sharedState.ShouldResetElapsedTime = false;
-
-    Color clearColor;
-    Size currentSize;
-    GetSharedState(lock, &clearColor, &currentSize);
 
     // If the opacity has changed then the swap chain will need to be
     // recreated before we can draw.
@@ -1040,7 +1112,7 @@ bool CanvasAnimatedControl::Tick(
         // we want to respond immediately.
         if (!invalidated)
         {
-            auto lock2 = GetLock();
+            auto lock2 = Lock(m_sharedStateMutex);
             
             invalidated = m_sharedState.Invalidated;
             if (areResourcesCreated)
@@ -1054,6 +1126,7 @@ bool CanvasAnimatedControl::Tick(
 
     UpdateResult updateResult{};
 
+    EventWrite_CanvasAnimatedControl_Update_Start(areResourcesCreated, isPaused);
     if (areResourcesCreated && !isPaused)
     {
         bool forceUpdate = false;
@@ -1071,6 +1144,7 @@ bool CanvasAnimatedControl::Tick(
 
         m_hasUpdated |= updateResult.Updated;
     }
+    EventWrite_CanvasAnimatedControl_Update_Stop(updateResult.Updated);
 
     //
     // We only ever Draw/Present if an Update has actually happened.  This
@@ -1078,20 +1152,36 @@ bool CanvasAnimatedControl::Tick(
     // This is desireable since using Present to wait for the vsync can
     // result in missed frames.
     //
+    bool drew = false;
     if ((updateResult.Updated || forceDraw || invalidated) && isVisible)
     {
+        bool zeroSizedTarget = currentSize.Width <= 0 || currentSize.Height <= 0;
+        
+        // A dpi change doesn't matter on a zero-sized target.
+        bool dpiChangedOnNonZeroSizedTarget = renderTarget->Dpi != currentDpi && !zeroSizedTarget;
+
+        bool sizeChanged = renderTarget->Size != currentSize;
+
         //
-        // If the control's size has changed then the swapchain's buffers
+        // If the control's size or dpi has changed then the swapchain's buffers
         // need to be resized as appropriate.
         //
-        if (renderTarget->Size != currentSize)
+        if (sizeChanged || dpiChangedOnNonZeroSizedTarget)
         {
-            if (currentSize.Width <= 0 || currentSize.Height <= 0 || !renderTarget->Target)
+            if (zeroSizedTarget || !renderTarget->Target)
             {
                 //
                 // Switching between zero and non-zero sized rendertargets requires calling
                 // CanvasSwapChainPanel::put_SwapChain, so must be done on the UI thread.
                 // We must stop the update/render thread to allow this to happen.
+                //
+                return false;
+            }
+            else if (dpiChangedOnNonZeroSizedTarget)
+            {
+                //
+                // A DPI change should stop and start the render thread, and
+                // raise a CreateResources.
                 //
                 return false;
             }
@@ -1104,8 +1194,14 @@ bool CanvasAnimatedControl::Tick(
                 //  - the current render target won't be updated by the UI thread
                 //    while the update/render thread is running
                 //
-                ThrowIfFailed(renderTarget->Target->ResizeBuffersWithWidthAndHeight(currentSize.Width, currentSize.Height));
+                ThrowIfFailed(renderTarget->Target->ResizeBuffersWithWidthAndHeightAndDpi(currentSize.Width, currentSize.Height, currentDpi));
+
+                //
+                // The size and dpi fields of the render target object represent the real, committed state of the render
+                // target, while currentSize/currentDpi represent the thing last requested by the app.
+                //
                 renderTarget->Size = currentSize;
+                renderTarget->Dpi = currentDpi;
             }
         }
 
@@ -1113,17 +1209,64 @@ bool CanvasAnimatedControl::Tick(
         {
             bool invokeDrawHandlers = (areResourcesCreated && (m_hasUpdated || invalidated));
 
+            EventWrite_CanvasAnimatedControl_Draw_Start(invokeDrawHandlers, updateResult.IsRunningSlowly);
             Draw(renderTarget->Target.Get(), clearColor, invokeDrawHandlers, updateResult.IsRunningSlowly);
+            EventWrite_CanvasAnimatedControl_Draw_Stop();
+            EventWrite_CanvasAnimatedControl_Present_Start();            
             ThrowIfFailed(renderTarget->Target->Present());
+            EventWrite_CanvasAnimatedControl_Present_Stop();
+
+            drew = true;
         }
     }
 
+    //
+    // The call to Present() usually blocks until a previous frame has been
+    // composed into the scene.  The happens because the swap chain has a
+    // limited number of buffers available, and Present() won't return until
+    // there's a buffer available to draw the next frame on.
+    //
+    // In some cases the Present() may return quickly.  For example, there may
+    // already be a buffer free because the GPU is starting to catch up with the
+    // GPU.  In fixed time step mode this will result in the next Tick happening
+    // soon enough that there is no work to do, and so we don't do a
+    // Draw/Present.
+    //
+    // Without the Present() call to block the CPU the game loop thread ends up
+    // busy waiting, pegging a CPU, drawing more power and draining the battery
+    // on a mobile device.  This is undesireable!
+    //
+    // To prevent this from happening we call WaitForVerticalBlank to delay the
+    // next tick.
+    //
+    // Some caveats here:
+    //
+    //   - software devices do not support WaitForVerticalBlank. In this case
+    //     the CanvasSwapChain does a Sleep(0).
+    //
+    //   - if there's no swap chain (eg the window is invisible) then we just
+    //     sleep
+    //
+    if (!drew || !m_stepTimer.IsFixedTimeStep())
+    {
+        EventWrite_CanvasAnimatedControl_WaitForVerticalBlank_Start();
+        if (swapChain)
+        {
+            ThrowIfFailed(swapChain->WaitForVerticalBlank());
+        }
+        else
+        {
+            GetAdapter()->Sleep(static_cast<DWORD>(StepTimer::TicksToMilliseconds(StepTimer::DefaultTargetElapsedTime)));
+        }
+        EventWrite_CanvasAnimatedControl_WaitForVerticalBlank_Stop();
+    }
+    
     return areResourcesCreated && !isPaused;
 }
 
 void CanvasAnimatedControl::OnTickLoopEnded()
 {
-    Changed(GetLock());
+    Changed(ChangeReason::Other);
 }
 
 CanvasAnimatedControl::UpdateResult CanvasAnimatedControl::Update(bool forceUpdate, int64_t timeSpentPaused)

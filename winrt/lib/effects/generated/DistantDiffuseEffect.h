@@ -19,7 +19,9 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         InspectableClass(RuntimeClass_Microsoft_Graphics_Canvas_Effects_DistantDiffuseEffect, BaseTrust);
 
     public:
-        DistantDiffuseEffect();
+        DistantDiffuseEffect(ICanvasDevice* device = nullptr, ID2D1Effect* effect = nullptr);
+
+        static IID const& EffectId() { return CLSID_D2D1DistantDiffuse; }
 
         EFFECT_PROPERTY(Azimuth, float);
         EFFECT_PROPERTY(Elevation, float);
@@ -28,6 +30,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         EFFECT_PROPERTY(LightColor, Color);
         EFFECT_PROPERTY(HeightMapKernelSize, Numerics::Vector2);
         EFFECT_PROPERTY(HeightMapInterpolationMode, CanvasImageInterpolation);
+        EFFECT_PROPERTY(LightColorHdr, Numerics::Vector4);
         EFFECT_PROPERTY(Source, IGraphicsEffectSource*);
 
         EFFECT_PROPERTY_MAPPING();

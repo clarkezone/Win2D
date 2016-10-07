@@ -3,6 +3,7 @@
 // Licensed under the MIT License. See LICENSE.txt in the project root for license information.
 
 #include "pch.h"
+#include "stubs/StubDxgiSwapChain.h"
 
 std::shared_ptr<CanvasAnimatedControlTestAdapter> CreateAnimatedControlTestAdapter(
     ComPtr<MockD2DDeviceContext> const& deviceContext,
@@ -25,7 +26,7 @@ std::shared_ptr<CanvasAnimatedControlTestAdapter> CreateAnimatedControlTestAdapt
         int32_t bufferCount,
         CanvasAlphaMode alphaMode)
         {
-            auto dxgiSwapChain = Make<MockDxgiSwapChain>();
+            auto dxgiSwapChain = Make<StubDxgiSwapChain>();
 
             dxgiSwapChain->Present1Method.AllowAnyCall();
             dxgiSwapChain->SetMatrixTransformMethod.AllowAnyCall();
@@ -85,14 +86,10 @@ std::shared_ptr<CanvasAnimatedControlTestAdapter> CreateAnimatedControlTestAdapt
             return canvasDevice.CopyTo(device);
         });
 
-    // Capture the adapter by pointer, not shared_ptr, to avoid a refcount cycle
-    // when we assign the lambda to one of the adapter's own methods.
-    auto adapterPtr = adapter.get();
-
     adapter->CreateCanvasSwapChainMethod.AllowAnyCall(
         [=](ICanvasDevice* device, float width, float height, float dpi, CanvasAlphaMode alphaMode)
         {
-            auto swapChain = adapterPtr->SwapChainManager->Create(
+            auto swapChain = CanvasSwapChain::CreateNew(
                 device,
                 1.0f,
                 1.0f,
@@ -106,3 +103,10 @@ std::shared_ptr<CanvasAnimatedControlTestAdapter> CreateAnimatedControlTestAdapt
 
     return adapter;
 }
+
+DpiScalingTestCase dpiScalingTestCases[]
+{
+    { 2.0f, DEFAULT_DPI },
+    { 1.5f, DEFAULT_DPI / 2.0f },
+    { 5.53f, DEFAULT_DPI * 2.0f },
+};

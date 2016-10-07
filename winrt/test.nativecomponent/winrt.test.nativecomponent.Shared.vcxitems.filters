@@ -6,6 +6,8 @@
     <ClCompile Include="$(MSBuildThisFileDirectory)SurfaceCreator.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)VectorCreator.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)EffectAccessor.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)ShaderCompiler.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)ReflectionHelper.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="$(MSBuildThisFileDirectory)pch.h" />

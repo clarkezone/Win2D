@@ -19,11 +19,14 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         InspectableClass(RuntimeClass_Microsoft_Graphics_Canvas_Effects_ShadowEffect, BaseTrust);
 
     public:
-        ShadowEffect();
+        ShadowEffect(ICanvasDevice* device = nullptr, ID2D1Effect* effect = nullptr);
+
+        static IID const& EffectId() { return CLSID_D2D1Shadow; }
 
         EFFECT_PROPERTY(BlurAmount, float);
         EFFECT_PROPERTY(ShadowColor, Color);
         EFFECT_PROPERTY(Optimization, EffectOptimization);
+        EFFECT_PROPERTY(ShadowColorHdr, Numerics::Vector4);
         EFFECT_PROPERTY(Source, IGraphicsEffectSource*);
 
         EFFECT_PROPERTY_MAPPING();

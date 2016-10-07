@@ -167,7 +167,7 @@ TEST_CLASS(CanvasSharedControlTests_InteractionWithRecreatableDeviceManager)
         f.Adapter->LogicalDpi = 100;
         f.Adapter->RaiseDpiChangedEvent();
 
-        // When the control loads, the DPI change shoudl be picked up.
+        // When the control loads, the DPI change should be picked up.
         f.DeviceManager->SetDpiChangedMethod.SetExpectedCalls(1);
         f.Load();
     }
@@ -293,12 +293,10 @@ TEST_CLASS(CanvasSharedControlTests_InteractionWithRecreatableDeviceManager)
         template<>
         void PrepareAdapter<CanvasAnimatedControlTraits>()
         {
-            auto swapChainManager = std::make_shared<MockCanvasSwapChainManager>();
-
             Adapter->CreateCanvasSwapChainMethod.AllowAnyCall(
                 [=] (ICanvasDevice*, float, float, float, CanvasAlphaMode)
                 { 
-                    auto mockSwapChain = swapChainManager->CreateMock(); 
+                    auto mockSwapChain = Make<MockCanvasSwapChain>();
                     mockSwapChain->CreateDrawingSessionMethod.AllowAnyCall(
                         [] (Color, ICanvasDrawingSession** value)
                         {
@@ -433,12 +431,98 @@ TEST_CLASS(CanvasSharedControlTests_CommonAdapter)
         ThrowIfFailed(f.Control->get_Size(&size));
         Assert::AreEqual(newSize, size);
     }
+
+    TEST_METHOD_EX(CanvasCreateResourcesArgs_ActivatedByApp_GetTrackedAction_NullArg)
+    {
+        auto args = Make<CanvasCreateResourcesEventArgs>(CanvasCreateResourcesReason::DpiChanged, nullptr);
+
+        Assert::AreEqual(E_INVALIDARG, args->GetTrackedAction(nullptr));
+    }
+
+    TEST_METHOD_EX(CanvasCreateResourcesArgs_ActivatedByApp_GetTrackedAction_InitiallyReturnsNoAction)
+    {
+        auto args = Make<CanvasCreateResourcesEventArgs>(CanvasCreateResourcesReason::DpiChanged, nullptr);
+
+        ComPtr<IAsyncAction> action;
+        Assert::AreEqual(S_OK, args->GetTrackedAction(&action));
+        Assert::IsNull(action.Get());
+    }
+
+    TEST_METHOD_EX(CanvasCreateResourcesArgs_ActivatedByApp_TrackAsyncAction_DoesntDoAnythingBad)
+    {
+        auto args = Make<CanvasCreateResourcesEventArgs>(CanvasCreateResourcesReason::DpiChanged, nullptr);
+
+        auto mockAsyncAction = Make<MockAsyncAction>();
+
+        Assert::AreEqual(S_OK, args->TrackAsyncAction(mockAsyncAction.Get()));
+    }
+
+    TEST_METHOD_EX(CanvasCreateResourcesArgs_ActivatedByApp_TrackAsyncAction_AddsReferenceToAction)
+    {
+        auto args = Make<CanvasCreateResourcesEventArgs>(CanvasCreateResourcesReason::DpiChanged, nullptr);
+
+        auto mockAsyncAction = Make<MockAsyncAction>();
+
+        // Use AddRef/Release to read back a refcount.
+        mockAsyncAction.Get()->AddRef();
+        auto refCount1 = mockAsyncAction.Get()->Release();
+
+        Assert::AreEqual(S_OK, args->TrackAsyncAction(mockAsyncAction.Get()));
+
+        mockAsyncAction.Get()->AddRef();
+        auto refCount2 = mockAsyncAction.Get()->Release();
+
+        Assert::AreEqual(refCount1 + 1, refCount2);
+    }
+
+    TEST_METHOD_EX(CanvasCreateResourcesArgs_ActivatedByApp_GetTrackedAction_ReturnsTrackedAction)
+    {
+        auto args = Make<CanvasCreateResourcesEventArgs>(CanvasCreateResourcesReason::DpiChanged, nullptr);
+
+        auto mockAsyncAction = Make<MockAsyncAction>();
+
+        ThrowIfFailed(args->TrackAsyncAction(mockAsyncAction.Get()));
+
+        ComPtr<IAsyncAction> returnedAction;
+        Assert::AreEqual(S_OK, args->GetTrackedAction(&returnedAction));
+
+        Assert::IsTrue(IsSameInstance(mockAsyncAction.Get(), returnedAction.Get()));
+    }
+
+    TEST_METHOD_EX(CanvasCreateResourcesArgs_ActivatedByApp_TrackAsyncAction_Twice_Fails)
+    {
+        auto args = Make<CanvasCreateResourcesEventArgs>(CanvasCreateResourcesReason::DpiChanged, nullptr);
+
+        auto mockAsyncAction1 = Make<MockAsyncAction>();
+        ThrowIfFailed(args->TrackAsyncAction(mockAsyncAction1.Get()));
+
+        auto mockAsyncAction2 = Make<MockAsyncAction>();
+        Assert::AreEqual(E_FAIL, args->TrackAsyncAction(mockAsyncAction2.Get()));
+
+        ValidateStoredErrorState(E_FAIL, Strings::MultipleAsyncCreateResourcesNotSupported);
+    }
+
+    TEST_METHOD_EX(CanvasCreateResourcesArgs_ActivatedByApp_TrackAsyncAction_Twice_GetTrackedActionReturnsCorrectThing)
+    {
+        auto args = Make<CanvasCreateResourcesEventArgs>(CanvasCreateResourcesReason::DpiChanged, nullptr);
+
+        auto mockAsyncAction1 = Make<MockAsyncAction>();
+        ThrowIfFailed(args->TrackAsyncAction(mockAsyncAction1.Get()));
+
+        auto mockAsyncAction2 = Make<MockAsyncAction>();
+        Assert::AreEqual(E_FAIL, args->TrackAsyncAction(mockAsyncAction2.Get()));
+
+        ComPtr<IAsyncAction> returnedAction;
+        Assert::AreEqual(S_OK, args->GetTrackedAction(&returnedAction));
+
+        Assert::IsTrue(IsSameInstance(mockAsyncAction1.Get(), returnedAction.Get()));
+    }
 };
 
 boolean allForceSoftwareRendererOptions[] = { false, true };
 
 template<typename TRAITS>
-struct DeviceCreationFixture : public BasicControlFixture<TRAITS>
+struct DeviceCreationFixture : public BasicControlWithDrawFixture<TRAITS>
 {
     RecreatableDeviceManager<TRAITS>* LastDeviceManager;
 
@@ -462,27 +546,27 @@ struct DeviceCreationFixture : public BasicControlFixture<TRAITS>
     }
     void ExpectOneGetSharedDevice()
     {
-        Adapter->DeviceFactory->GetSharedDeviceMethod.SetExpectedCalls(1,
+        Adapter->DeviceFactory->GetSharedDeviceWithForceSoftwareRendererMethod.SetExpectedCalls(1,
             [&](boolean, ICanvasDevice** device)
-        {
-            Make<StubCanvasDevice>().CopyTo(device);
-            return S_OK;
-        });
+            {
+                Make<StubCanvasDevice>().CopyTo(device);
+                return S_OK;
+            });
     }
 
     void DoNotExpectGetSharedDevice()
     {
-        Adapter->DeviceFactory->GetSharedDeviceMethod.SetExpectedCalls(0);
+        Adapter->DeviceFactory->GetSharedDeviceWithForceSoftwareRendererMethod.SetExpectedCalls(0);
     }
 
     void ExpectOneCreateDevice()
     {
         Adapter->DeviceFactory->CreateWithForceSoftwareRendererOptionMethod.SetExpectedCalls(1,
             [&](boolean, ICanvasDevice** device)
-        {
-            Make<StubCanvasDevice>().CopyTo(device);
-            return S_OK;
-        });
+            {
+                Make<StubCanvasDevice>().CopyTo(device);
+                return S_OK;
+            });
     }
 
     void DoNotExpectCreateDevice()
@@ -610,7 +694,7 @@ TEST_CLASS(CanvasSharedControlTests_DeviceApis)
 
             auto stubDevice = Make<StubCanvasDevice>();
 
-            f.Adapter->DeviceFactory->GetSharedDeviceMethod.SetExpectedCalls(1,
+            f.Adapter->DeviceFactory->GetSharedDeviceWithForceSoftwareRendererMethod.SetExpectedCalls(1,
                 [&](boolean forceSoftwareRenderer, ICanvasDevice** device)
                 {
                     Assert::AreEqual(expectedForceSoftwareRenderer, forceSoftwareRenderer);
@@ -883,6 +967,110 @@ TEST_CLASS(CanvasSharedControlTests_CustomDevice)
         for (int i = 0; i < 3; ++i)
         {
             Assert::AreEqual(S_OK, f.Control->put_CustomDevice(customDevice.Get()));
+        }
+    }
+};
+
+TEST_CLASS(CanvasSharedControlTests_DpiScaling)
+{
+    template<typename TRAITS>
+    struct Fixture : BasicControlFixture<TRAITS>
+    {
+        Fixture(float logicalDpi = DEFAULT_DPI)
+        {
+            CreateAdapter();
+            Adapter->LogicalDpi = logicalDpi;
+
+            CreateControl();
+        }
+    };
+
+    TEST_SHARED_CONTROL_BEHAVIOR(DpiScaling_get_DpiScale_Null)
+    {
+        Fixture<TRAITS> f;
+
+        Assert::AreEqual(E_INVALIDARG, f.Control->get_DpiScale(nullptr));
+    }
+
+    TEST_SHARED_CONTROL_BEHAVIOR(DpiScaling_put_DpiScale_InvalidNumbers)
+    {
+        Fixture<TRAITS> f;
+
+        Assert::AreEqual(E_INVALIDARG, f.Control->put_DpiScale(-FLT_EPSILON));
+        Assert::AreEqual(E_INVALIDARG, f.Control->put_DpiScale(0.0f));
+    }
+
+    TEST_SHARED_CONTROL_BEHAVIOR(DpiScaling_put_DpiScale_ValidNumbers)
+    {
+        Fixture<TRAITS> f;
+
+        Assert::AreEqual(S_OK, f.Control->put_DpiScale(FLT_EPSILON));
+        Assert::AreEqual(S_OK, f.Control->put_DpiScale(std::numeric_limits<float>::infinity()));
+    }
+
+    TEST_SHARED_CONTROL_BEHAVIOR(DpiScaling_get_DpiScale)
+    {
+        Fixture<TRAITS> f;
+
+        float expected = 0.123456f;
+        ThrowIfFailed(f.Control->put_DpiScale(expected));
+
+        float actual;
+        ThrowIfFailed(f.Control->get_DpiScale(&actual));
+
+        Assert::AreEqual(expected, actual);
+    }
+
+    TEST_SHARED_CONTROL_BEHAVIOR(DpiScaling_Default)
+    {
+        Fixture<TRAITS> f;
+
+        float dpiScale;
+        Assert::AreEqual(S_OK, f.Control->get_DpiScale(&dpiScale));
+        Assert::AreEqual(1.0f, dpiScale);
+    }
+
+    TEST_SHARED_CONTROL_BEHAVIOR(DpiScaling_Affects_get_Dpi)
+    {
+        for (auto testCase : dpiScalingTestCases)
+        {
+            Fixture<TRAITS> f(testCase.Dpi);
+
+            ThrowIfFailed(f.Control->put_DpiScale(testCase.DpiScale));
+
+            float dpi;
+            Assert::AreEqual(S_OK, f.Control->get_Dpi(&dpi));
+
+            Assert::AreEqual(testCase.DpiScale * testCase.Dpi, dpi);
+        }
+    }
+
+    TEST_SHARED_CONTROL_BEHAVIOR(DpiScaling_Affects_ConvertDipsToPixels)
+    {
+        for (auto testCase : dpiScalingTestCases)
+        {
+            float dpi = testCase.Dpi + 1; // Expects non-integral multiple of default DPI
+
+            Fixture<TRAITS> f(dpi);
+
+            ThrowIfFailed(f.Control->put_DpiScale(testCase.DpiScale));
+
+            VerifyConvertDipsToPixels(testCase.DpiScale * dpi, f.Control);
+        }
+    }
+
+    TEST_SHARED_CONTROL_BEHAVIOR(DpiScaling_Affects_ConvertPixelsToDips)
+    {
+        for (auto testCase : dpiScalingTestCases)
+        {
+            Fixture<TRAITS> f(testCase.Dpi);
+
+            ThrowIfFailed(f.Control->put_DpiScale(testCase.DpiScale));
+
+            const float testValue = 100;
+            float dips = 0;
+            ThrowIfFailed(f.Control->ConvertPixelsToDips((int)testValue, &dips));
+            Assert::AreEqual(testValue * DEFAULT_DPI / (testCase.Dpi * testCase.DpiScale), dips);
         }
     }
 };

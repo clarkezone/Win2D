@@ -5,25 +5,25 @@
 #pragma once
 
 #include "CustomFontManager.h"
+#include "TrimmingSignInformation.h"
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Text
 {
     using namespace ::Microsoft::WRL;
 
-    class CanvasTextLayout;
-    class CanvasTextLayoutManager;
-
-    struct CanvasTextLayoutTraits
-    {
-        typedef IDWriteTextLayout2 resource_t;
-        typedef CanvasTextLayout wrapper_t;
-        typedef ICanvasTextLayout wrapper_interface_t;
-        typedef CanvasTextLayoutManager manager_t;
-    };
+#if WINVER > _WIN32_WINNT_WINBLUE
+    typedef IDWriteTextLayout3 DWriteTextLayoutType;
+    typedef DWRITE_LINE_METRICS1 DWriteMetricsType;
+#else
+    typedef IDWriteTextLayout2 DWriteTextLayoutType;
+    typedef DWRITE_LINE_METRICS DWriteMetricsType;
+#endif
 
     class CanvasTextLayout : RESOURCE_WRAPPER_RUNTIME_CLASS(
-        CanvasTextLayoutTraits,
-        IClosable)
+        DWriteTextLayoutType,
+        CanvasTextLayout,
+        ICanvasTextLayout,
+        CloakedIid<ICanvasResourceWrapperWithDevice>)
     {
         InspectableClass(RuntimeClass_Microsoft_Graphics_Canvas_Text_CanvasTextLayout, BaseTrust);
 
@@ -31,11 +31,23 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
 
         ClosablePtr<ICanvasDevice> m_device;
 
+        std::shared_ptr<CustomFontManager> m_customFontManager;
+
+        CanvasLineSpacingMode m_lineSpacingMode;
+
+        TrimmingSignInformation m_trimmingSignInformation;
+
     public:
+        static ComPtr<CanvasTextLayout> CreateNew(
+            ICanvasResourceCreator* resourceCreator,
+            HSTRING textString,
+            ICanvasTextFormat* textFormat,
+            float requestedWidth,
+            float requestedHeight);
+
         CanvasTextLayout(
-            std::shared_ptr<CanvasTextLayoutManager> manager, 
-            IDWriteTextLayout2* layout, 
-            ICanvasDevice* device);
+            ICanvasDevice* device,
+            DWriteTextLayoutType* layout);
 
         IFACEMETHOD(GetFormatChangeIndices)(
             uint32_t* positionCount,
@@ -79,6 +91,14 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
 
         IFACEMETHOD(put_LineSpacingBaseline)(
             float value) override;
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+        IFACEMETHOD(get_LineSpacingMode)(
+            CanvasLineSpacingMode* value) override;
+
+        IFACEMETHOD(put_LineSpacingMode)(
+            CanvasLineSpacingMode value) override;
+#endif
 
         IFACEMETHOD(get_DefaultLocaleName)(
             HSTRING* value) override;
@@ -266,64 +286,124 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         IFACEMETHOD(put_LastLineWrapping)(
             boolean value) override;
 
+        IFACEMETHOD(get_TrimmingSign)(
+            CanvasTrimmingSign* value) override;
+
+        IFACEMETHOD(put_TrimmingSign)(
+            CanvasTrimmingSign value) override;
+
+        IFACEMETHOD(get_CustomTrimmingSign)(
+            ICanvasTextInlineObject** value) override;
+
+        IFACEMETHOD(put_CustomTrimmingSign)(
+            ICanvasTextInlineObject* value) override;
+
         //
         // Hit-testing and metrics-related methods
         //
-        IFACEMETHOD(get_LayoutBounds)(Rect* rect);
+        IFACEMETHOD(get_LayoutBounds)(Rect* rect) override;
 
-        IFACEMETHOD(get_LineCount)(int32_t* lineCount);
+        IFACEMETHOD(get_LayoutBoundsIncludingTrailingWhitespace)(Rect* rect) override;
 
-        IFACEMETHOD(get_DrawBounds)(Rect* rect);
+        IFACEMETHOD(get_LineCount)(int32_t* lineCount) override;
+
+        IFACEMETHOD(get_DrawBounds)(Rect* rect) override;
+
+        IFACEMETHOD(get_MaximumBidiReorderingDepth)(int32_t* depth) override;
 
         IFACEMETHOD(HitTest)(
             Vector2 point,
-            boolean* isHit);
+            boolean* isHit) override;
 
         IFACEMETHOD(HitTestWithCoords)(
             float x,
             float y,
-            boolean* isHit);
+            boolean* isHit) override;
 
         IFACEMETHOD(HitTestWithDescription)(
             Vector2 point,
             CanvasTextLayoutRegion* description,
-            boolean* isHit);
+            boolean* isHit) override;
 
         IFACEMETHOD(HitTestWithDescriptionAndTrailingSide)(
             Vector2 point,
             CanvasTextLayoutRegion* description,
             boolean* isTrailingSide,
-            boolean* isHit);
+            boolean* isHit) override;
 
         IFACEMETHOD(HitTestWithDescriptionAndCoords)(
             float x,
             float y,
             CanvasTextLayoutRegion* description,
-            boolean* isHit);
+            boolean* isHit) override;
 
         IFACEMETHOD(HitTestWithDescriptionAndCoordsAndTrailingSide)(
             float x,
             float y,
             CanvasTextLayoutRegion* description,
             boolean* isTrailingSide,
-            boolean* isHit);
+            boolean* isHit) override;
 
         IFACEMETHOD(GetCaretPosition(
             int32_t characterIndex,
             boolean trailingSideOfCharacter,
-            Vector2* location));
+            Vector2* location)) override;
 
         IFACEMETHOD(GetCaretPositionWithDescription(
             int32_t characterIndex,
             boolean trailingSideOfCharacter,
             CanvasTextLayoutRegion* description,
-            Vector2* location));
+            Vector2* location)) override;
 
         IFACEMETHOD(GetCharacterRegions(
             int32_t characterIndex,
             int32_t characterCount,
             uint32_t* descriptionCount,
-            CanvasTextLayoutRegion** descriptions));
+            CanvasTextLayoutRegion** descriptions)) override;
+
+        IFACEMETHOD(DrawToTextRenderer(
+            ICanvasTextRenderer* textRenderer,
+            Vector2 position)) override;
+
+        IFACEMETHOD(DrawToTextRendererWithCoords(
+            ICanvasTextRenderer* textRenderer,
+            float x,
+            float y)) override;
+
+        IFACEMETHOD(SetInlineObject)(
+            int32_t characterIndex,
+            int32_t characterCount,
+            ICanvasTextInlineObject* inlineObject) override;
+
+        IFACEMETHOD(GetInlineObject)(
+            int32_t characterIndex,
+            ICanvasTextInlineObject** inlineObject) override;
+
+        IFACEMETHOD(get_LineMetrics)(
+            uint32_t* valueCount,
+            CanvasLineMetrics** valueElements) override;
+
+        IFACEMETHOD(get_ClusterMetrics)(
+            uint32_t* valueCount,
+            CanvasClusterMetrics** valueElements) override;
+
+        IFACEMETHOD(GetCustomBrush)(
+            int32_t characterIndex,
+            IInspectable** brush) override;
+
+        IFACEMETHOD(SetCustomBrush)(
+            int32_t characterIndex,
+            int32_t characterCount,
+            IInspectable* brush) override;
+
+        IFACEMETHOD(GetTypography)(
+            int32_t characterIndex,
+            ICanvasTypography** typography) override;
+
+        IFACEMETHOD(SetTypography)(
+            int32_t characterIndex,
+            int32_t characterCount,
+            ICanvasTypography* typography) override;
 
         //
         // IClosable
@@ -331,55 +411,38 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
 
         IFACEMETHOD(Close)() override;
 
-        //
-        // Required by ResourceTracker
-        //
+        IFACEMETHOD(get_Device)(ICanvasDevice** device) override;
 
-        IFACEMETHOD(get_Device)(ICanvasDevice** device);
+        //
+        // Internal
+        //
+        void SetLineSpacingModeInternal(CanvasLineSpacingMode lineSpacingMode);
+
+        void SetTrimmingSignInternal(CanvasTrimmingSign trimmingSign);
+
+        void EnsureCustomTrimmingSignDevice(IDWriteTextLayout2* layout, ICanvasDevice* device);
 
     private:
-        ComPtr<ICanvasBrush> PolymorphicGetOrCreateBrush(
-            ComPtr<IUnknown> const& resource);
+        ComPtr<IInspectable> GetCustomBrushInternal(int32_t characterIndex);
+
+        void SetCustomBrushInternal(
+            int32_t characterIndex,
+            int32_t characterCount,
+            IInspectable* brush);
     };
 
-    class CanvasTextLayoutManager
-        : public ResourceManager<CanvasTextLayoutTraits>
-        , public CustomFontManager
-    {
-    public:
-        CanvasTextLayoutManager(std::shared_ptr<ICanvasTextFormatAdapter> adapter);
-
-        virtual ~CanvasTextLayoutManager() = default;
-
-        ComPtr<CanvasTextLayout> CreateNew(
-            ICanvasResourceCreator* resourceCreator,
-            HSTRING textString,
-            ICanvasTextFormat* textFormat,
-            float requestedWidth,
-            float requestedHeight);
-
-        virtual ComPtr<CanvasTextLayout> CreateWrapper(
-            ICanvasDevice* device,
-            IDWriteTextLayout2* resource);
-    };
 
     //
     // CanvasTextLayoutFactory
     //
 
     class CanvasTextLayoutFactory
-        : public ActivationFactory<
-        ICanvasTextLayoutFactory,
-        CloakedIid<ICanvasDeviceResourceFactoryNative >> ,
-        public PerApplicationManager<CanvasTextLayoutFactory, CanvasTextLayoutManager>
+        : public AgileActivationFactory<ICanvasTextLayoutFactory, ICanvasTextLayoutStatics>
+        , private LifespanTracker<CanvasTextLayoutFactory>
     {
         InspectableClassStatic(RuntimeClass_Microsoft_Graphics_Canvas_Text_CanvasTextLayout, BaseTrust);
 
     public:
-        IMPLEMENT_DEFAULT_ICANVASDEVICERESOURCEFACTORYNATIVE();
-
-        CanvasTextLayoutFactory();
-
         IFACEMETHOD(Create)(
             ICanvasResourceCreator* resourceCreator,
             HSTRING textString,
@@ -388,9 +451,10 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             float requestedHeight,
             ICanvasTextLayout** textLayout);
 
-        //
-        // Used by PerApplicationManager
-        //
-        static std::shared_ptr<CanvasTextLayoutManager> CreateManager();
+        IFACEMETHOD(GetGlyphOrientationTransform)(
+            CanvasGlyphOrientation glyphOrientation,
+            boolean isSideways,
+            Vector2 position,
+            Matrix3x2* transform) override;
     };
 }}}}}

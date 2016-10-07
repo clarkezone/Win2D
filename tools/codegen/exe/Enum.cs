@@ -2,13 +2,10 @@
 //
 // Licensed under the MIT License. See LICENSE.txt in the project root for license information.
 
-using System.Diagnostics;
-using System.Xml.Serialization;
-using System.Collections;
 using System.Collections.Generic;
-using System.Text;
-using System.IO;
+using System.Diagnostics;
 using System.Globalization;
+using System.Xml.Serialization;
 
 namespace CodeGen
 {
@@ -108,7 +105,7 @@ namespace CodeGen
             idlFile.Write(m_stylizedName);
             idlFile.Write(" = ");
 
-            if(!isFlags)
+            if (!isFlags)
             {
                 idlFile.Write("(int)");
             }
@@ -212,11 +209,11 @@ namespace CodeGen
             Namespace = rootProjectedNamespace;
             
             bool shouldProject = false;
-            if(overrides != null)
+            if (overrides != null)
             {
                 shouldProject = overrides.ShouldProject;
 
-                if(overrides.ProjectedNameOverride != null)
+                if (overrides.ProjectedNameOverride != null)
                 {
                     m_stylizedName = Formatter.Prefix + overrides.ProjectedNameOverride;
                 } 

@@ -19,7 +19,9 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         InspectableClass(RuntimeClass_Microsoft_Graphics_Canvas_Effects_PointSpecularEffect, BaseTrust);
 
     public:
-        PointSpecularEffect();
+        PointSpecularEffect(ICanvasDevice* device = nullptr, ID2D1Effect* effect = nullptr);
+
+        static IID const& EffectId() { return CLSID_D2D1PointSpecular; }
 
         EFFECT_PROPERTY(LightPosition, Numerics::Vector3);
         EFFECT_PROPERTY(SpecularExponent, float);
@@ -28,6 +30,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         EFFECT_PROPERTY(LightColor, Color);
         EFFECT_PROPERTY(HeightMapKernelSize, Numerics::Vector2);
         EFFECT_PROPERTY(HeightMapInterpolationMode, CanvasImageInterpolation);
+        EFFECT_PROPERTY(LightColorHdr, Numerics::Vector4);
         EFFECT_PROPERTY(Source, IGraphicsEffectSource*);
 
         EFFECT_PROPERTY_MAPPING();

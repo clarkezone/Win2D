@@ -4,50 +4,39 @@
 
 #pragma once
 
+#include "utils/LockUtilities.h"
+
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Geometry
 {
     using namespace ::Microsoft::WRL;
 
     class CanvasStrokeStyle;
 
-    [uuid(45BBB5CD-F9FB-4786-9491-D9BF0354DFF6)]
-    class ICanvasStrokeStyleInternal : public IUnknown
+    class __declspec(uuid("45BBB5CD-F9FB-4786-9491-D9BF0354DFF6"))
+    ICanvasStrokeStyleInternal : public IUnknown
     {
     public:
         // This realizes the stroke style if necessary.
         virtual ComPtr<ID2D1StrokeStyle1> GetRealizedD2DStrokeStyle(ID2D1Factory* d2dFactory) = 0;
     };
 
-    class CanvasStrokeStyleFactory : public ActivationFactory<CloakedIid<ICanvasFactoryNative>>,
-                                     private LifespanTracker<CanvasStrokeStyleFactory>
+    class CanvasStrokeStyleFactory
+        : public AgileActivationFactory<>
+        , private LifespanTracker<CanvasStrokeStyleFactory>
     {
-        InspectableClassStatic(RuntimeClass_Microsoft_Graphics_Canvas_Geometry_CanvasStrokeStyle, BaseTrust);
-
     public:
-
-        //
-        // ActivationFactory
-        //
-
-        IFACEMETHOD(ActivateInstance)(_COM_Outptr_ IInspectable** ppvObject) override;
-
-        //
-        // ICanvasFactoryNative
-        //
-
-        IFACEMETHOD(GetOrCreate)(
-            IUnknown* resource,
-            IInspectable** wrapper) override;
+        IFACEMETHOD(ActivateInstance)(IInspectable** ppvObject) override;
     };
 
-    class CanvasStrokeStyle : public RuntimeClass<
-        RuntimeClassFlags<WinRtClassicComMix>,
+    class CanvasStrokeStyle : RESOURCE_WRAPPER_RUNTIME_CLASS(
+        ID2D1StrokeStyle1,
+        CanvasStrokeStyle,
         ICanvasStrokeStyle,
-        ABI::Windows::Foundation::IClosable,
-        CloakedIid<ICanvasStrokeStyleInternal>>,
-        private LifespanTracker<CanvasStrokeStyle>
+        CloakedIid<ICanvasStrokeStyleInternal>)
     {
         InspectableClass(RuntimeClass_Microsoft_Graphics_Canvas_Geometry_CanvasStrokeStyle, BaseTrust);
+
+        std::mutex m_mutex;
 
         CanvasCapStyle m_startCap;
         CanvasCapStyle m_endCap;
@@ -65,7 +54,6 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         // The contained D2D resource could be NULL at any given time.
         //
         bool m_closed;
-        ComPtr<ID2D1StrokeStyle1> m_d2dStrokeStyle;
 
     public:
         CanvasStrokeStyle();
@@ -116,9 +104,17 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         IFACEMETHOD(Close)() override;
 
         // ICanvasStrokeStyleInternal
-        virtual ComPtr<ID2D1StrokeStyle1>  GetRealizedD2DStrokeStyle(ID2D1Factory* d2dFactory) override;
+        virtual ComPtr<ID2D1StrokeStyle1> GetRealizedD2DStrokeStyle(ID2D1Factory* d2dFactory) override;
+
+        // ICanvasResourceWrapperNative
+        IFACEMETHOD(GetNativeResource)(ICanvasDevice* device, float dpi, REFIID iid, void** outResource) override;
 
     private:
         void ThrowIfClosed();
+
+        Lock GetLock()
+        {
+            return Lock(m_mutex);
+        }
     };
 }}}}}

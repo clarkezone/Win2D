@@ -122,6 +122,7 @@ Licensed under the MIT License. See LICENSE.txt in the project root for license 
           <listItem><codeEntityReference>T:Microsoft.Graphics.Canvas.CanvasRenderTarget</codeEntityReference></listItem>
           <listItem><codeEntityReference>T:Microsoft.Graphics.Canvas.CanvasSwapChain</codeEntityReference></listItem>
           <listItem><codeEntityReference>T:Microsoft.Graphics.Canvas.UI.Xaml.CanvasControl</codeEntityReference></listItem>
+          <listItem><codeEntityReference>T:Microsoft.Graphics.Canvas.UI.Xaml.CanvasVirtualControl</codeEntityReference></listItem>
           <listItem><codeEntityReference>T:Microsoft.Graphics.Canvas.UI.Xaml.CanvasAnimatedControl</codeEntityReference></listItem>
           <listItem><codeEntityReference>T:Microsoft.Graphics.Canvas.UI.Xaml.CanvasImageSource</codeEntityReference></listItem>
         </list>
@@ -144,7 +145,8 @@ Licensed under the MIT License. See LICENSE.txt in the project root for license 
       <title>Control DPI</title>
       <content>
         <para>
-          The Win2D controls (<codeEntityReference>T:Microsoft.Graphics.Canvas.UI.Xaml.CanvasControl</codeEntityReference> 
+          The Win2D controls (<codeEntityReference>T:Microsoft.Graphics.Canvas.UI.Xaml.CanvasControl</codeEntityReference>,
+          <codeEntityReference>T:Microsoft.Graphics.Canvas.UI.Xaml.CanvasVirtualControl</codeEntityReference>
           and <codeEntityReference>T:Microsoft.Graphics.Canvas.UI.Xaml.CanvasAnimatedControl</codeEntityReference>) 
           automatically use the same DPI as the display the app is running on. This 
           matches the coordinate system used by XAML, CoreWindow, and other Windows 
@@ -270,11 +272,45 @@ Licensed under the MIT License. See LICENSE.txt in the project root for license 
     </section>
 
     <section>
+      <title>Effect DPI</title>
+      <content>
+        <para>
+          The image effect pipeline inherits its DPI from whatever 
+          <codeEntityReference>T:Microsoft.Graphics.Canvas.CanvasDrawingSession</codeEntityReference> 
+          an effect is being drawn onto. Internally, effect processing always 
+          operates in pixels. Parameter values such as sizes or positions are specified 
+          in DIPs, but these units are converted to pixels before any actual image 
+          manipulation takes place.
+        </para>
+        <para>
+          When a bitmap of different DPI than the target drawing session is used as an 
+          effect source image, an internal 
+          <codeEntityReference>T:Microsoft.Graphics.Canvas.Effects.DpiCompensationEffect</codeEntityReference> 
+          is automatically inserted in between the bitmap and the effect. This 
+          scales the bitmap to match the target DPI, which is usually what 
+          you want. If it's not what you want, you can insert your own instance of 
+          <codeEntityReference>T:Microsoft.Graphics.Canvas.Effects.DpiCompensationEffect</codeEntityReference> 
+          to customize the behavior.
+        </para>
+      </content>
+    </section>
+
+    <section>
       <title>How to test DPI handling</title>
       <content>
         <para>
-          The easiest way to test that your app will do the right thing when run on 
-          devices with different display DPI is to run it in the Windows Simulator. In 
+          The easiest way to test that your app will do the right thing in response to 
+          changing display DPI is to run on Windows 10 and change display settings while 
+          the app is running:
+        </para>
+        <list class="bullet">
+          <listItem>Right-click on the desktop background and choose 'Display settings'</listItem>
+          <listItem>Move the slider labeled 'Change the size of text, apps, and other items'</listItem>
+          <listItem>Click the 'Apply' button</listItem>
+          <listItem>Choose 'Sign out later'</listItem>
+        </list>
+        <para>
+          If you do not have Windows 10, you can also test with the Windows Simulator. In 
           the Visual Studio toolbar, change the "Local Machine" setting to "Simulator", 
           then use the Change Resolution icon to switch the simulated display between:
         </para>

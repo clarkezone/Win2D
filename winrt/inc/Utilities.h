@@ -7,6 +7,14 @@
 #include <windows.foundation.h>
 
 
+template<typename T>
+inline Microsoft::WRL::ComPtr<IUnknown> AsUnknown(T* value)
+{
+    Microsoft::WRL::ComPtr<IUnknown> unknown;
+    ThrowIfFailed(value->QueryInterface(IID_PPV_ARGS(unknown.ReleaseAndGetAddressOf())));
+    return unknown;
+}
+
 // Compares two interface pointers, querying to IUnknown to follow COM identity rules.
 template<typename T, typename U>
 inline bool IsSameInstance(T* value1, U* value2)
@@ -17,13 +25,7 @@ inline bool IsSameInstance(T* value1, U* value2)
     if ((value1 == nullptr) || (value2 == nullptr))
         return false;
 
-    Microsoft::WRL::ComPtr<IUnknown> identity1;
-    Microsoft::WRL::ComPtr<IUnknown> identity2;
-
-    ThrowIfFailed(value1->QueryInterface(IID_PPV_ARGS(identity1.GetAddressOf())));
-    ThrowIfFailed(value2->QueryInterface(IID_PPV_ARGS(identity2.GetAddressOf())));
-
-    return identity1 == identity2;
+    return AsUnknown(value1) == AsUnknown(value2);
 }
 
 // Shortcut QueryInterface
@@ -102,10 +104,12 @@ inline bool operator!=(ABI::Windows::Foundation::Size const& left, ABI::Windows:
     return (left.Width != right.Width) || (left.Height != right.Height);
 }
 
-template<typename T, typename U>
-inline Microsoft::WRL::ComPtr<T> GetWrappedResource(U&& wrapper)
+template<typename T>
+class SimpleAgileActivationFactory WrlSealed : public Microsoft::WRL::AgileActivationFactory<>
 {
-    Microsoft::WRL::ComPtr<T> resource;
-    ThrowIfFailed(As<ABI::Microsoft::Graphics::Canvas::ICanvasResourceWrapperNative>(wrapper)->GetResource(IID_PPV_ARGS(&resource)));
-    return resource;
-}
+public:
+    STDMETHOD(ActivateInstance)(_Outptr_result_nullonfailure_ IInspectable **ppvObject)
+    {
+        return MakeAndInitialize<T>(ppvObject);
+    }
+};

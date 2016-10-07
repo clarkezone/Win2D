@@ -11,14 +11,17 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    ChromaKeyEffect::ChromaKeyEffect()
-        : CanvasEffect(CLSID_D2D1ChromaKey, 4, 1, true)
+    ChromaKeyEffect::ChromaKeyEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 4, 1, true, device, effect, static_cast<IChromaKeyEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<float[3]>(D2D1_CHROMAKEY_PROP_COLOR, Color{ 255, 0, 0, 0 });
-        SetBoxedProperty<float>(D2D1_CHROMAKEY_PROP_TOLERANCE, 0.1f);
-        SetBoxedProperty<boolean>(D2D1_CHROMAKEY_PROP_INVERT_ALPHA, static_cast<boolean>(false));
-        SetBoxedProperty<boolean>(D2D1_CHROMAKEY_PROP_FEATHER, static_cast<boolean>(false));
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<float[3]>(D2D1_CHROMAKEY_PROP_COLOR, Color{ 255, 0, 0, 0 });
+            SetBoxedProperty<float>(D2D1_CHROMAKEY_PROP_TOLERANCE, 0.1f);
+            SetBoxedProperty<boolean>(D2D1_CHROMAKEY_PROP_INVERT_ALPHA, static_cast<boolean>(false));
+            SetBoxedProperty<boolean>(D2D1_CHROMAKEY_PROP_FEATHER, static_cast<boolean>(false));
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY(ChromaKeyEffect,
@@ -46,6 +49,12 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         boolean,
         D2D1_CHROMAKEY_PROP_FEATHER)
 
+    IMPLEMENT_EFFECT_PROPERTY(ChromaKeyEffect,
+        ColorHdr,
+        ConvertColorHdrToVector3,
+        Numerics::Vector4,
+        D2D1_CHROMAKEY_PROP_COLOR)
+
     IMPLEMENT_EFFECT_SOURCE_PROPERTY(ChromaKeyEffect,
         Source,
         0)
@@ -54,9 +63,10 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         { L"Color",       D2D1_CHROMAKEY_PROP_COLOR,        GRAPHICS_EFFECT_PROPERTY_MAPPING_COLOR_TO_VECTOR3 },
         { L"Tolerance",   D2D1_CHROMAKEY_PROP_TOLERANCE,    GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT           },
         { L"InvertAlpha", D2D1_CHROMAKEY_PROP_INVERT_ALPHA, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT           },
-        { L"Feather",     D2D1_CHROMAKEY_PROP_FEATHER,      GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT           })
+        { L"Feather",     D2D1_CHROMAKEY_PROP_FEATHER,      GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT           },
+        { L"ColorHdr",    D2D1_CHROMAKEY_PROP_COLOR,        GRAPHICS_EFFECT_PROPERTY_MAPPING_UNKNOWN          })
 
-    ActivatableClass(ChromaKeyEffect);
+    ActivatableClassWithFactory(ChromaKeyEffect, SimpleAgileActivationFactory<ChromaKeyEffect>);
 }}}}}
 
 #endif // _WIN32_WINNT_WIN10

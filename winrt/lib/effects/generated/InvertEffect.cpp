@@ -11,17 +11,20 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    InvertEffect::InvertEffect()
-        : CanvasEffect(CLSID_D2D1Invert, 0, 1, true)
+    InvertEffect::InvertEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 0, 1, true, device, effect, static_cast<IInvertEffect*>(this))
     {
-        // Set default values
+        if (!effect)
+        {
+            // Set default values
+        }
     }
 
     IMPLEMENT_EFFECT_SOURCE_PROPERTY(InvertEffect,
         Source,
         0)
 
-    ActivatableClass(InvertEffect);
+    ActivatableClassWithFactory(InvertEffect, SimpleAgileActivationFactory<InvertEffect>);
 }}}}}
 
 #endif // _WIN32_WINNT_WIN10

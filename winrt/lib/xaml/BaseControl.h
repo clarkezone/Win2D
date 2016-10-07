@@ -84,9 +84,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         typedef typename TRAITS::control_t                     control_t;
         typedef typename TRAITS::adapter_t                     adapter_t;
         typedef typename TRAITS::renderTarget_t                renderTarget_t;
-        typedef typename TRAITS::drawEventHandler_t            drawEventHandler_t;
         typedef typename TRAITS::createResourcesEventHandler_t createResourcesEventHandler_t;
-        typedef typename TRAITS::drawEventArgs_t               drawEventArgs_t;
 
     protected:
         struct RenderTarget
@@ -106,14 +104,12 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
 
         std::shared_ptr<adapter_t> m_adapter;
         std::unique_ptr<IRecreatableDeviceManager<TRAITS>> m_recreatableDeviceManager;
+        std::atomic<int> m_loadedCount;
         bool m_isLoaded;
         bool m_isSuspended;
         bool m_isVisible;
-        float m_dpi;
         bool m_useSharedDevice;
         bool m_forceSoftwareRenderer;
-
-        EventSource<drawEventHandler_t, InvokeModeOptions<StopOnFirstError>> m_drawEventList;
 
         RegisteredEvent m_applicationSuspendingEventRegistration;
         RegisteredEvent m_applicationResumingEventRegistration;
@@ -122,8 +118,10 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         RegisteredEvent m_deviceLostEventRegistration;
 
         std::mutex m_mutex;
-        Size m_currentSize;     // protected by m_mutex
-        Color m_clearColor;     // protected by m_mutex
+        Size m_currentSize;       // protected by m_mutex
+        Color m_clearColor;       // protected by m_mutex
+        float m_logicalDpi;       // protected by m_mutex
+        float m_customDpiScaling; // protected by m_mutex
 
         RenderTarget m_currentRenderTarget;
 
@@ -135,11 +133,13 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         BaseControl(std::shared_ptr<adapter_t> adapter, bool useSharedDevice)
             : m_adapter(adapter)
             , m_recreatableDeviceManager(adapter->CreateRecreatableDeviceManager())
+            , m_loadedCount(0)
             , m_isLoaded(false)
             , m_isSuspended(false)
             , m_isVisible(true)
             , m_window(adapter->GetWindowOfCurrentThread())
-            , m_dpi(adapter->GetLogicalDpi())
+            , m_logicalDpi(adapter->GetLogicalDpi())
+            , m_customDpiScaling(1.0f)
             , m_useSharedDevice(useSharedDevice)
             , m_forceSoftwareRenderer(false)
             , m_currentSize{}
@@ -197,28 +197,6 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
                 });
         }
 
-        IFACEMETHODIMP add_Draw(
-            drawEventHandler_t* value,
-            EventRegistrationToken* token) override
-        {
-            return ExceptionBoundary(
-                [&]
-                {
-                    ThrowIfFailed(m_drawEventList.Add(value, token));
-                    Changed(GetLock());
-                });
-        }
-
-        IFACEMETHODIMP remove_Draw(
-            EventRegistrationToken token) override
-        {
-            return ExceptionBoundary(
-                [&]
-                {
-                    ThrowIfFailed(m_drawEventList.Remove(token));
-                });
-        }
-
         IFACEMETHODIMP get_ReadyToDraw(
             boolean* value) override
         {
@@ -226,7 +204,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
                 [=]
                 {
                     CheckIsOnUIThread();
-                    *value = m_recreatableDeviceManager->IsReadyToDraw();
+                    *value = IsReadyToDraw();
                 });
         }
 
@@ -251,7 +229,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         }
 
         IFACEMETHODIMP get_UseSharedDevice(
-            boolean* value)
+            boolean* value) override
         {
             return ExceptionBoundary(
                 [&]
@@ -265,7 +243,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         }
 
         IFACEMETHODIMP put_UseSharedDevice(
-            boolean value)
+            boolean value) override
         {
             return ExceptionBoundary(
                 [&]
@@ -277,12 +255,14 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
 
                     m_useSharedDevice = !!value;
 
-                    Changed(lock, ChangeReason::DeviceCreationOptions);
+                    lock.unlock();
+                    
+                    Changed(ChangeReason::DeviceCreationOptions);
                 });
         }
 
         IFACEMETHODIMP get_ForceSoftwareRenderer(
-            boolean* value)
+            boolean* value) override
         {
             return ExceptionBoundary(
                 [&]
@@ -296,7 +276,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         }
 
         IFACEMETHODIMP put_ForceSoftwareRenderer(
-            boolean value)
+            boolean value) override
         {
             return ExceptionBoundary(
                 [&]
@@ -308,12 +288,14 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
 
                     m_forceSoftwareRenderer = !!value;
 
-                    Changed(lock, ChangeReason::DeviceCreationOptions);
+                    lock.unlock();
+                    
+                    Changed(ChangeReason::DeviceCreationOptions);
                 });
         }
 
         IFACEMETHODIMP get_CustomDevice(
-            ICanvasDevice** value)
+            ICanvasDevice** value) override
         {
             return ExceptionBoundary(
                 [&]
@@ -330,7 +312,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         }
 
         IFACEMETHODIMP put_CustomDevice(
-            ICanvasDevice* value)
+            ICanvasDevice* value) override
         {
             return ExceptionBoundary(
                 [&]
@@ -347,7 +329,43 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
                     {
                         m_customDevice = value;
 
-                        Changed(lock, ChangeReason::DeviceCreationOptions);
+                        lock.unlock();
+
+                        Changed(ChangeReason::DeviceCreationOptions);
+                    }
+                });
+        }        
+
+        IFACEMETHODIMP get_DpiScale(float* value) override
+        {
+            return ExceptionBoundary(
+                [&]
+                {
+                    CheckInPointer(value);
+
+                    auto lock = GetLock();
+
+                    *value = m_customDpiScaling;
+                });
+        }
+
+        IFACEMETHODIMP put_DpiScale(float value) override
+        {
+            return ExceptionBoundary(
+                [&]
+                {
+                    if (value <= 0)
+                        ThrowHR(E_INVALIDARG);
+
+                    auto lock = GetLock();
+
+                    if (value != m_customDpiScaling)
+                    {
+                        m_customDpiScaling = value;
+
+                        lock.unlock();
+
+                        m_recreatableDeviceManager->SetDpiChanged();
                     }
                 });
         }
@@ -368,7 +386,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
                     if (device)
                         ThrowIfFailed(device.CopyTo(value));
                     else
-                        ThrowHR(E_INVALIDARG, HStringReference(Strings::CanvasDeviceGetDeviceWhenNotCreated).Get());
+                        ThrowHR(E_INVALIDARG, Strings::CanvasDeviceGetDeviceWhenNotCreated);
                 });
         }
 
@@ -378,7 +396,8 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
                 [&]
                 {
                     CheckInPointer(dpi);
-                    *dpi = m_dpi;
+
+                    *dpi = GetEffectiveDpi(GetLock());
                 });
         }
 
@@ -388,7 +407,8 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
                 [&]
                 {
                     CheckInPointer(dips);
-                    *dips = PixelsToDips(pixels, m_dpi);
+
+                    *dips = PixelsToDips(pixels, GetEffectiveDpi(GetLock()));
                 });
         }
 
@@ -398,11 +418,11 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
                 [&]
                 {
                     CheckInPointer(pixels);
-                    *pixels = DipsToPixels(dips, m_dpi, dpiRounding);
+
+                    *pixels = DipsToPixels(dips, GetEffectiveDpi(GetLock()), dpiRounding);
                 });
         }
 
-    protected:
         virtual void CreateOrUpdateRenderTarget(
             ICanvasDevice* device,
             CanvasAlphaMode newAlphaMode,
@@ -410,11 +430,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             Size newSize,
             RenderTarget* renderTarget) = 0;
 
-        virtual ComPtr<drawEventArgs_t> CreateDrawEventArgs(
-            ICanvasDrawingSession* drawingSession,
-            bool isRunningSlowly) = 0;
-
-        virtual void Changed(Lock const& lock, ChangeReason reason = ChangeReason::Other) = 0;
+        virtual void Changed(ChangeReason reason) = 0;
 
         virtual void Loaded() = 0;
         virtual void Unloaded() = 0;
@@ -422,6 +438,11 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         virtual void ApplicationSuspending(ISuspendingEventArgs* args) = 0;
         virtual void ApplicationResuming() = 0;
         virtual void WindowVisibilityChanged() = 0;
+
+        control_t* GetControl()
+        {
+            return static_cast<TRAITS::control_t*>(this);
+        }
 
         void CheckIsOnUIThread()
         {
@@ -478,6 +499,11 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             }
         }
 
+        bool IsReadyToDraw() const
+        {
+            return m_recreatableDeviceManager->IsReadyToDraw();
+        }
+
         bool IsLoaded() const
         {
             return m_isLoaded;
@@ -501,7 +527,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         void ResetRenderTarget()
         {
             m_currentRenderTarget = RenderTarget{};
-            Changed(GetLock());
+            Changed(ChangeReason::Other);
         }
 
         RenderTarget* GetCurrentRenderTarget()
@@ -514,14 +540,45 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         // arranges for RenderWithTarget() to get called.
         //
         template<typename FN>
-        void RunWithRenderTarget(Size const& renderTargetSize, DeviceCreationOptions deviceCreationOptions, FN&& fn)
+        void RunWithRenderTarget(FN&& fn)
         {
+            auto lock = GetLock();
+            auto clearColor = m_clearColor;
+            auto renderTargetSize = m_currentSize;
+            auto dpi = GetEffectiveDpi(lock);
+            DeviceCreationOptions deviceCreationOptions{ m_useSharedDevice, m_forceSoftwareRenderer, m_customDevice };
+            lock.unlock();
+            
             m_recreatableDeviceManager->RunWithDevice(GetControl(), deviceCreationOptions,
                 [&] (ICanvasDevice* device, RunWithDeviceFlags flags)
                 {
-                    RunWithRenderTarget(renderTargetSize, device, flags, fn);
+                    RunWithRenderTarget(clearColor, renderTargetSize, dpi, device, flags, fn);
                 });
         }
+
+        //
+        // Executes the given function using the current render target.  Does
+        // not attempt to recreate or resize the target.
+        //
+        template<typename FN>
+        void RunWithCurrentRenderTarget(FN&& fn)
+        {
+            auto lock = GetLock();
+            auto clearColor = m_clearColor;
+            DeviceCreationOptions deviceCreationOptions{ m_useSharedDevice, m_forceSoftwareRenderer, m_customDevice };
+            lock.unlock();
+            
+            m_recreatableDeviceManager->RunWithDevice(GetControl(), deviceCreationOptions,
+                [&] (ICanvasDevice* device, RunWithDeviceFlags flags)
+                {
+                    HandleNewlyCreatedDevice(device, flags);
+                    
+                    bool areResourcesCreated = !IsSet(flags, RunWithDeviceFlags::ResourcesNotCreated);
+
+                    fn(m_currentRenderTarget.Target.Get(), clearColor, areResourcesCreated);
+                });
+        }
+        
 
         HRESULT OnDeviceLost(ICanvasDevice*, IInspectable*)
         {
@@ -537,26 +594,11 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
 
                     m_deviceLostEventRegistration.Release();
 
-                    Changed(lock, ChangeReason::DeviceLost);
+                    lock.unlock();
+                    
+                    Changed(ChangeReason::DeviceLost);
                 });
         }
-
-        //
-        // Creates a drawing session, optionally calls the draw handlers and
-        // finally closes the drawing session.
-        //
-        void Draw(renderTarget_t* target, Color const& clearColor, bool callDrawHandlers, bool isRunningSlowly)
-        {
-            ComPtr<ICanvasDrawingSession> drawingSession;
-            ThrowIfFailed(target->CreateDrawingSession(clearColor, &drawingSession));
-            if (callDrawHandlers)
-            {
-                auto drawEventArgs = GetControl()->CreateDrawEventArgs(drawingSession.Get(), isRunningSlowly);
-                ThrowIfFailed(m_drawEventList.InvokeAll(GetControl(), drawEventArgs.Get()));
-            }
-
-            ThrowIfFailed(As<IClosable>(drawingSession)->Close());
-        }        
 
         Color GetClearColor()
         {
@@ -570,26 +612,12 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             return m_currentSize;
         }
 
-        DeviceCreationOptions GetDeviceCreationOptions(Lock const& lock)
+        void GetClearColorSizeAndDpi(Color* clearColor, Size* currentSize, float* currentDpi)
         {
-            MustOwnLock(lock);
-
-            DeviceCreationOptions options { m_useSharedDevice, m_forceSoftwareRenderer, m_customDevice };
-
-            return options;
-        }
-
-        void GetSharedState(Lock const& lock, Color* clearColor, Size* currentSize)
-        {
-            MustOwnLock(lock);
-
+            auto lock = GetLock();
             *clearColor = m_clearColor;
             *currentSize = m_currentSize;
-        }
-
-        Lock GetLock()
-        {
-            return Lock(m_mutex);
+            *currentDpi = GetEffectiveDpi(lock);
         }
 
         static CanvasAlphaMode GetAlphaModeFromClearColor(Color const& clearColor)
@@ -608,6 +636,17 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         }
 
     private:
+        Lock GetLock()
+        {
+            return Lock(m_mutex);
+        }
+
+        float GetEffectiveDpi(Lock const& lock)
+        {
+            MustOwnLock(lock);
+            return m_logicalDpi * m_customDpiScaling;
+        }
+
         void SetClearColor(Color const& value)
         {
             auto lock = GetLock();
@@ -622,11 +661,23 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
 
             m_clearColor = value;
 
-            Changed(lock, ChangeReason::ClearColor);
+            lock.unlock();
+            
+            Changed(ChangeReason::ClearColor);
         }
 
         template<typename FN>
-        void RunWithRenderTarget(Size const& renderTargetSize, ICanvasDevice* device, RunWithDeviceFlags flags, FN&& fn)
+        void RunWithRenderTarget(Color const& clearColor, Size const& renderTargetSize, float dpi, ICanvasDevice* device, RunWithDeviceFlags flags, FN&& fn)
+        {
+            HandleNewlyCreatedDevice(device, flags);
+
+            bool areResourcesCreated = !IsSet(flags, RunWithDeviceFlags::ResourcesNotCreated);
+
+            UpdateCurrentRenderTarget(device, renderTargetSize, flags, clearColor, dpi);
+            fn(m_currentRenderTarget.Target.Get(), device, clearColor, areResourcesCreated);
+        }
+
+        void HandleNewlyCreatedDevice(ICanvasDevice* device, RunWithDeviceFlags flags)
         {
             if (IsSet(flags, RunWithDeviceFlags::NewlyCreatedDevice))
             {
@@ -638,15 +689,14 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
                     &ICanvasDevice::remove_DeviceLost,
                     callback.Get());
             }
-
-            auto clearColor = GetClearColor();
-            bool areResourcesCreated = !IsSet(flags, RunWithDeviceFlags::ResourcesNotCreated);
-
-            UpdateCurrentRenderTarget(device, renderTargetSize, flags, clearColor);
-            fn(m_currentRenderTarget.Target.Get(), device, clearColor, areResourcesCreated);
         }
 
-        void UpdateCurrentRenderTarget(ICanvasDevice* device, Size const& renderTargetSize, RunWithDeviceFlags flags, Color const& clearColor)
+        void UpdateCurrentRenderTarget(
+            ICanvasDevice* device, 
+            Size const& renderTargetSize, 
+            RunWithDeviceFlags flags, 
+            Color const& clearColor,
+            float dpi)
         {
             if (IsSet(flags, RunWithDeviceFlags::NewlyCreatedDevice))
                 m_currentRenderTarget = RenderTarget{};
@@ -660,14 +710,9 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             GetControl()->CreateOrUpdateRenderTarget(
                 device,
                 alphaMode,
-                m_dpi,
+                dpi,
                 renderTargetSize,
                 &m_currentRenderTarget);
-        }
-
-        control_t* GetControl()
-        {
-            return static_cast<TRAITS::control_t*>(this);
         }
 
         void CreateBaseClass()
@@ -699,7 +744,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             m_recreatableDeviceManager->SetChangedCallback(
                 [=] (ChangeReason reason)
                 {
-                    Changed(GetLock(), reason);
+                    Changed(reason);
                 });
         }
 
@@ -723,7 +768,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
                 GetWindow());
 
             // Check if the DPI changed while we weren't listening for events.
-            OnDpiChanged(nullptr, nullptr);
+            ThrowIfFailed(OnDpiChanged(nullptr, nullptr));
         }
 
         void UnregisterEventHandlers()
@@ -758,12 +803,18 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             return ExceptionBoundary(
                 [&]
                 {
-                    auto lock = GetLock();
-                    m_isLoaded = true;
-                    RegisterEventHandlers();
-                    UpdateLastSeenParent();
-                    Loaded();
-                    Changed(lock);
+                    if (++m_loadedCount == 1)
+                    {
+                        RegisterEventHandlers();
+                        UpdateLastSeenParent();
+                        Loaded();
+
+                        auto lock = GetLock();
+                        m_isLoaded = true;
+                        lock.unlock();
+
+                        Changed(ChangeReason::Other);
+                    }
                 });
         }
 
@@ -777,12 +828,15 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             return ExceptionBoundary(
                 [&]
                 {
-                    auto lock = GetLock();
-                    m_isLoaded = false;
-                    lock.unlock();
+                    if (--m_loadedCount == 0)
+                    {
+                        auto lock = GetLock();
+                        m_isLoaded = false;
+                        lock.unlock();
 
-                    Unloaded();
-                    UnregisterEventHandlers();
+                        Unloaded();
+                        UnregisterEventHandlers();
+                    }
                 });
         }
 
@@ -803,8 +857,9 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
                     if (m_currentSize != newSize)
                     {
                         m_currentSize = newSize;
-
-                        Changed(lock, ChangeReason::Size);
+                        lock.unlock();
+                        
+                        Changed(ChangeReason::Size);
                     }
                 });
         }
@@ -833,15 +888,27 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         {
             return ExceptionBoundary(
                 [&]
-            {
-                float newDpi = m_adapter->GetLogicalDpi();
-
-                if (newDpi != m_dpi)
                 {
-                    m_dpi = newDpi;
-                    m_recreatableDeviceManager->SetDpiChanged();
-                }
-            });
+                    float newDpi = m_adapter->GetLogicalDpi();
+
+                    if (newDpi != m_logicalDpi)
+                    {
+                        auto lock = GetLock();
+
+                        m_logicalDpi = newDpi;
+
+                        //
+                        // The recreatable device manager
+                        // may turn around and call Changed() on this 
+                        // control, which takes out the lock. In that
+                        // case, we want to make sure we don't hold the
+                        // lock.
+                        //
+                        lock.unlock();
+
+                        m_recreatableDeviceManager->SetDpiChanged();
+                    }
+                });
         }
 
         HRESULT OnWindowVisibilityChanged(IInspectable*, IVisibilityChangedEventArgs* args)
@@ -854,11 +921,75 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
 
                     auto lock = GetLock();
                     m_isVisible = !!isVisible;
-
+                    lock.unlock();
+                    
                     WindowVisibilityChanged();
                 });
 
         }
     };
+
+
+    template<typename TRAITS>
+    class BaseControlWithDrawHandler
+        : public BaseControl<TRAITS>
+    {
+    public:
+        typedef typename TRAITS::drawEventHandler_t drawEventHandler_t;
+        typedef typename TRAITS::drawEventArgs_t    drawEventArgs_t;
+
+    private:
+        EventSource<drawEventHandler_t, InvokeModeOptions<StopOnFirstError>> m_drawEventList;
+
+    public:
+        BaseControlWithDrawHandler(std::shared_ptr<adapter_t> adapter, bool useSharedDevice)
+            : BaseControl(adapter, useSharedDevice)
+        {
+        }
+
+        IFACEMETHODIMP add_Draw(
+            drawEventHandler_t* value,
+            EventRegistrationToken* token) override
+        {
+            return ExceptionBoundary(
+                [&]
+                {
+                    ThrowIfFailed(m_drawEventList.Add(value, token));
+                    Changed(ChangeReason::Other);
+                });
+        }
+
+        IFACEMETHODIMP remove_Draw(
+            EventRegistrationToken token) override
+        {
+            return ExceptionBoundary(
+                [&]
+                {
+                    ThrowIfFailed(m_drawEventList.Remove(token));
+                });
+        }
+
+    protected:
+        virtual ComPtr<drawEventArgs_t> CreateDrawEventArgs(
+            ICanvasDrawingSession* drawingSession,
+            bool isRunningSlowly) = 0;
+
+        //
+        // Creates a drawing session, optionally calls the draw handlers and
+        // finally closes the drawing session.
+        //
+        void Draw(renderTarget_t* target, Color const& clearColor, bool callDrawHandlers, bool isRunningSlowly)
+        {
+            ComPtr<ICanvasDrawingSession> drawingSession;
+            ThrowIfFailed(target->CreateDrawingSession(clearColor, &drawingSession));
+            if (callDrawHandlers)
+            {
+                auto drawEventArgs = GetControl()->CreateDrawEventArgs(drawingSession.Get(), isRunningSlowly);
+                ThrowIfFailed(m_drawEventList.InvokeAll(GetControl(), drawEventArgs.Get()));
+            }
+
+            ThrowIfFailed(As<IClosable>(drawingSession)->Close());
+        }
+};
 
 }}}}}}

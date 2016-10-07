@@ -9,15 +9,18 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    ScaleEffect::ScaleEffect()
-        : CanvasEffect(CLSID_D2D1Scale, 5, 1, true)
+    ScaleEffect::ScaleEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 5, 1, true, device, effect, static_cast<IScaleEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<float[2]>(D2D1_SCALE_PROP_SCALE, Numerics::Vector2{ 1, 1 });
-        SetBoxedProperty<float[2]>(D2D1_SCALE_PROP_CENTER_POINT, Numerics::Vector2{ 0, 0 });
-        SetBoxedProperty<uint32_t>(D2D1_SCALE_PROP_INTERPOLATION_MODE, D2D1_CONVOLVEMATRIX_SCALE_MODE_LINEAR);
-        SetBoxedProperty<uint32_t>(D2D1_SCALE_PROP_BORDER_MODE, D2D1_BORDER_MODE_SOFT);
-        SetBoxedProperty<float>(D2D1_SCALE_PROP_SHARPNESS, 0.0f);
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<float[2]>(D2D1_SCALE_PROP_SCALE, Numerics::Vector2{ 1, 1 });
+            SetBoxedProperty<float[2]>(D2D1_SCALE_PROP_CENTER_POINT, Numerics::Vector2{ 0, 0 });
+            SetBoxedProperty<uint32_t>(D2D1_SCALE_PROP_INTERPOLATION_MODE, D2D1_CONVOLVEMATRIX_SCALE_MODE_LINEAR);
+            SetBoxedProperty<uint32_t>(D2D1_SCALE_PROP_BORDER_MODE, D2D1_BORDER_MODE_SOFT);
+            SetBoxedProperty<float>(D2D1_SCALE_PROP_SHARPNESS, 0.0f);
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY_WITH_VALIDATION(ScaleEffect,
@@ -63,5 +66,5 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         { L"BorderMode",        D2D1_SCALE_PROP_BORDER_MODE,        GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT },
         { L"Sharpness",         D2D1_SCALE_PROP_SHARPNESS,          GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT })
 
-    ActivatableClass(ScaleEffect);
+    ActivatableClassWithFactory(ScaleEffect, SimpleAgileActivationFactory<ScaleEffect>);
 }}}}}

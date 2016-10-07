@@ -12,7 +12,7 @@ namespace Microsoft.Graphics.Canvas.Effects
 
     [version(VERSION), uuid(7F90BE14-267E-5088-BC36-2E0AAD869B52), exclusiveto(HighlightsAndShadowsEffect)]
     interface IHighlightsAndShadowsEffect : IInspectable
-        requires Microsoft.Graphics.Canvas.ICanvasImage
+        requires ICanvasEffect
     {
         [propget]
         HRESULT Highlights([out, retval] float* value);
@@ -52,11 +52,10 @@ namespace Microsoft.Graphics.Canvas.Effects
 
     };
 
-    [version(VERSION), activatable(VERSION)]
+    [STANDARD_ATTRIBUTES, activatable(VERSION)]
     runtimeclass HighlightsAndShadowsEffect
     {
         [default] interface IHighlightsAndShadowsEffect;
-        interface IGRAPHICSEFFECT;
     }
 }
 

@@ -8,41 +8,40 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 {
     //
     // ResourceWrapper is a helper for implementing WinRT types that are
-    // conceptually wrappers around a native resource.  It works in conjunction
-    // with ResourceManager to allow looking up wrappers by resource.
-    //
-    // See ResourceManager.h for more information.
+    // conceptually wrappers around a native resource.
     //
 
-#define RESOURCE_WRAPPER_RUNTIME_CLASS(TRAITS, ...)         \
-    public RuntimeClass<                                    \
-        RuntimeClassFlags<WinRtClassicComMix>,              \
-        TRAITS::wrapper_interface_t,                        \
-        ChainInterfaces<MixIn<TRAITS::wrapper_t, ResourceWrapper<TRAITS>>, ABI::Windows::Foundation::IClosable, CloakedIid<ABI::Microsoft::Graphics::Canvas::ICanvasResourceWrapperNative>>, \
-        __VA_ARGS__>,                                       \
-    public ResourceWrapper<TRAITS>
+#define RESOURCE_WRAPPER_RUNTIME_CLASS(TResource, TWrapper, TWrapperInterface, ...)         \
+    public RuntimeClass<                                                                    \
+        RuntimeClassFlags<WinRtClassicComMix>,                                              \
+        TWrapperInterface,                                                                  \
+        ChainInterfaces<                                                                    \
+            MixIn<TWrapper, ResourceWrapper<TResource, TWrapper, TWrapperInterface>>,       \
+            ABI::Windows::Foundation::IClosable,                                            \
+            CloakedIid<ABI::Microsoft::Graphics::Canvas::ICanvasResourceWrapperNative>>,    \
+        __VA_ARGS__>,                                                                       \
+    public ResourceWrapper<TResource, TWrapper, TWrapperInterface>
 
 
-    template<typename TRAITS>
+    template<typename TResource, typename TWrapper, typename TWrapperInterface>
     class ResourceWrapper : public ABI::Windows::Foundation::IClosable, 
                             public ABI::Microsoft::Graphics::Canvas::ICanvasResourceWrapperNative,
-                            private LifespanTracker<typename TRAITS::wrapper_t>
+                            private LifespanTracker<TWrapper>
     {
-        std::shared_ptr<typename TRAITS::manager_t> m_manager;
-        ClosablePtr<typename TRAITS::resource_t> m_resource;
+        ClosablePtr<TResource> m_resource;
 
-    public:
-        typedef typename TRAITS::resource_t resource_t;
-        typedef typename TRAITS::wrapper_t wrapper_t;
-        typedef typename TRAITS::wrapper_interface_t wrapper_interface_t;
-        typedef std::function<void(resource_t*)> remover_t;
+    protected:
+        ResourceWrapper(TResource* resource)
+            : ResourceWrapper(resource, GetOuterInspectable())
+        { }
 
-        ResourceWrapper(std::shared_ptr<typename TRAITS::manager_t> manager, resource_t* resource)
-            : m_manager(manager)
-            , m_resource(resource)
+        ResourceWrapper(TResource* resource, IInspectable* outerInspectable)
+            : m_resource(resource)
         {
-            CheckInPointer(manager.get());
-            CheckInPointer(resource);
+            if (resource)
+            {
+                ResourceManager::Add(resource, outerInspectable);
+            }
         }
 
         virtual ~ResourceWrapper()
@@ -50,14 +49,42 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             Close();
         }
 
-        ComPtr<resource_t> const& GetResource()
+        void ReleaseResource()
+        {
+            if (m_resource)
+            {
+                auto resource = m_resource.Close();
+
+                ResourceManager::Remove(resource.Get());
+            }
+        }
+
+        void SetResource(TResource* resource)
+        {
+            ReleaseResource();
+
+            if (resource)
+            {
+                m_resource = resource;
+
+                ResourceManager::Add(resource, GetOuterInspectable());
+            }
+        }
+
+    public:
+        ComPtr<TResource> const& GetResource()
         {
             return m_resource.EnsureNotClosed();
         }
 
-        std::shared_ptr<typename TRAITS::manager_t> Manager()
+        ComPtr<TResource> const& MaybeGetResource()
         {
-            return m_manager;
+            return m_resource.UncheckedGet();
+        }
+
+        bool HasResource()
+        {
+            return (bool)m_resource;
         }
 
         //
@@ -69,11 +96,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             return ExceptionBoundary(
                 [&]
                 {
-                    if (m_resource)
-                    {
-                        auto const& resource = m_resource.Close();
-                        m_manager->Remove(resource.Get());
-                    }
+                    ReleaseResource();
                 });
         }
 
@@ -81,7 +104,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         // ICanvasResourceWrapperNative
         //
 
-        IFACEMETHODIMP GetResource(REFIID iid, void** outResource) override
+        IFACEMETHODIMP GetNativeResource(ICanvasDevice* device, float dpi, REFIID iid, void** outResource) override
         {
             return ExceptionBoundary(
                 [&]
@@ -89,8 +112,49 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
                     CheckAndClearOutPointer(outResource);
 
                     auto& resource = GetResource();
+
+                    // Validation methods are overloaded to provide compile time dispatch, so they only actually
+                    // bother to check anything if TWrapper implements ICanvasResourceWrapperWith(Device|Dpi).
+                    auto wrapper = static_cast<TWrapper*>(this);
+
+                    ValidateDevice(wrapper, device);
+                    ValidateDpi(wrapper, dpi);
+
                     ThrowIfFailed(resource.CopyTo(iid, outResource));
                 });
+        }
+
+    private:
+        // Forward validation requests for types that need them to the ResourceManager.
+        static void ValidateDevice(ICanvasResourceWrapperWithDevice* wrapper, ICanvasDevice* device)
+        {
+            ResourceManager::ValidateDevice(wrapper, device);
+        }
+
+        static void ValidateDpi(ICanvasResourceWrapperWithDpi* wrapper, float dpi)
+        {
+            ResourceManager::ValidateDpi(wrapper, dpi);
+        }
+
+        // No-op validation requests for other types.
+        static void ValidateDevice(void*, ICanvasDevice*) { }
+        static void ValidateDpi(void*, float) { }
+
+
+        // Looks up the outermost IInspectable of the runtime class that has mixed in this ResourceWrapper
+        // instance. It is important to use the right IInspectable (of which there are several copies
+        // due to multiple inheritance) because when the ResourceWrapper constructor executes, things
+        // are not yet initialized far enough for QI or AsWeak to work from any of the other versions.
+        //
+        // outer_inspectable_t is a typedef so it can be customized by types with special needs (eg. CanvasBitmap).
+
+        typedef TWrapperInterface outer_inspectable_t;
+
+        IInspectable* GetOuterInspectable()
+        {
+            TWrapper* wrapper = static_cast<TWrapper*>(this);
+            TWrapper::outer_inspectable_t* outer = wrapper;
+            return outer;
         }
     };
 }}}}

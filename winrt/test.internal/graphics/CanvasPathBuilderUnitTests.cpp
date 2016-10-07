@@ -13,34 +13,32 @@ TEST_CLASS(CanvasPathBuilderUnitTests)
     struct SetupFixture
     {
         ComPtr<StubCanvasDevice> Device;
-        std::shared_ptr<CanvasGeometryManager> Manager;
         ComPtr<ICanvasGeometry> SomeTestGeometry;
 
         SetupFixture()
             : Device(Make<StubCanvasDevice>())
-            , Manager(std::make_shared<CanvasGeometryManager>())
         {
             Device->CreatePathGeometryMethod.AllowAnyCall(
-                []()
-            {
-                auto pathGeometry = Make<MockD2DPathGeometry>();
-
-                pathGeometry->OpenMethod.AllowAnyCall(
-                    [](ID2D1GeometrySink** out)
+                []
                 {
-                    auto geometrySink = Make<MockD2DGeometrySink>();
+                    auto pathGeometry = Make<MockD2DPathGeometry>();
 
-                    geometrySink->BeginFigureMethod.AllowAnyCall();
-                    geometrySink->EndFigureMethod.AllowAnyCall();
-                    geometrySink->CloseMethod.AllowAnyCall();
+                    pathGeometry->OpenMethod.AllowAnyCall(
+                        [](ID2D1GeometrySink** out)
+                        {
+                            auto geometrySink = Make<MockD2DGeometrySink>();
 
-                    return geometrySink.CopyTo(out);
+                            geometrySink->BeginFigureMethod.AllowAnyCall();
+                            geometrySink->EndFigureMethod.AllowAnyCall();
+                            geometrySink->CloseMethod.AllowAnyCall();
+
+                            return geometrySink.CopyTo(out);
+                        });
+
+                    return pathGeometry;
                 });
 
-                return pathGeometry;
-            });
-
-            SomeTestGeometry = Manager->GetOrCreate(Device.Get(), Make<MockD2DRectangleGeometry>().Get());
+            SomeTestGeometry = Make<CanvasGeometry>(Device.Get(), Make<MockD2DRectangleGeometry>().Get());
         }
     };
 
@@ -77,19 +75,19 @@ TEST_CLASS(CanvasPathBuilderUnitTests)
         SetupFixture f;
 
         f.Device->CreatePathGeometryMethod.SetExpectedCalls(1,
-            []()
-        {
-            auto pathGeometry = Make<MockD2DPathGeometry>();
-
-            pathGeometry->OpenMethod.SetExpectedCalls(1,
-                [](ID2D1GeometrySink** out)
+            []
             {
-                auto geometrySink = Make<MockD2DGeometrySink>();
-                return geometrySink.CopyTo(out);
-            });
+                auto pathGeometry = Make<MockD2DPathGeometry>();
 
-            return pathGeometry;
-        });
+                pathGeometry->OpenMethod.SetExpectedCalls(1,
+                    [](ID2D1GeometrySink** out)
+                    {
+                        auto geometrySink = Make<MockD2DGeometrySink>();
+                        return geometrySink.CopyTo(out);
+                    });
+
+                return pathGeometry;
+            });
 
         auto canvasPathBuilder = Make<CanvasPathBuilder>(f.Device.Get());
     }
@@ -100,9 +98,9 @@ TEST_CLASS(CanvasPathBuilderUnitTests)
 
         auto canvasPathBuilder = Make<CanvasPathBuilder>(f.Device.Get());
 
-        f.Manager->Create(canvasPathBuilder.Get());
+        CanvasGeometry::CreateNew(canvasPathBuilder.Get());
 
-        ExpectHResultException(RO_E_CLOSED, [&]{ f.Manager->Create(canvasPathBuilder.Get()); });
+        ExpectHResultException(RO_E_CLOSED, [&]{ CanvasGeometry::CreateNew(canvasPathBuilder.Get()); });
     }
 
     TEST_METHOD_EX(CanvasPathBuilder_CreatePathClosesSink)
@@ -115,19 +113,19 @@ TEST_CLASS(CanvasPathBuilderUnitTests)
         auto pathGeometry = Make<MockD2DPathGeometry>();
         pathGeometry->OpenMethod.AllowAnyCall(
             [=](ID2D1GeometrySink** out)
-        {
-            return geometrySink.CopyTo(out);
-        });
+            {
+                return geometrySink.CopyTo(out);
+            });
 
         f.Device->CreatePathGeometryMethod.AllowAnyCall(
-            [=]()
-        {
-            return pathGeometry;
-        });
+            [=]
+            {
+                return pathGeometry;
+            });
 
         auto canvasPathBuilder = Make<CanvasPathBuilder>(f.Device.Get());
 
-        f.Manager->Create(canvasPathBuilder.Get());
+        CanvasGeometry::CreateNew(canvasPathBuilder.Get());
     }
 
     struct SinkAccessFixture : SetupFixture
@@ -140,7 +138,7 @@ TEST_CLASS(CanvasPathBuilderUnitTests)
             auto pathGeometry = Make<MockD2DPathGeometry>();
             GeometrySink = Make<MockD2DGeometrySink>();
 
-            Device->CreatePathGeometryMethod.AllowAnyCall([=]() { return pathGeometry; });
+            Device->CreatePathGeometryMethod.AllowAnyCall([=] { return pathGeometry; });
             pathGeometry->OpenMethod.AllowAnyCall([=](ID2D1GeometrySink** out) { return GeometrySink.CopyTo(out); });
 
             PathBuilder = Make<CanvasPathBuilder>(Device.Get());
@@ -156,10 +154,10 @@ TEST_CLASS(CanvasPathBuilderUnitTests)
 
         f.GeometrySink->BeginFigureMethod.SetExpectedCalls(1,
             [](D2D1_POINT_2F point, D2D1_FIGURE_BEGIN figureBegin)
-        {
-            Assert::AreEqual(D2D1::Point2F(1, 2), point);
-            Assert::AreEqual(D2D1_FIGURE_BEGIN_FILLED, figureBegin);
-        });
+            {
+                Assert::AreEqual(D2D1::Point2F(1, 2), point);
+                Assert::AreEqual(D2D1_FIGURE_BEGIN_FILLED, figureBegin);
+            });
         ThrowIfFailed(f.PathBuilder->BeginFigure(Vector2{ 1, 2 }));
     }
 
@@ -169,10 +167,10 @@ TEST_CLASS(CanvasPathBuilderUnitTests)
 
         f.GeometrySink->BeginFigureMethod.SetExpectedCalls(1,
             [](D2D1_POINT_2F point, D2D1_FIGURE_BEGIN figureBegin)
-        {
-            Assert::AreEqual(D2D1::Point2F(1, 2), point);
-            Assert::AreEqual(D2D1_FIGURE_BEGIN_HOLLOW, figureBegin);
-        });
+            {
+                Assert::AreEqual(D2D1::Point2F(1, 2), point);
+                Assert::AreEqual(D2D1_FIGURE_BEGIN_HOLLOW, figureBegin);
+            });
         ThrowIfFailed(f.PathBuilder->BeginFigureWithFigureFill(Vector2{ 1, 2 }, CanvasFigureFill::DoesNotAffectFills));
     }
 
@@ -182,10 +180,10 @@ TEST_CLASS(CanvasPathBuilderUnitTests)
 
         f.GeometrySink->BeginFigureMethod.SetExpectedCalls(1,
             [](D2D1_POINT_2F point, D2D1_FIGURE_BEGIN figureBegin)
-        {
-            Assert::AreEqual(D2D1::Point2F(1, 2), point);
-            Assert::AreEqual(D2D1_FIGURE_BEGIN_FILLED, figureBegin);
-        });
+            {
+                Assert::AreEqual(D2D1::Point2F(1, 2), point);
+                Assert::AreEqual(D2D1_FIGURE_BEGIN_FILLED, figureBegin);
+            });
         ThrowIfFailed(f.PathBuilder->BeginFigureAtCoords(1, 2));
     }
 
@@ -195,10 +193,10 @@ TEST_CLASS(CanvasPathBuilderUnitTests)
 
         f.GeometrySink->BeginFigureMethod.SetExpectedCalls(1,
             [](D2D1_POINT_2F point, D2D1_FIGURE_BEGIN figureBegin)
-        {
-            Assert::AreEqual(D2D1::Point2F(1, 2), point);
-            Assert::AreEqual(D2D1_FIGURE_BEGIN_HOLLOW, figureBegin);
-        });
+            {
+                Assert::AreEqual(D2D1::Point2F(1, 2), point);
+                Assert::AreEqual(D2D1_FIGURE_BEGIN_HOLLOW, figureBegin);
+            });
         ThrowIfFailed(f.PathBuilder->BeginFigureAtCoordsWithFigureFill(1, 2, CanvasFigureFill::DoesNotAffectFills));
     }
 
@@ -210,13 +208,13 @@ TEST_CLASS(CanvasPathBuilderUnitTests)
 
         f.GeometrySink->AddArcMethod.SetExpectedCalls(1,
             [](CONST D2D1_ARC_SEGMENT* arc)
-        {
-            Assert::AreEqual(D2D1::Point2F(1, 2), arc->point);
-            Assert::AreEqual(D2D1::SizeF(3, 4), arc->size);
-            Assert::AreEqual(0.0f, arc->rotationAngle);
-            Assert::AreEqual(D2D1_SWEEP_DIRECTION_CLOCKWISE, arc->sweepDirection);
-            Assert::AreEqual(D2D1_ARC_SIZE_LARGE, arc->arcSize);
-        });
+            {
+                Assert::AreEqual(D2D1::Point2F(1, 2), arc->point);
+                Assert::AreEqual(D2D1::SizeF(3, 4), arc->size);
+                Assert::AreEqual(0.0f, arc->rotationAngle);
+                Assert::AreEqual(D2D1_SWEEP_DIRECTION_CLOCKWISE, arc->sweepDirection);
+                Assert::AreEqual(D2D1_ARC_SIZE_LARGE, arc->arcSize);
+            });
         ThrowIfFailed(f.PathBuilder->AddArcToPoint(Vector2{ 1, 2 }, 3.0f, 4.0f, 0.0f, CanvasSweepDirection::Clockwise, CanvasArcSize::Large));
     }
 
@@ -233,11 +231,11 @@ TEST_CLASS(CanvasPathBuilderUnitTests)
 
             f.GeometrySink->AddArcMethod.SetExpectedCalls(1,
                 [=](CONST D2D1_ARC_SEGMENT* arc)
-            {
-                const float d2dDegrees = arc->rotationAngle;
-                const float radians = d2dDegrees  * pi / 180.0f;
-                Assert::AreEqual(angle, radians, 0.0001f);
-            });
+                {
+                    const float d2dDegrees = arc->rotationAngle;
+                    const float radians = d2dDegrees  * pi / 180.0f;
+                    Assert::AreEqual(angle, radians, 0.0001f);
+                });
             ThrowIfFailed(f.PathBuilder->AddArcToPoint(Vector2{}, 0, 0, angle, CanvasSweepDirection::Clockwise, CanvasArcSize::Large));
         }
     }
@@ -348,11 +346,11 @@ TEST_CLASS(CanvasPathBuilderUnitTests)
 
         f.GeometrySink->AddBezierMethod.SetExpectedCalls(1,
             [](const D2D1_BEZIER_SEGMENT* segment)
-        {
-            Assert::AreEqual(D2D1::Point2F(1, 2), segment->point1);
-            Assert::AreEqual(D2D1::Point2F(3, 4), segment->point2);
-            Assert::AreEqual(D2D1::Point2F(5, 6), segment->point3);
-        });
+            {
+                Assert::AreEqual(D2D1::Point2F(1, 2), segment->point1);
+                Assert::AreEqual(D2D1::Point2F(3, 4), segment->point2);
+                Assert::AreEqual(D2D1::Point2F(5, 6), segment->point3);
+            });
         ThrowIfFailed(f.PathBuilder->AddCubicBezier(Vector2{ 1, 2 }, Vector2{ 3, 4 }, Vector2{ 5, 6 }));
     }
 
@@ -373,9 +371,9 @@ TEST_CLASS(CanvasPathBuilderUnitTests)
 
         f.GeometrySink->AddLineMethod.SetExpectedCalls(1,
             [](D2D1_POINT_2F point)
-        {
-            Assert::AreEqual(D2D1::Point2F(1, 2), point);
-        });
+            {
+                Assert::AreEqual(D2D1::Point2F(1, 2), point);
+            });
         ThrowIfFailed(f.PathBuilder->AddLine(Vector2{ 1, 2 }));
     }
 
@@ -396,9 +394,9 @@ TEST_CLASS(CanvasPathBuilderUnitTests)
 
         f.GeometrySink->AddLineMethod.SetExpectedCalls(1,
             [](D2D1_POINT_2F point)
-        {
-            Assert::AreEqual(D2D1::Point2F(1, 2), point);
-        });
+            {
+                Assert::AreEqual(D2D1::Point2F(1, 2), point);
+            });
         ThrowIfFailed(f.PathBuilder->AddLineWithCoords(1, 2));
     }
 
@@ -419,10 +417,10 @@ TEST_CLASS(CanvasPathBuilderUnitTests)
 
         f.GeometrySink->AddQuadraticBezierMethod.SetExpectedCalls(1,
             [](const D2D1_QUADRATIC_BEZIER_SEGMENT* segment)
-        {
-            Assert::AreEqual(D2D1::Point2F(1, 2), segment->point1);
-            Assert::AreEqual(D2D1::Point2F(3, 4), segment->point2);
-        });
+            {
+                Assert::AreEqual(D2D1::Point2F(1, 2), segment->point1);
+                Assert::AreEqual(D2D1::Point2F(3, 4), segment->point2);
+            });
         ThrowIfFailed(f.PathBuilder->AddQuadraticBezier(Vector2{ 1, 2 }, Vector2{ 3, 4 }));
     }
 
@@ -441,9 +439,9 @@ TEST_CLASS(CanvasPathBuilderUnitTests)
 
         f.GeometrySink->SetSegmentFlagsMethod.SetExpectedCalls(1,
             [](D2D1_PATH_SEGMENT pathSegment)
-        {
-            Assert::AreEqual(D2D1_PATH_SEGMENT_FORCE_ROUND_LINE_JOIN, pathSegment);
-        });
+            {
+                Assert::AreEqual(D2D1_PATH_SEGMENT_FORCE_ROUND_LINE_JOIN, pathSegment);
+            });
         ThrowIfFailed(f.PathBuilder->SetSegmentOptions(CanvasFigureSegmentOptions::ForceRoundLineJoin));
     }
 
@@ -453,9 +451,9 @@ TEST_CLASS(CanvasPathBuilderUnitTests)
 
         f.GeometrySink->SetFillModeMethod.SetExpectedCalls(1,
             [](D2D1_FILL_MODE fillMode)
-        {
-            Assert::AreEqual(D2D1_FILL_MODE_WINDING, fillMode);
-        });
+            {
+                Assert::AreEqual(D2D1_FILL_MODE_WINDING, fillMode);
+            });
         ThrowIfFailed(f.PathBuilder->SetFilledRegionDetermination(CanvasFilledRegionDetermination::Winding));
     }
 
@@ -496,9 +494,9 @@ TEST_CLASS(CanvasPathBuilderUnitTests)
 
         f.GeometrySink->EndFigureMethod.SetExpectedCalls(1,
             [](D2D1_FIGURE_END figureEnd)
-        {
-            Assert::AreEqual(D2D1_FIGURE_END_CLOSED, figureEnd);
-        });
+            {
+                Assert::AreEqual(D2D1_FIGURE_END_CLOSED, figureEnd);
+            });
         ThrowIfFailed(f.PathBuilder->BeginFigure(Vector2{}));
         ThrowIfFailed(f.PathBuilder->EndFigure(CanvasFigureLoop::Closed));
     }
@@ -550,7 +548,7 @@ TEST_CLASS(CanvasPathBuilderUnitTests)
 
         Assert::AreEqual(S_OK, canvasPathBuilder->BeginFigure(Vector2{}));
 
-        ExpectHResultException(E_INVALIDARG, [&]{ f.Manager->Create(canvasPathBuilder.Get()); });
+        ExpectHResultException(E_INVALIDARG, [&]{ CanvasGeometry::CreateNew(canvasPathBuilder.Get()); });
         ValidateStoredErrorState(E_INVALIDARG, Strings::PathBuilderClosedMidFigure);
 
     }
@@ -578,16 +576,16 @@ TEST_CLASS(CanvasPathBuilderUnitTests)
         SinkAccessFixture f;
 
         auto mockD2DPathGeometry = Make<MockD2DPathGeometry>();
-        auto pathGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DPathGeometry.Get());
+        auto pathGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DPathGeometry.Get());
 
         auto canvasPathBuilder = Make<CanvasPathBuilder>(f.Device.Get());
 
         mockD2DPathGeometry->StreamMethod.SetExpectedCalls(1,
             [f](ID2D1GeometrySink* geometrySink)
-        {
-            Assert::AreEqual(static_cast<ID2D1GeometrySink*>(f.GeometrySink.Get()), geometrySink);
-            return S_OK;
-        });
+            {
+                Assert::AreEqual(static_cast<ID2D1GeometrySink*>(f.GeometrySink.Get()), geometrySink);
+                return S_OK;
+            });
 
         Assert::AreEqual(S_OK, canvasPathBuilder->AddGeometry(pathGeometry.Get()));
     }
@@ -597,19 +595,19 @@ TEST_CLASS(CanvasPathBuilderUnitTests)
         SinkAccessFixture f;
 
         auto mockD2DRectangleGeometry = Make<MockD2DRectangleGeometry>();
-        auto rectangleGeometry = f.Manager->GetOrCreate(f.Device.Get(), mockD2DRectangleGeometry.Get());
+        auto rectangleGeometry = Make<CanvasGeometry>(f.Device.Get(), mockD2DRectangleGeometry.Get());
 
         auto canvasPathBuilder = Make<CanvasPathBuilder>(f.Device.Get());
 
         mockD2DRectangleGeometry->SimplifyMethod.SetExpectedCalls(1,
             [f](D2D1_GEOMETRY_SIMPLIFICATION_OPTION simplification, CONST D2D1_MATRIX_3X2_F* transform, FLOAT tol, ID2D1SimplifiedGeometrySink* geometrySink)
-        {
-            Assert::AreEqual(D2D1_GEOMETRY_SIMPLIFICATION_OPTION_CUBICS_AND_LINES, simplification);
-            Assert::IsNull(transform);
-            Assert::AreEqual(D2D1_DEFAULT_FLATTENING_TOLERANCE, tol);
-            Assert::AreEqual(static_cast<ID2D1SimplifiedGeometrySink*>(f.GeometrySink.Get()), geometrySink);
-            return S_OK;
-        });
+            {
+                Assert::AreEqual(D2D1_GEOMETRY_SIMPLIFICATION_OPTION_CUBICS_AND_LINES, simplification);
+                Assert::IsNull(transform);
+                Assert::AreEqual(D2D1_DEFAULT_FLATTENING_TOLERANCE, tol);
+                Assert::AreEqual(static_cast<ID2D1SimplifiedGeometrySink*>(f.GeometrySink.Get()), geometrySink);
+                return S_OK;
+            });
 
         Assert::AreEqual(S_OK, canvasPathBuilder->AddGeometry(rectangleGeometry.Get()));
     }

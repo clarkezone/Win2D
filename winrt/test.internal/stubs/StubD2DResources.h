@@ -46,13 +46,24 @@ public:
 
     ComPtr<StubD2DFactoryWithCreateStrokeStyle> m_factory;
 
+    ComPtr<IDWriteRenderingParams> m_textRenderingParams;
+
+    D2D1_TEXT_ANTIALIAS_MODE m_textAntialiasMode;
+
     StubD2DDeviceContextWithGetFactory()
+        : m_textAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_DEFAULT)
     {
         m_factory = Make<StubD2DFactoryWithCreateStrokeStyle>();
 
         CheckMakeResult(m_factory);
 
         SetTextAntialiasModeMethod.AllowAnyCall();
+
+        SetTextRenderingParamsMethod.AllowAnyCall([=](IDWriteRenderingParams* params) {m_textRenderingParams = params; });
+        GetTextRenderingParamsMethod.AllowAnyCall([=](IDWriteRenderingParams** params) {m_textRenderingParams.CopyTo(params); });
+
+        SetTextAntialiasModeMethod.AllowAnyCall([=](D2D1_TEXT_ANTIALIAS_MODE mode) {m_textAntialiasMode = mode; });
+        GetTextAntialiasModeMethod.AllowAnyCall([=] { return m_textAntialiasMode; });
     }
 
     IFACEMETHODIMP_(void) GetFactory(ID2D1Factory** factory) const override
@@ -70,6 +81,12 @@ public:
 
 class StubD2DDevice : public MockD2DDevice
 {
+public:
+    StubD2DDevice(ID2D1Factory2* parentD2DFactory = nullptr)
+        : MockD2DDevice(parentD2DFactory)
+    {
+    }
+
     IFACEMETHODIMP CreateDeviceContext(
         D2D1_DEVICE_CONTEXT_OPTIONS deviceContextOptions, 
         ID2D1DeviceContext** deviceContext) override
@@ -110,7 +127,6 @@ public:
         , m_dpi(dpi)
     {
     }
-
 
     STDMETHOD_(D2D1_BITMAP_OPTIONS, GetOptions)(
         ) CONST

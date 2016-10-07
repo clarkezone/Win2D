@@ -2,12 +2,9 @@
 //
 // Licensed under the MIT License. See LICENSE.txt in the project root for license information.
 
-using System;
-using System.IO;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
-using System.Text;
-using System.Xml.Serialization;
 using System.Collections.Generic;
+using System.IO;
 
 namespace CodeGen.Test
 {
@@ -49,6 +46,7 @@ namespace CodeGen.Test
         [DeploymentItem("Deployed Files/D2DTypes.xml", "codegen/effects/in/apiref")]
         [DeploymentItem("Deployed Files/D2DTypes2.xml", "codegen/effects/in/apiref")]
         [DeploymentItem("Deployed Files/D2DTypes3.xml", "codegen/effects/in/apiref")]
+        [DeploymentItem("Deployed Files/D2DTypes4.xml", "codegen/effects/in/apiref")]
         public void OutputEffectsIsSync()
         {
             //
@@ -83,8 +81,8 @@ namespace CodeGen.Test
             FileInfo[] actualGeneratedFiles = actualDirectoryInfo.GetFiles();
 
             // Ensure the correct number of files was generated.
-            const int expectedEffectCount = 53;
-            Assert.AreEqual(expectedEffectCount * 3 + 1, expectedGeneratedFiles.Length);
+            const int expectedEffectCount = 59;
+            Assert.AreEqual(expectedEffectCount * 3 + 2, expectedGeneratedFiles.Length);
             Assert.AreEqual(expectedGeneratedFiles.Length, actualGeneratedFiles.Length);
 
             // For each codegenned file in the tree, ensure it was output to the test folder.
@@ -97,6 +95,7 @@ namespace CodeGen.Test
         [DeploymentItem("Deployed Files/D2DTypes.xml", "codegen/in/apiref")]
         [DeploymentItem("Deployed Files/D2DTypes2.xml", "codegen/in/apiref")]
         [DeploymentItem("Deployed Files/D2DTypes3.xml", "codegen/in/apiref")]
+        [DeploymentItem("Deployed Files/D2DTypes4.xml", "codegen/in/apiref")]
         [DeploymentItem("Deployed Files/Settings.xml", "codegen/in")]
         public void OutputIsInSync()
         {
@@ -156,6 +155,7 @@ namespace CodeGen.Test
         [DeploymentItem("Deployed Files/D2DTypes.xml", "codegen/in/apiref")]
         [DeploymentItem("Deployed Files/D2DTypes2.xml", "codegen/in/apiref")]
         [DeploymentItem("Deployed Files/D2DTypes3.xml", "codegen/in/apiref")]
+        [DeploymentItem("Deployed Files/D2DTypes4.xml", "codegen/in/apiref")]
         [DeploymentItem("Deployed Files/Settings.xml", "codegen/in")]
         public void OverridesAreWellFormed()
         {

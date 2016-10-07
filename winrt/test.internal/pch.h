@@ -9,6 +9,9 @@
 
 #include "../lib/pch.h"
 
+// Standard C++
+#include <array>
+
 // UnitTest
 #include <CppUnitTest.h>
 
@@ -21,13 +24,17 @@ using namespace canvas;
 using namespace ABI::Microsoft::Graphics::Canvas;
 using namespace ABI::Microsoft::Graphics::Canvas::Effects;
 
-#include "../test.external/MockDxgiDevice.h"
-#include "../test.external/MockDxgiSurface.h"
+#include "../test.external/Shared/MockDxgiDevice.h"
+#include "../test.external/Shared/MockDxgiSurface.h"
 
 #include "utils/Helpers.h"
+#include "utils/ApiInformationTestAdapter.h"
 #include "mocks/MockHelpers.h"
 #include "mocks/MockAsyncAction.h"
 #include "mocks/MockDxgiSwapChain.h"
+#include "mocks/MockCompositor.h"
+#include "mocks/MockCompositionGraphicsDevice.h"
+#include "mocks/MockCompositionDrawingSurface.h"
 #include "mocks/MockCanvasDevice.h"
 #include "mocks/MockCanvasDrawingSession.h"
 #include "mocks/MockCanvasImageSourceDrawingSessionFactory.h"
@@ -54,11 +61,12 @@ using namespace ABI::Microsoft::Graphics::Canvas::Effects;
 #include "stubs/StubCanvasDrawingSessionAdapter.h"
 #include "stubs/StubD2DDeviceContext.h"
 #include "stubs/StubImageControl.h"
+#include "stubs/StubResourceCreatorWithDpi.h"
 #include "stubs/StubSurfaceImageSource.h"
 #include "stubs/StubSurfaceImageSourceFactory.h"
 #include "stubs/StubUserControl.h"
-#include "stubs/TestBitmapResourceCreationAdapter.h"
-#include "stubs/TestDeviceResourceCreationAdapter.h"
+#include "stubs/TestBitmapAdapter.h"
+#include "stubs/TestDeviceAdapter.h"
 #include "stubs/SwitchableTestBrushFixture.h"
 #include "xaml/CanvasControlTestAdapter.h"
 #include "xaml/ControlFixtures.h"

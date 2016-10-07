@@ -21,22 +21,14 @@ namespace canvas
         std::function<ComPtr<ID2D1ImageBrush>(ID2D1Image* image)> MockCreateImageBrush;
         std::function<ComPtr<ID2D1BitmapBrush1>(ID2D1Bitmap1* bitmap)> MockCreateBitmapBrush;
         std::function<ComPtr<ID2D1Bitmap1>(IWICBitmapSource* converter, CanvasAlphaMode alpha, float dpi)> MockCreateBitmapFromWicResource;
-        std::function<ComPtr<ID2D1Bitmap1>(
-            float width,
-            float height,
-            DirectXPixelFormat format,
-            CanvasAlphaMode alpha,
-            float dpi)> MockCreateRenderTargetBitmap;
-        std::function<ComPtr<ID2D1Image>(ICanvasImage* canvasImage)> MockGetD2DImage;
 
         std::function<ComPtr<ID2D1GradientStopCollection1>(
-            UINT gradientStopCount,
-            CanvasGradientStop const* gradientStops,
-            CanvasEdgeBehavior edgeBehavior,
-            CanvasColorSpace preInterpolationSpace,
-            CanvasColorSpace postInterpolationSpace,
-            CanvasBufferPrecision bufferPrecision,
-            CanvasAlphaMode alphaMode)> MockCreateGradientStopCollection;
+            std::vector<D2D1_GRADIENT_STOP>&&,
+            D2D1_COLOR_SPACE,
+            D2D1_COLOR_SPACE,
+            D2D1_BUFFER_PRECISION,
+            D2D1_EXTEND_MODE,
+            D2D1_COLOR_INTERPOLATION_MODE)> MockCreateGradientStopCollection;
 
         std::function<ComPtr<ID2D1LinearGradientBrush>(
             ID2D1GradientStopCollection1* stopCollection)> MockCreateLinearGradientBrush;
@@ -46,7 +38,10 @@ namespace canvas
 
         CALL_COUNTER_WITH_MOCK(TrimMethod, HRESULT());
         CALL_COUNTER_WITH_MOCK(GetInterfaceMethod, HRESULT(REFIID,void**));
-        CALL_COUNTER_WITH_MOCK(CreateDeviceContextMethod, ComPtr<ID2D1DeviceContext1>());
+        CALL_COUNTER_WITH_MOCK(CreateDeviceContextForDrawingSessionMethod, ComPtr<ID2D1DeviceContext1>());
+        CALL_COUNTER_WITH_MOCK(CreateBitmapFromBytesMethod, ComPtr<ID2D1Bitmap1>(uint8_t*, uint32_t, int32_t, int32_t, float, DirectXPixelFormat, CanvasAlphaMode));
+        CALL_COUNTER_WITH_MOCK(CreateBitmapFromSurfaceMethod, ComPtr<ID2D1Bitmap1>(IDirect3DSurface*, float, CanvasAlphaMode));
+        CALL_COUNTER_WITH_MOCK(CreateRenderTargetBitmapMethod, ComPtr<ID2D1Bitmap1>(float, float, float, DirectXPixelFormat, CanvasAlphaMode));
         CALL_COUNTER_WITH_MOCK(CreateSwapChainForCompositionMethod, ComPtr<IDXGISwapChain1>(int32_t, int32_t, DirectXPixelFormat, int32_t, CanvasAlphaMode));
         CALL_COUNTER_WITH_MOCK(CreateSwapChainForCoreWindowMethod, ComPtr<IDXGISwapChain1>(ICoreWindow*, int32_t, int32_t, DirectXPixelFormat, int32_t, CanvasAlphaMode));
         CALL_COUNTER_WITH_MOCK(CreateCommandListMethod, ComPtr<ID2D1CommandList>());
@@ -63,11 +58,20 @@ namespace canvas
         CALL_COUNTER_WITH_MOCK(CreateFilledGeometryRealizationMethod, ComPtr<ID2D1GeometryRealization>(ID2D1Geometry*, float));
         CALL_COUNTER_WITH_MOCK(CreateStrokedGeometryRealizationMethod, ComPtr<ID2D1GeometryRealization>(ID2D1Geometry*, float, ID2D1StrokeStyle*, float));
 
-        CALL_COUNTER_WITH_MOCK(GetResourceCreationDeviceContextMethod, ComPtr<ID2D1DeviceContext1>());
+        CALL_COUNTER_WITH_MOCK(CreatePrintControlMethod, ComPtr<ID2D1PrintControl>(IPrintDocumentPackageTarget*, float));
+        
+        CALL_COUNTER_WITH_MOCK(GetResourceCreationDeviceContextMethod, DeviceContextLease());
 
         CALL_COUNTER_WITH_MOCK(GetPrimaryDisplayOutputMethod, ComPtr<IDXGIOutput>());
 
+        CALL_COUNTER_WITH_MOCK(LeaseHistogramEffectMethod, ComPtr<ID2D1Effect>(ID2D1DeviceContext*));
+        CALL_COUNTER_WITH_MOCK(ReleaseHistogramEffectMethod, void(ComPtr<ID2D1Effect>));
+
+        CALL_COUNTER_WITH_MOCK(IsBufferPrecisionSupportedMethod, HRESULT(CanvasBufferPrecision, boolean*));
+
         CALL_COUNTER_WITH_MOCK(RaiseDeviceLostMethod, HRESULT());
+
+        CALL_COUNTER_WITH_MOCK(LockMethod, HRESULT(ICanvasLock**));
 
         CALL_COUNTER_WITH_MOCK(add_DeviceLostMethod, HRESULT(DeviceLostHandlerType*, EventRegistrationToken*));
         CALL_COUNTER_WITH_MOCK(remove_DeviceLostMethod, HRESULT(EventRegistrationToken));
@@ -75,6 +79,11 @@ namespace canvas
         CALL_COUNTER_WITH_MOCK(GetDeviceRemovedErrorCodeMethod, HRESULT());
 
         CALL_COUNTER_WITH_MOCK(IsDeviceLostMethod, HRESULT(int, boolean*));
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+        CALL_COUNTER_WITH_MOCK(CreateGradientMeshMethod, ComPtr<ID2D1GradientMesh>(D2D1_GRADIENT_MESH_PATCH const*, UINT32));
+        CALL_COUNTER_WITH_MOCK(IsSpriteBatchQuirkRequiredMethod, bool());
+#endif
 
         //
         // ICanvasDevice
@@ -89,6 +98,41 @@ namespace canvas
         IFACEMETHODIMP get_MaximumBitmapSizeInPixels(int32_t* value) override
         {
             Assert::Fail(L"Unexpected call to get_MaximumBitmapSizeInPixels");
+            return E_NOTIMPL;
+        }
+
+        IFACEMETHODIMP IsPixelFormatSupported(DirectXPixelFormat pixelFormat, boolean* value) override
+        {
+            Assert::Fail(L"Unexpected call to IsPixelFormatSupported");
+            return E_NOTIMPL;
+        }
+
+        IFACEMETHODIMP IsBufferPrecisionSupported(CanvasBufferPrecision bufferPrecision, boolean* value) override
+        {
+            return IsBufferPrecisionSupportedMethod.WasCalled(bufferPrecision, value);
+        }
+
+        IFACEMETHODIMP get_MaximumCacheSize(UINT64* value) override
+        {
+            Assert::Fail(L"Unexpected call to get_MaximumCacheSize");
+            return E_NOTIMPL;
+        }
+
+        IFACEMETHODIMP put_MaximumCacheSize(UINT64 value) override
+        {
+            Assert::Fail(L"Unexpected call to put_MaximumCacheSize");
+            return E_NOTIMPL;
+        }
+
+        IFACEMETHODIMP get_LowPriority(boolean* value) override
+        {
+            Assert::Fail(L"Unexpected call to get_LowPriority");
+            return E_NOTIMPL;
+        }
+
+        IFACEMETHODIMP put_LowPriority(boolean value) override
+        {
+            Assert::Fail(L"Unexpected call to put_LowPriority");
             return E_NOTIMPL;
         }
 
@@ -115,6 +159,11 @@ namespace canvas
         IFACEMETHODIMP RaiseDeviceLost()
         {
             return RaiseDeviceLostMethod.WasCalled();
+        }
+
+        IFACEMETHODIMP Lock(ICanvasLock** value)
+        {
+            return LockMethod.WasCalled(value);
         }
 
         //
@@ -165,9 +214,9 @@ namespace canvas
             return MockGetD2DDevice();
         }
 
-        virtual ComPtr<ID2D1DeviceContext1> CreateDeviceContext() override
+        virtual ComPtr<ID2D1DeviceContext1> CreateDeviceContextForDrawingSession() override
         {
-            return CreateDeviceContextMethod.WasCalled();
+            return CreateDeviceContextForDrawingSessionMethod.WasCalled();
         }
 
         virtual ComPtr<ID2D1SolidColorBrush> CreateSolidColorBrush(D2D1_COLOR_F const& color) override
@@ -194,6 +243,26 @@ namespace canvas
             return MockCreateBitmapFromWicResource(converter, alpha, dpi);
         }
 
+        virtual ComPtr<ID2D1Bitmap1> CreateBitmapFromBytes(
+            uint8_t* bytes,
+            uint32_t pitch,
+            int32_t widthInPixels,
+            int32_t heightInPixels,
+            float dpi,
+            DirectXPixelFormat format,
+            CanvasAlphaMode alphaMode) override
+        {
+            return CreateBitmapFromBytesMethod.WasCalled(bytes, pitch, widthInPixels, heightInPixels, dpi, format, alphaMode);
+        }
+
+        virtual ComPtr<ID2D1Bitmap1> CreateBitmapFromSurface(
+            IDirect3DSurface* surface,
+            float dpi,
+            CanvasAlphaMode alphaMode) override
+        {
+            return CreateBitmapFromSurfaceMethod.WasCalled(surface, dpi, alphaMode);
+        }
+
         virtual ComPtr<ID2D1Bitmap1> CreateRenderTargetBitmap(
             float width,
             float height,
@@ -201,12 +270,7 @@ namespace canvas
             DirectXPixelFormat format,
             CanvasAlphaMode alpha) override
         {
-            if (!MockCreateRenderTargetBitmap)
-            {
-                Assert::Fail(L"Unexpected call to CreateRenderTargetBitmap");
-                return nullptr;
-            }
-            return MockCreateRenderTargetBitmap(width, height, format, alpha, dpi);
+            return CreateRenderTargetBitmapMethod.WasCalled(width, height, dpi, format, alpha);
         }
 
         virtual ComPtr<ID2D1BitmapBrush1> CreateBitmapBrush(ID2D1Bitmap1* Bitmap) override
@@ -231,25 +295,13 @@ namespace canvas
             return MockCreateImageBrush(image);
         }
 
-        virtual ComPtr<ID2D1Image> GetD2DImage(ICanvasImage* canvasImage) override
-        {
-            if (!MockGetD2DImage)
-            {
-                Assert::Fail(L"Unexpected call to GetD2DImage");
-                return nullptr;
-            }
-
-            return MockGetD2DImage(canvasImage);
-        }
-
         virtual ComPtr<ID2D1GradientStopCollection1> CreateGradientStopCollection(
-            uint32_t gradientStopCount,
-            CanvasGradientStop const* gradientStops,
-            CanvasEdgeBehavior edgeBehavior,
-            CanvasColorSpace preInterpolationSpace,
-            CanvasColorSpace postInterpolationSpace,
-            CanvasBufferPrecision bufferPrecision,
-            CanvasAlphaMode alphaMode) override
+            std::vector<D2D1_GRADIENT_STOP>&& stops,
+            D2D1_COLOR_SPACE preInterpolationSpace,
+            D2D1_COLOR_SPACE postInterpolationSpace,
+            D2D1_BUFFER_PRECISION bufferPrecision,
+            D2D1_EXTEND_MODE extendMode,
+            D2D1_COLOR_INTERPOLATION_MODE interpolationMode) override
         {
             if (!MockCreateGradientStopCollection)
             {
@@ -258,13 +310,12 @@ namespace canvas
             }
 
             return MockCreateGradientStopCollection(
-                gradientStopCount,
-                gradientStops,
-                edgeBehavior,
+                std::move(stops),
                 preInterpolationSpace,
                 postInterpolationSpace,
                 bufferPrecision,
-                alphaMode);
+                extendMode,
+                interpolationMode);
         }
 
         virtual ComPtr<ID2D1LinearGradientBrush> CreateLinearGradientBrush(
@@ -361,7 +412,12 @@ namespace canvas
             return CreateStrokedGeometryRealizationMethod.WasCalled(geometry, strokeWidth, strokeStyle, flatteningTolerance);
         }
 
-        virtual ComPtr<ID2D1DeviceContext1> GetResourceCreationDeviceContext() override
+        virtual ComPtr<ID2D1PrintControl> CreatePrintControl(IPrintDocumentPackageTarget* target, float dpi) override
+        {
+            return CreatePrintControlMethod.WasCalled(target, dpi);
+        }
+
+        virtual DeviceContextLease GetResourceCreationDeviceContext() override
         {
             return GetResourceCreationDeviceContextMethod.WasCalled();
         }
@@ -370,6 +426,35 @@ namespace canvas
         {
             return GetPrimaryDisplayOutputMethod.WasCalled();
         }
+
+        virtual void ThrowIfCreateSurfaceFailed(HRESULT hr, wchar_t const* typeName, uint32_t width, uint32_t height) override
+        {
+            ThrowIfFailed(hr);
+        }
+
+        virtual ComPtr<ID2D1Effect> LeaseHistogramEffect(ID2D1DeviceContext* d2dContext) override
+        {
+            return LeaseHistogramEffectMethod.WasCalled(d2dContext);
+        }
+
+        virtual void ReleaseHistogramEffect(ComPtr<ID2D1Effect>&& effect) override
+        {
+            return ReleaseHistogramEffectMethod.WasCalled(effect);
+        }
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+        virtual ComPtr<ID2D1GradientMesh> CreateGradientMesh(
+            D2D1_GRADIENT_MESH_PATCH const* patches,
+            UINT32 patchCount) override
+        {
+            return CreateGradientMeshMethod.WasCalled(patches, patchCount);
+        }
+
+        virtual bool IsSpriteBatchQuirkRequired()
+        {
+            return IsSpriteBatchQuirkRequiredMethod.WasCalled();
+        }
+#endif
     };
 }
 

@@ -9,15 +9,18 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    LuminanceToAlphaEffect::LuminanceToAlphaEffect()
-        : CanvasEffect(CLSID_D2D1LuminanceToAlpha, 0, 1, true)
+    LuminanceToAlphaEffect::LuminanceToAlphaEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 0, 1, true, device, effect, static_cast<ILuminanceToAlphaEffect*>(this))
     {
-        // Set default values
+        if (!effect)
+        {
+            // Set default values
+        }
     }
 
     IMPLEMENT_EFFECT_SOURCE_PROPERTY(LuminanceToAlphaEffect,
         Source,
         0)
 
-    ActivatableClass(LuminanceToAlphaEffect);
+    ActivatableClassWithFactory(LuminanceToAlphaEffect, SimpleAgileActivationFactory<LuminanceToAlphaEffect>);
 }}}}}

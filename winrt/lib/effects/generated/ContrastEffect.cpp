@@ -11,12 +11,15 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    ContrastEffect::ContrastEffect()
-        : CanvasEffect(CLSID_D2D1Contrast, 2, 1, true)
+    ContrastEffect::ContrastEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 2, 1, true, device, effect, static_cast<IContrastEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<float>(D2D1_CONTRAST_PROP_CONTRAST, 0.0f);
-        SetBoxedProperty<boolean>(D2D1_CONTRAST_PROP_CLAMP_INPUT, static_cast<boolean>(false));
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<float>(D2D1_CONTRAST_PROP_CONTRAST, 0.0f);
+            SetBoxedProperty<boolean>(D2D1_CONTRAST_PROP_CLAMP_INPUT, static_cast<boolean>(false));
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY_WITH_VALIDATION(ContrastEffect,
@@ -40,7 +43,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         { L"Contrast",    D2D1_CONTRAST_PROP_CONTRAST,    GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT },
         { L"ClampSource", D2D1_CONTRAST_PROP_CLAMP_INPUT, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT })
 
-    ActivatableClass(ContrastEffect);
+    ActivatableClassWithFactory(ContrastEffect, SimpleAgileActivationFactory<ContrastEffect>);
 }}}}}
 
 #endif // _WIN32_WINNT_WIN10

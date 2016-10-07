@@ -9,32 +9,37 @@
 using namespace ABI::Microsoft::Graphics::Canvas;
 using namespace ABI::Microsoft::Graphics::Canvas::UI::Xaml;
 
-CanvasImageSourceDrawingSessionFactory::CanvasImageSourceDrawingSessionFactory()
-    : m_drawingSessionManager(CanvasDrawingSessionFactory::GetOrCreateManager())
-{
-}
-
 ComPtr<ICanvasDrawingSession> CanvasImageSourceDrawingSessionFactory::Create(
     ICanvasDevice* owner,
     ISurfaceImageSourceNativeWithD2D* sisNative,
+    std::shared_ptr<bool> hasActiveDrawingSession,
     Color const& clearColor,
-    RECT const& updateRectangle,
+    Rect const& updateRectangleInDips,
     float dpi) const
 {
     CheckInPointer(sisNative);
 
+    if (*hasActiveDrawingSession)
+        ThrowHR(E_FAIL, Strings::CannotCreateDrawingSessionUntilPreviousOneClosed);
+
+    RECT updateRectangle = ToRECT(updateRectangleInDips, dpi);
+
     ComPtr<ID2D1DeviceContext1> deviceContext;
+    D2D1_POINT_2F offset;
     auto adapter = CanvasImageSourceDrawingSessionAdapter::Create(
         sisNative,
         ToD2DColor(clearColor),
         updateRectangle,
         dpi,
-        &deviceContext);
+        &deviceContext,
+        &offset);
 
-    return m_drawingSessionManager->Create(
-        owner,
+    return CanvasDrawingSession::CreateNew(
         deviceContext.Get(),
-        std::move(adapter));
+        std::move(adapter),
+        owner,
+        std::move(hasActiveDrawingSession),
+        offset);
 }
 
 //
@@ -165,13 +170,12 @@ CanvasImageSource::CanvasImageSource(
     ISurfaceImageSourceFactory* surfaceImageSourceFactory,
     std::shared_ptr<ICanvasImageSourceDrawingSessionFactory> drawingSessionFactory)
     : m_drawingSessionFactory(drawingSessionFactory)
+    , m_hasActiveDrawingSession(std::make_shared<bool>())
     , m_width(width)
     , m_height(height)
     , m_dpi(dpi)
     , m_alphaMode(alphaMode)
 {
-    using ::Microsoft::WRL::Wrappers::HStringReference;
-
     bool isOpaque;
 
     switch (alphaMode)
@@ -185,7 +189,7 @@ CanvasImageSource::CanvasImageSource(
         break;
 
     default:
-        ThrowHR(E_INVALIDARG, HStringReference(Strings::InvalidAlphaModeForImageSource).Get());
+        ThrowHR(E_INVALIDARG, Strings::InvalidAlphaModeForImageSource);
     }
 
     CreateBaseClass(surfaceImageSourceFactory, isOpaque);
@@ -203,11 +207,13 @@ void CanvasImageSource::CreateBaseClass(
     ComPtr<ISurfaceImageSource> base;
     ComPtr<IInspectable> baseInspectable;
 
+    ICanvasImageSource* outer = this;
+
     ThrowIfFailed(surfaceImageSourceFactory->CreateInstanceWithDimensionsAndOpacity(
         SizeDipsToPixels(m_width, m_dpi),
         SizeDipsToPixels(m_height, m_dpi),
         isOpaque,
-        this,
+        outer,
         &baseInspectable,
         &base));
 
@@ -219,14 +225,16 @@ void CanvasImageSource::CreateBaseClass(
 
 void CanvasImageSource::SetDevice(ICanvasDevice* device)
 {
+    auto deviceInternal = MaybeAs<ICanvasDeviceInternal>(device);   // device may be null
+
     //
     // Get the D2D device and pass this to the underlying surface image
     // source.
     //
     ComPtr<ID2D1Device> d2dDevice;
 
-    if (device)
-        d2dDevice = As<ICanvasDeviceInternal>(device)->GetD2DDevice();
+    if (deviceInternal)
+        d2dDevice = deviceInternal->GetD2DDevice();
 
     auto sisNative = As<ISurfaceImageSourceNativeWithD2D>(GetComposableBase());
 
@@ -237,7 +245,12 @@ void CanvasImageSource::SetDevice(ICanvasDevice* device)
     // from SurfaceImageSource and we want to be consistent with the
     // existing XAML behavior.
     //
-    ThrowIfFailed(sisNative->SetDevice(d2dDevice.Get()));
+    HRESULT hr = sisNative->SetDevice(d2dDevice.Get());
+
+    if (deviceInternal)
+        deviceInternal->ThrowIfCreateSurfaceFailed(hr, L"CanvasImageSource", SizeDipsToPixels(m_width, m_dpi), SizeDipsToPixels(m_height, m_dpi));
+    else
+        ThrowIfFailed(hr);
 
     //
     // Remember the canvas device we're now using.  We do this after we're
@@ -269,24 +282,17 @@ IFACEMETHODIMP CanvasImageSource::CreateDrawingSessionWithUpdateRectangle(
     ICanvasDrawingSession** drawingSession)
 {
     return ExceptionBoundary(
-        [&]()
+        [&]
         {
             ComPtr<ISurfaceImageSourceNativeWithD2D> sisNative;
             ThrowIfFailed(GetComposableBase().As(&sisNative));
 
-            RECT rectInPixels =
-                {
-                    SizeDipsToPixels(updateRectangle.X, m_dpi),
-                    SizeDipsToPixels(updateRectangle.Y, m_dpi),
-                    SizeDipsToPixels(updateRectangle.X + updateRectangle.Width, m_dpi),
-                    SizeDipsToPixels(updateRectangle.Y + updateRectangle.Height, m_dpi),
-                };
-
             auto ds = m_drawingSessionFactory->Create(
                 m_device.Get(),
                 sisNative.Get(),
+                m_hasActiveDrawingSession,
                 clearColor,
-                rectInPixels,
+                updateRectangle,
                 m_dpi);
             
             ThrowIfFailed(ds.CopyTo(drawingSession));

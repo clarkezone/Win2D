@@ -11,30 +11,73 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
     using namespace ::Microsoft::WRL;
     using namespace Numerics;
 
-    class CanvasGeometry;
-    class CanvasGeometryManager;
-
-    struct CanvasGeometryTraits
-    {
-        typedef ID2D1Geometry resource_t;
-        typedef CanvasGeometry wrapper_t;
-        typedef ICanvasGeometry wrapper_interface_t;
-        typedef CanvasGeometryManager manager_t;
-    };
-
     class CanvasGeometry : RESOURCE_WRAPPER_RUNTIME_CLASS(
-        CanvasGeometryTraits,
-        IClosable)
+        ID2D1Geometry,
+        CanvasGeometry,
+        ICanvasGeometry,
+        CloakedIid<ICanvasResourceWrapperWithDevice>)
     {
         InspectableClass(RuntimeClass_Microsoft_Graphics_Canvas_Geometry_CanvasGeometry, BaseTrust);
 
         ClosablePtr<ICanvasDevice> m_canvasDevice;
 
     public:
+        static ComPtr<CanvasGeometry> CreateNew(
+            ICanvasResourceCreator* device,
+            Rect rect);
+
+        static ComPtr<CanvasGeometry> CreateNew(
+            ICanvasResourceCreator* device,
+            Vector2 center,
+            float radiusX,
+            float radiusY);
+
+        static ComPtr<CanvasGeometry> CreateNew(
+            ICanvasResourceCreator* device,
+            Rect rect,
+            float radiusX,
+            float radiusY);
+
+        static ComPtr<CanvasGeometry> CreateNew(
+            ICanvasPathBuilder* pathBuilder);
+
+        static ComPtr<CanvasGeometry> CreateNew(
+            ICanvasResourceCreator* resourceCreator,
+            uint32_t pointCount,
+            Vector2* points);
+
+        static ComPtr<CanvasGeometry> CreateNew(
+            ICanvasResourceCreator* resourceCreator,
+            uint32_t geometryCount,
+            ICanvasGeometry** geometryElements,
+            CanvasFilledRegionDetermination filledRegionDetermination);
+
+        static ComPtr<CanvasGeometry> CreateNew(
+            ICanvasTextLayout* textLayout);
+
+        static ComPtr<CanvasGeometry> CreateNew(
+            ICanvasResourceCreator* resourceCreator,
+            Vector2 point,
+            ICanvasFontFace* fontFace,
+            float fontSize,
+            uint32_t glyphCount,
+            CanvasGlyph* glyphs,
+            boolean isSideways,
+            uint32_t bidiLevel,
+            CanvasTextMeasuringMode measuringMode,
+            CanvasGlyphOrientation glyphOrientation);
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+        static ComPtr<CanvasGeometry> CreateNew(
+            ICanvasResourceCreator* resourceCreator,
+            IIterable<InkStroke*>* inkStrokes,
+            Matrix3x2 transform,
+            float flatteningTolerance);
+#endif
+
         CanvasGeometry(
-            std::shared_ptr<CanvasGeometryManager> manager,
-            ID2D1Geometry* d2dGeometry,
-            ICanvasDevice* canvasDevice);
+            ICanvasDevice* canvasDevice,
+            ID2D1Geometry* d2dGeometry);
 
         IFACEMETHOD(Close)();
 
@@ -236,55 +279,14 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             Vector2* point);
     };
 
-    class CanvasGeometryManager : public ResourceManager<CanvasGeometryTraits>
-    {
-    public:
-        ComPtr<CanvasGeometry> CreateNew(
-            ICanvasResourceCreator* device,
-            Rect rect);
-
-        ComPtr<CanvasGeometry> CreateNew(
-            ICanvasResourceCreator* device,
-            Vector2 center,
-            float radiusX,
-            float radiusY);
-
-        ComPtr<CanvasGeometry> CreateNew(
-            ICanvasResourceCreator* device,
-            Rect rect,
-            float radiusX,
-            float radiusY);
-
-        ComPtr<CanvasGeometry> CreateNew(
-            ICanvasPathBuilder* pathBuilder);
-
-        ComPtr<CanvasGeometry> CreateNew(
-            ICanvasResourceCreator* resourceCreator,
-            uint32_t pointCount,
-            Vector2* points);
-
-        ComPtr<CanvasGeometry> CreateNew(
-            ICanvasResourceCreator* resourceCreator,
-            uint32_t geometryCount,
-            ICanvasGeometry** geometryElements,
-            CanvasFilledRegionDetermination filledRegionDetermination);
-
-        ComPtr<CanvasGeometry> CreateWrapper(
-            ICanvasDevice* device,
-            ID2D1Geometry* resource);
-    };
 
     class CanvasGeometryFactory
-        : public ActivationFactory<
-            ICanvasGeometryStatics,
-            CloakedIid<ICanvasDeviceResourceFactoryNative>> ,
-            public PerApplicationManager<CanvasGeometryFactory, CanvasGeometryManager>
+        : public AgileActivationFactory<ICanvasGeometryStatics>
+        , private LifespanTracker<CanvasGeometryFactory>
     {
         InspectableClassStatic(RuntimeClass_Microsoft_Graphics_Canvas_Geometry_CanvasGeometry, BaseTrust);
 
     public:
-        IMPLEMENT_DEFAULT_ICANVASDEVICERESOURCEFACTORYNATIVE();
-
         IFACEMETHOD(CreateRectangle)(
             ICanvasResourceCreator* resourceCreator,
             Rect rect,
@@ -365,6 +367,37 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             ICanvasGeometry** geometryElements,
             CanvasFilledRegionDetermination filledRegionDetermination,
             ICanvasGeometry** geometry) override;
+
+        IFACEMETHOD(CreateText)(
+            ICanvasTextLayout* textLayout,
+            ICanvasGeometry** geometry) override;
+
+        IFACEMETHOD(CreateGlyphRun)(
+            ICanvasResourceCreator* resourceCreator,
+            Vector2 point,
+            ICanvasFontFace* fontFace,
+            float fontSize,
+            uint32_t glyphCount,
+            CanvasGlyph* glyphs,
+            boolean isSideways,
+            uint32_t bidiLevel,
+            CanvasTextMeasuringMode measuringMode,
+            CanvasGlyphOrientation glyphOrientation,
+            ICanvasGeometry** geometry) override;
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+        IFACEMETHOD(CreateInk)(
+            ICanvasResourceCreator* resourceCreator,
+            IIterable<InkStroke*>* inkStrokes,
+            ICanvasGeometry** geometry) override;
+
+        IFACEMETHOD(CreateInkWithTransformAndFlatteningTolerance)(
+            ICanvasResourceCreator* resourceCreator,
+            IIterable<InkStroke*>* inkStrokes,
+            Matrix3x2 transform,
+            float flatteningTolerance,
+            ICanvasGeometry** geometry) override;
+#endif
 
         IFACEMETHOD(ComputeFlatteningTolerance)(
             float dpi,

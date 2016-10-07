@@ -9,11 +9,14 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    SaturationEffect::SaturationEffect()
-        : CanvasEffect(CLSID_D2D1Saturation, 1, 1, true)
+    SaturationEffect::SaturationEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 1, 1, true, device, effect, static_cast<ISaturationEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<float>(D2D1_SATURATION_PROP_SATURATION, 0.5f);
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<float>(D2D1_SATURATION_PROP_SATURATION, 0.5f);
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY_WITH_VALIDATION(SaturationEffect,
@@ -30,5 +33,5 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
     IMPLEMENT_EFFECT_PROPERTY_MAPPING(SaturationEffect,
         { L"Saturation", D2D1_SATURATION_PROP_SATURATION, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT })
 
-    ActivatableClass(SaturationEffect);
+    ActivatableClassWithFactory(SaturationEffect, SimpleAgileActivationFactory<SaturationEffect>);
 }}}}}

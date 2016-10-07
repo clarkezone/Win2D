@@ -32,7 +32,7 @@ IFACEMETHODIMP CanvasCachedGeometryFactory::CreateFillWithFlatteningTolerance(
             ComPtr<ICanvasDevice> device;
             ThrowIfFailed(geometry->get_Device(&device));
 
-            auto newCanvasCachedGeometry = GetManager()->Create(device.Get(), geometry, flatteningTolerance);
+            auto newCanvasCachedGeometry = CanvasCachedGeometry::CreateNew(device.Get(), geometry, flatteningTolerance);
 
             ThrowIfFailed(newCanvasCachedGeometry.CopyTo(cachedGeometry));
         });
@@ -92,7 +92,7 @@ void CanvasCachedGeometryFactory::CreateStrokeImpl(
     ComPtr<ICanvasDevice> device;
     ThrowIfFailed(geometry->get_Device(&device));
 
-    auto newCanvasCachedGeometry = GetManager()->Create(
+    auto newCanvasCachedGeometry = CanvasCachedGeometry::CreateNew(
         device.Get(), 
         geometry, 
         strokeWidth,
@@ -103,11 +103,10 @@ void CanvasCachedGeometryFactory::CreateStrokeImpl(
 }
 
 CanvasCachedGeometry::CanvasCachedGeometry(
-    std::shared_ptr<CanvasCachedGeometryManager> manager,
-    ID2D1GeometryRealization* d2dGeometryRealization,
-    ComPtr<ICanvasDevice> const& device)
-    : ResourceWrapper(manager, d2dGeometryRealization)
-    , m_canvasDevice(device.Get())
+    ICanvasDevice* device,
+    ID2D1GeometryRealization* d2dGeometryRealization)
+    : ResourceWrapper(d2dGeometryRealization)
+    , m_canvasDevice(device)
 {
 
 }
@@ -130,7 +129,7 @@ IFACEMETHODIMP CanvasCachedGeometry::get_Device(ICanvasDevice** device)
 }
 
 // Cached fills
-ComPtr<CanvasCachedGeometry> CanvasCachedGeometryManager::CreateNew(
+ComPtr<CanvasCachedGeometry> CanvasCachedGeometry::CreateNew(
     ICanvasDevice* device,
     ICanvasGeometry* geometry,
     float flatteningTolerance)
@@ -146,17 +145,14 @@ ComPtr<CanvasCachedGeometry> CanvasCachedGeometryManager::CreateNew(
         d2dGeometry.Get(),
         flatteningTolerance);
 
-    auto canvasCachedGeometry = Make<CanvasCachedGeometry>(
-        shared_from_this(),
-        d2dGeometryRealization.Get(),
-        device);
+    auto canvasCachedGeometry = Make<CanvasCachedGeometry>(device, d2dGeometryRealization.Get());
     CheckMakeResult(canvasCachedGeometry);
 
     return canvasCachedGeometry;
 }
 
 // Cached strokes
-ComPtr<CanvasCachedGeometry> CanvasCachedGeometryManager::CreateNew(
+ComPtr<CanvasCachedGeometry> CanvasCachedGeometry::CreateNew(
     ICanvasDevice* device,
     ICanvasGeometry* geometry,
     float strokeWidth,
@@ -176,23 +172,7 @@ ComPtr<CanvasCachedGeometry> CanvasCachedGeometryManager::CreateNew(
         MaybeGetStrokeStyleResource(d2dGeometry.Get(), strokeStyle).Get(),
         flatteningTolerance);
 
-    auto canvasCachedGeometry = Make<CanvasCachedGeometry>(
-        shared_from_this(),
-        d2dGeometryRealization.Get(),
-        device);
-    CheckMakeResult(canvasCachedGeometry);
-
-    return canvasCachedGeometry;
-}
-
-ComPtr<CanvasCachedGeometry> CanvasCachedGeometryManager::CreateWrapper(
-    ICanvasDevice* device,
-    ID2D1GeometryRealization* resource)
-{
-    auto canvasCachedGeometry = Make<CanvasCachedGeometry>(
-        shared_from_this(),
-        resource,
-        device);
+    auto canvasCachedGeometry = Make<CanvasCachedGeometry>(device, d2dGeometryRealization.Get());
     CheckMakeResult(canvasCachedGeometry);
 
     return canvasCachedGeometry;

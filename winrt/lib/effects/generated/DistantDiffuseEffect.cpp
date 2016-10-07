@@ -9,17 +9,20 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    DistantDiffuseEffect::DistantDiffuseEffect()
-        : CanvasEffect(CLSID_D2D1DistantDiffuse, 7, 1, true)
+    DistantDiffuseEffect::DistantDiffuseEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 7, 1, true, device, effect, static_cast<IDistantDiffuseEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<float>(D2D1_DISTANTDIFFUSE_PROP_AZIMUTH, 0.0f);
-        SetBoxedProperty<float>(D2D1_DISTANTDIFFUSE_PROP_ELEVATION, 0.0f);
-        SetBoxedProperty<float>(D2D1_DISTANTDIFFUSE_PROP_DIFFUSE_CONSTANT, 1.0f);
-        SetBoxedProperty<float>(D2D1_DISTANTDIFFUSE_PROP_SURFACE_SCALE, 1.0f);
-        SetBoxedProperty<float[3]>(D2D1_DISTANTDIFFUSE_PROP_COLOR, Color{ 255, 255, 255, 255 });
-        SetBoxedProperty<float[2]>(D2D1_DISTANTDIFFUSE_PROP_KERNEL_UNIT_LENGTH, Numerics::Vector2{ 1.0f, 1.0f });
-        SetBoxedProperty<uint32_t>(D2D1_DISTANTDIFFUSE_PROP_SCALE_MODE, D2D1_DISTANTDIFFUSE_SCALE_MODE_LINEAR);
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<float>(D2D1_DISTANTDIFFUSE_PROP_AZIMUTH, 0.0f);
+            SetBoxedProperty<float>(D2D1_DISTANTDIFFUSE_PROP_ELEVATION, 0.0f);
+            SetBoxedProperty<float>(D2D1_DISTANTDIFFUSE_PROP_DIFFUSE_CONSTANT, 1.0f);
+            SetBoxedProperty<float>(D2D1_DISTANTDIFFUSE_PROP_SURFACE_SCALE, 1.0f);
+            SetBoxedProperty<float[3]>(D2D1_DISTANTDIFFUSE_PROP_COLOR, Color{ 255, 255, 255, 255 });
+            SetBoxedProperty<float[2]>(D2D1_DISTANTDIFFUSE_PROP_KERNEL_UNIT_LENGTH, Numerics::Vector2{ 1.0f, 1.0f });
+            SetBoxedProperty<uint32_t>(D2D1_DISTANTDIFFUSE_PROP_SCALE_MODE, D2D1_DISTANTDIFFUSE_SCALE_MODE_LINEAR);
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY(DistantDiffuseEffect,
@@ -67,6 +70,12 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         CanvasImageInterpolation,
         D2D1_DISTANTDIFFUSE_PROP_SCALE_MODE)
 
+    IMPLEMENT_EFFECT_PROPERTY(DistantDiffuseEffect,
+        LightColorHdr,
+        ConvertColorHdrToVector3,
+        Numerics::Vector4,
+        D2D1_DISTANTDIFFUSE_PROP_COLOR)
+
     IMPLEMENT_EFFECT_SOURCE_PROPERTY(DistantDiffuseEffect,
         Source,
         0)
@@ -78,7 +87,8 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         { L"HeightMapScale",             D2D1_DISTANTDIFFUSE_PROP_SURFACE_SCALE,      GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT             },
         { L"LightColor",                 D2D1_DISTANTDIFFUSE_PROP_COLOR,              GRAPHICS_EFFECT_PROPERTY_MAPPING_COLOR_TO_VECTOR3   },
         { L"HeightMapKernelSize",        D2D1_DISTANTDIFFUSE_PROP_KERNEL_UNIT_LENGTH, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT             },
-        { L"HeightMapInterpolationMode", D2D1_DISTANTDIFFUSE_PROP_SCALE_MODE,         GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT             })
+        { L"HeightMapInterpolationMode", D2D1_DISTANTDIFFUSE_PROP_SCALE_MODE,         GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT             },
+        { L"LightColorHdr",              D2D1_DISTANTDIFFUSE_PROP_COLOR,              GRAPHICS_EFFECT_PROPERTY_MAPPING_UNKNOWN            })
 
-    ActivatableClass(DistantDiffuseEffect);
+    ActivatableClassWithFactory(DistantDiffuseEffect, SimpleAgileActivationFactory<DistantDiffuseEffect>);
 }}}}}

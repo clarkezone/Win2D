@@ -9,11 +9,14 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    BlendEffect::BlendEffect()
-        : CanvasEffect(CLSID_D2D1Blend, 1, 2, true)
+    BlendEffect::BlendEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 1, 2, true, device, effect, static_cast<IBlendEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<uint32_t>(D2D1_BLEND_PROP_MODE, D2D1_BLEND_MODE_MULTIPLY);
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<uint32_t>(D2D1_BLEND_PROP_MODE, D2D1_BLEND_MODE_MULTIPLY);
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY(BlendEffect,
@@ -33,5 +36,5 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
     IMPLEMENT_EFFECT_PROPERTY_MAPPING(BlendEffect,
         { L"Mode", D2D1_BLEND_PROP_MODE, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT })
 
-    ActivatableClass(BlendEffect);
+    ActivatableClassWithFactory(BlendEffect, SimpleAgileActivationFactory<BlendEffect>);
 }}}}}

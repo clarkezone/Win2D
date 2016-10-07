@@ -9,12 +9,15 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    AtlasEffect::AtlasEffect()
-        : CanvasEffect(CLSID_D2D1Atlas, 2, 1, true)
+    AtlasEffect::AtlasEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 2, 1, true, device, effect, static_cast<IAtlasEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<float[4]>(D2D1_ATLAS_PROP_INPUT_RECT, Rect{ 0, 0, std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity() });
-        SetBoxedProperty<float[4]>(D2D1_ATLAS_PROP_INPUT_PADDING_RECT, Rect{ 0, 0, std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity() });
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<float[4]>(D2D1_ATLAS_PROP_INPUT_RECT, Rect{ 0, 0, std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity() });
+            SetBoxedProperty<float[4]>(D2D1_ATLAS_PROP_INPUT_PADDING_RECT, Rect{ 0, 0, std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity() });
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY(AtlasEffect,
@@ -37,5 +40,5 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         { L"SourceRectangle",  D2D1_ATLAS_PROP_INPUT_RECT,         GRAPHICS_EFFECT_PROPERTY_MAPPING_RECT_TO_VECTOR4 },
         { L"PaddingRectangle", D2D1_ATLAS_PROP_INPUT_PADDING_RECT, GRAPHICS_EFFECT_PROPERTY_MAPPING_RECT_TO_VECTOR4 })
 
-    ActivatableClass(AtlasEffect);
+    ActivatableClassWithFactory(AtlasEffect, SimpleAgileActivationFactory<AtlasEffect>);
 }}}}}

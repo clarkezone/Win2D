@@ -9,11 +9,14 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    CompositeEffect::CompositeEffect()
-        : CanvasEffect(CLSID_D2D1Composite, 1, 0, false)
+    CompositeEffect::CompositeEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 1, 0, false, device, effect, static_cast<ICompositeEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<uint32_t>(D2D1_COMPOSITE_PROP_MODE, D2D1_COMPOSITE_MODE_SOURCE_OVER);
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<uint32_t>(D2D1_COMPOSITE_PROP_MODE, D2D1_COMPOSITE_MODE_SOURCE_OVER);
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY(CompositeEffect,
@@ -27,5 +30,5 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
     IMPLEMENT_EFFECT_PROPERTY_MAPPING(CompositeEffect,
         { L"Mode", D2D1_COMPOSITE_PROP_MODE, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT })
 
-    ActivatableClass(CompositeEffect);
+    ActivatableClassWithFactory(CompositeEffect, SimpleAgileActivationFactory<CompositeEffect>);
 }}}}}

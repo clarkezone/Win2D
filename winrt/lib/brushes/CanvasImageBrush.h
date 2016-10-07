@@ -9,10 +9,8 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
     using namespace ::Microsoft::WRL;
 
     class CanvasImageBrushFactory
-        : public ActivationFactory<
-            ICanvasImageBrushFactory,
-            CloakedIid<ICanvasDeviceResourceFactoryNative>>,
-          private LifespanTracker<CanvasImageBrushFactory>
+        : public AgileActivationFactory<ICanvasImageBrushFactory>
+        , private LifespanTracker<CanvasImageBrushFactory>
     {
         InspectableClassStatic(RuntimeClass_Microsoft_Graphics_Canvas_Brushes_CanvasImageBrush, BaseTrust);
 
@@ -25,21 +23,14 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             ICanvasResourceCreator* resourceAllocator,
             ICanvasImage* image,
             ICanvasImageBrush** canvasImageBrush) override;
-            
-        IFACEMETHOD(GetOrCreate)(
-            ICanvasDevice* device,
-            IUnknown* resource,
-            IInspectable** wrapper) override;
     };
 
-    class CanvasImageBrush : public RuntimeClass<
-        RuntimeClassFlags<WinRtClassicComMix>,
+    class CanvasImageBrush : RESOURCE_WRAPPER_RUNTIME_CLASS(
+        ID2D1Brush,
+        CanvasImageBrush,
         ICanvasImageBrush,
-        ABI::Windows::Foundation::IClosable,
-        CloakedIid<ICanvasResourceWrapperNative>,
-        MixIn<CanvasImageBrush, CanvasBrush>>,
-        public CanvasBrush,
-        private LifespanTracker<CanvasImageBrush>
+        MixIn<CanvasImageBrush, CanvasBrush>),
+        public CanvasBrush
     {
         InspectableClass(RuntimeClass_Microsoft_Graphics_Canvas_Brushes_CanvasImageBrush, BaseTrust);
 
@@ -49,22 +40,28 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         // Bitmap brush is eligible when the source image is a bitmap and the source rect
         // is NULL.
 
+        mutable std::mutex m_mutex;
+
         ComPtr<ID2D1BitmapBrush1> m_d2dBitmapBrush;
 
         ComPtr<ID2D1ImageBrush> m_d2dImageBrush;
 
-        // TODO #2630: stop explicitly storing this once we support proper effect interop.
-        ComPtr<ICanvasImageInternal> m_effectNeedingDpiFixup;
-
-        bool m_useBitmapBrush;
+        CachedResourceReference<ID2D1Image, ICanvasImage> m_currentImageCache;
 
         bool m_isSourceRectSet;
 
     public:
         CanvasImageBrush(
             ICanvasDevice* device,
-            ID2D1BitmapBrush1* bitmapBrush = nullptr,
-            ID2D1ImageBrush* imageBrush = nullptr);
+            ID2D1BitmapBrush1* bitmapBrush);
+
+        CanvasImageBrush(
+            ICanvasDevice* device,
+            ID2D1ImageBrush* imageBrush);
+
+        CanvasImageBrush(
+            ICanvasDevice* device,
+            ICanvasImage* image = nullptr);
 
         IFACEMETHOD(get_Image)(ICanvasImage** value) override;
 
@@ -93,17 +90,15 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         virtual ComPtr<ID2D1Brush> GetD2DBrush(ID2D1DeviceContext* deviceContext, GetBrushFlags flags) override;
 
         // ICanvasResourceWrapperNative
-        IFACEMETHOD(GetResource)(REFIID iid, void** resource) override;
-
-        // non-interface methods
-        void SetImage(ICanvasImage* image);
+        IFACEMETHOD(GetNativeResource)(ICanvasDevice* device, float dpi, REFIID iid, void** resource) override;
 
     private:
         void ThrowIfClosed();
-        void SwitchFromBitmapBrushToImageBrush();
+        void SetImage(ICanvasImage* image);
+        void SwitchToImageBrush(ID2D1Image* image);
+        void SwitchToBitmapBrush(ID2D1Bitmap1* bitmap);
         void TrySwitchFromImageBrushToBitmapBrush();
-        ComPtr<ID2D1Bitmap1> GetD2DBitmap() const;
-        static D2D1_RECT_F GetD2DRectFromRectReference(ABI::Windows::Foundation::IReference<ABI::Windows::Foundation::Rect>* value);
+        void RealizeSourceEffect(ID2D1DeviceContext* deviceContext, GetImageFlags flags, float dpi);
     };
 
 }}}}}

@@ -106,6 +106,9 @@ public:
 
         ComPtr<ICanvasDevice> actualDevice;
         Assert::AreEqual(RO_E_CLOSED, brush->get_Device(&actualDevice));
+
+        ComPtr<IUnknown> resource;
+        Assert::AreEqual(RO_E_CLOSED, brush->GetNativeResource(nullptr, 0, IID_PPV_ARGS(resource.ReleaseAndGetAddressOf())));
     }
 
     TEST_METHOD_EX(CanvasImageBrush_Properties_NullArgs)
@@ -130,7 +133,7 @@ public:
         {
             bool getExtendXCalled = false;
             backingBrush->MockGetExtendModeX =
-                [&]()
+                [&]
                 {
                     Assert::IsFalse(getExtendXCalled);
                     getExtendXCalled = true;
@@ -156,7 +159,7 @@ public:
         {
             bool getExtendYCalled = false;
             backingBrush->MockGetExtendModeY =
-                [&]()
+                [&]
                 {
                     Assert::IsFalse(getExtendYCalled);
                     getExtendYCalled = true;
@@ -182,7 +185,7 @@ public:
         {
             bool getOpacityCalled = false;
             backingBrush->MockGetOpacity =
-                [&]()
+                [&]
                 {
                     Assert::IsFalse(getOpacityCalled);
                     getOpacityCalled = true;
@@ -226,11 +229,11 @@ public:
             D2D1_MATRIX_3X2_F d2dTransform = D2D1::Matrix3x2F(1, 2, 3, 4, 5, 6);
             backingBrush->MockSetTransform =
                 [&](const D2D1_MATRIX_3X2_F* transform)
-            {
-                Assert::IsFalse(setTransformCalled);
-                setTransformCalled = true;
-                Assert::AreEqual(d2dTransform, *transform);
-            };
+                {
+                    Assert::IsFalse(setTransformCalled);
+                    setTransformCalled = true;
+                    Assert::AreEqual(d2dTransform, *transform);
+                };
             Numerics::Matrix3x2 transform = *(reinterpret_cast<Numerics::Matrix3x2*>(&d2dTransform));
             ThrowIfFailed(brush->put_Transform(transform));
             Assert::IsTrue(setTransformCalled);
@@ -272,12 +275,12 @@ public:
 
         bool getInterpolationModeCalled = false;
         bitmapBrush->MockGetInterpolationMode1 =
-            [&]()
-        {
-            Assert::IsFalse(getInterpolationModeCalled);
-            getInterpolationModeCalled = true;
-            return D2D1_INTERPOLATION_MODE_CUBIC;
-        };
+            [&]
+            {
+                Assert::IsFalse(getInterpolationModeCalled);
+                getInterpolationModeCalled = true;
+                return D2D1_INTERPOLATION_MODE_CUBIC;
+            };
         CanvasImageInterpolation interpolation;
         ThrowIfFailed(brush->get_Interpolation(&interpolation));
         Assert::IsTrue(getInterpolationModeCalled);
@@ -286,11 +289,11 @@ public:
         bool setInterpolationModeCalled = false;
         bitmapBrush->MockSetInterpolationMode1 =
             [&](D2D1_INTERPOLATION_MODE interpolationMode)
-        {
-            Assert::IsFalse(setInterpolationModeCalled);
-            setInterpolationModeCalled = true;
-            Assert::AreEqual(D2D1_INTERPOLATION_MODE_ANISOTROPIC, interpolationMode);
-        };
+            {
+                Assert::IsFalse(setInterpolationModeCalled);
+                setInterpolationModeCalled = true;
+                Assert::AreEqual(D2D1_INTERPOLATION_MODE_ANISOTROPIC, interpolationMode);
+            };
         ThrowIfFailed(brush->put_Interpolation(CanvasImageInterpolation::Anisotropic));
         Assert::IsTrue(setInterpolationModeCalled);
     }
@@ -418,7 +421,7 @@ public:
         
         bool getInterpolationModeCalled = false;
         f.m_imageBrush->MockGetInterpolationMode =
-            [&]()
+            [&]
             {
                 Assert::IsFalse(getInterpolationModeCalled);
                 getInterpolationModeCalled = true;
@@ -464,7 +467,15 @@ public:
     {
         // Create an image brush backed by an effect.
         SwitchableTestBrushFixture f;
+
+        auto createEffect = [&](IID const& effectId, ID2D1Effect** effect)
+        {
+            Make<MockD2DEffectThatCountsCalls>(effectId).CopyTo(effect);
+            return S_OK;
+        };
+
         auto effect0 = Make<TestEffect>(CLSID_D2D1GaussianBlur, 0, 0, true);
+        f.m_d2dDeviceContext->CreateEffectMethod.SetExpectedCalls(1, createEffect);
         ThrowIfFailed(f.m_canvasImageBrush->put_Image(effect0.Get()));
 
         // Ensure it's backed by an image brush.
@@ -477,6 +488,7 @@ public:
 
         // Switch it to a different effect.
         auto effect1 = Make<TestEffect>(CLSID_D2D1GaussianBlur, 0, 0, true);
+        f.m_d2dDeviceContext->CreateEffectMethod.SetExpectedCalls(1, createEffect);
         ThrowIfFailed(f.m_canvasImageBrush->put_Image(effect1.Get()));
         
         // Ensure the source rect is still null.
@@ -510,25 +522,15 @@ public:
         Assert::IsTrue(AreReferencedRectsEqual(testSourceRect.Get(), retrievedSourceRect.Get()));
 
         // Make a drawing session.
-        auto manager = std::make_shared<CanvasDrawingSessionManager>();
-        ComPtr<StubD2DDeviceContextWithGetFactory> d2dDeviceContext =
-            Make<StubD2DDeviceContextWithGetFactory>();
-        d2dDeviceContext->FillRectangleMethod.AllowAnyCall();
+        f.m_d2dDeviceContext->FillRectangleMethod.AllowAnyCall();
 
-        ComPtr<CanvasDrawingSession> drawingSession = manager->Create(
-            f.m_canvasDevice.Get(),
-            d2dDeviceContext.Get(),
-            std::make_shared<StubCanvasDrawingSessionAdapter>());
+        ComPtr<CanvasDrawingSession> drawingSession = CanvasDrawingSession::CreateNew(
+            f.m_d2dDeviceContext.Get(),
+            std::make_shared<StubCanvasDrawingSessionAdapter>(),
+            f.m_canvasDevice.Get());
 
-        d2dDeviceContext->GetDpiMethod.AllowAnyCall();
-        d2dDeviceContext->GetDeviceMethod.AllowAnyCallAlwaysCopyValueToParam(Make<StubD2DDevice>());
-
-        d2dDeviceContext->CreateEffectMethod.SetExpectedCalls(1,
-            [&](IID const& effectId, ID2D1Effect** effect)
-        {
-            Make<MockD2DEffectThatCountsCalls>(effectId).CopyTo(effect);
-            return S_OK;
-        });
+        f.m_d2dDeviceContext->GetDpiMethod.AllowAnyCall();
+        f.m_d2dDeviceContext->GetTargetMethod.AllowAnyCallAlwaysCopyValueToParam<ID2D1Image>(nullptr);
 
         ThrowIfFailed(drawingSession->FillRectangleAtCoordsWithBrush(0, 0, 0, 0, f.m_canvasImageBrush.Get())); // Should not throw
 

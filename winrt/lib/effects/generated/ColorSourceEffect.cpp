@@ -9,11 +9,14 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    ColorSourceEffect::ColorSourceEffect()
-        : CanvasEffect(CLSID_D2D1Flood, 1, 0, true)
+    ColorSourceEffect::ColorSourceEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 1, 0, true, device, effect, static_cast<IColorSourceEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<float[4]>(D2D1_FLOOD_PROP_COLOR, Color{ 255, 0, 0, 0 });
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<float[4]>(D2D1_FLOOD_PROP_COLOR, Color{ 255, 0, 0, 0 });
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY(ColorSourceEffect,
@@ -22,8 +25,15 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         Color,
         D2D1_FLOOD_PROP_COLOR)
 
-    IMPLEMENT_EFFECT_PROPERTY_MAPPING(ColorSourceEffect,
-        { L"Color", D2D1_FLOOD_PROP_COLOR, GRAPHICS_EFFECT_PROPERTY_MAPPING_COLOR_TO_VECTOR4 })
+    IMPLEMENT_EFFECT_PROPERTY(ColorSourceEffect,
+        ColorHdr,
+        float[4],
+        Numerics::Vector4,
+        D2D1_FLOOD_PROP_COLOR)
 
-    ActivatableClass(ColorSourceEffect);
+    IMPLEMENT_EFFECT_PROPERTY_MAPPING(ColorSourceEffect,
+        { L"Color",    D2D1_FLOOD_PROP_COLOR, GRAPHICS_EFFECT_PROPERTY_MAPPING_COLOR_TO_VECTOR4 },
+        { L"ColorHdr", D2D1_FLOOD_PROP_COLOR, GRAPHICS_EFFECT_PROPERTY_MAPPING_UNKNOWN          })
+
+    ActivatableClassWithFactory(ColorSourceEffect, SimpleAgileActivationFactory<ColorSourceEffect>);
 }}}}}

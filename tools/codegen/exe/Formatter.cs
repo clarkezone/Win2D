@@ -2,11 +2,9 @@
 //
 // Licensed under the MIT License. See LICENSE.txt in the project root for license information.
 
-using System.Diagnostics;
-using System.Collections.Generic;
-using System.Text;
-using System.IO;
 using System.Globalization;
+using System.IO;
+using System.Text;
 
 namespace CodeGen
 {
@@ -107,7 +105,7 @@ namespace CodeGen
 
             foreach (string token in tokens)
             {
-                if(token.Length > 0)
+                if (token.Length > 0)
                 {
                     string r = char.ToUpper(token[0]) + token.Substring(1).ToLower();
                     result.Append(r);

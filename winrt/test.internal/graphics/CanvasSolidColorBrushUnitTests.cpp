@@ -92,8 +92,6 @@ public:
 TEST_CLASS(CanvasSolidColorBrushTests)
 {
 public:
-    std::shared_ptr<CanvasSolidColorBrushManager> m_colorBrushManager;
-
     class TestCanvasDevice : public StubCanvasDevice
     {
         SolidColorBrushCounters m_counters;
@@ -108,11 +106,6 @@ public:
         }
     };
 
-    TEST_METHOD_INITIALIZE(Reset)
-    {
-        m_colorBrushManager = std::make_shared<CanvasSolidColorBrushManager>();
-    } 
-
     TEST_METHOD_EX(CanvasSolidColorBrush_Construction)
     {
         auto canvasDevice = Make<TestCanvasDevice>();
@@ -120,7 +113,7 @@ public:
         Color red = { 255, 255, 0, 0 };
         D2D1_COLOR_F d2dRed = D2D1::ColorF(1, 0, 0);
 
-        auto canvasSolidColorBrush = m_colorBrushManager->Create(canvasDevice.Get(), red);
+        auto canvasSolidColorBrush = CanvasSolidColorBrush::CreateNew(canvasDevice.Get(), red);
         auto d2dSolidColorBrush = canvasSolidColorBrush->GetResource();
 
         Assert::AreEqual(d2dRed, d2dSolidColorBrush->GetColor());
@@ -135,7 +128,7 @@ public:
     TEST_METHOD_EX(CanvasSolidColorBrush_Implements_Expected_Interfaces)
     {
         auto canvasDevice = Make<TestCanvasDevice>();
-        auto brush = m_colorBrushManager->Create(canvasDevice.Get(), Color{ 255, 0, 0, 0 });
+        auto brush = CanvasSolidColorBrush::CreateNew(canvasDevice.Get(), Color{ 255, 0, 0, 0 });
 
         ASSERT_IMPLEMENTS_INTERFACE(brush, ICanvasSolidColorBrush);
         ASSERT_IMPLEMENTS_INTERFACE(brush, ICanvasBrush);
@@ -155,7 +148,7 @@ public:
         auto testD2DSolidColorBrush = Make<TestD2DSolidColorBrush>(d2dRed, &counters);
         auto canvasDevice = Make<TestCanvasDevice>();
 
-        auto canvasSolidColorBrush = m_colorBrushManager->GetOrCreate(canvasDevice.Get(), testD2DSolidColorBrush.Get());
+        auto canvasSolidColorBrush = Make<CanvasSolidColorBrush>(canvasDevice.Get(), testD2DSolidColorBrush.Get());
 
         // Verify the brush resource got initialized correctly and didn't call
         // any unexpected methods.
@@ -218,7 +211,7 @@ public:
 
         auto d2dBrush = Make<MockD2DSolidColorBrush>();
         auto canvasDevice = Make<TestCanvasDevice>();
-        auto canvasSolidColorBrush = m_colorBrushManager->GetOrCreate(canvasDevice.Get(), d2dBrush.Get());
+        auto canvasSolidColorBrush = Make<CanvasSolidColorBrush>(canvasDevice.Get(), d2dBrush.Get());
 
         Assert::IsNotNull(canvasSolidColorBrush.Get());
 
@@ -257,7 +250,7 @@ public:
 
         auto canvasControlAdapter = std::make_shared<CanvasControlTestAdapter>();
 
-        canvasControlAdapter->DeviceFactory->GetSharedDeviceMethod.SetExpectedCalls(1,
+        canvasControlAdapter->DeviceFactory->GetSharedDeviceWithForceSoftwareRendererMethod.SetExpectedCalls(1,
             [=](boolean, ICanvasDevice** device)
             {
                 return canvasDevice.CopyTo(device);
@@ -271,7 +264,7 @@ public:
         ThrowIfFailed(userControl->LoadedEventSource->InvokeAll(nullptr, nullptr));
         canvasControlAdapter->RaiseCompositionRenderingEvent();
 
-        auto brush = m_colorBrushManager->Create(canvasControl.Get(), Color{ 255, 0, 0, 0 });
+        auto brush = CanvasSolidColorBrush::CreateNew(canvasControl.Get(), Color{ 255, 0, 0, 0 });
 
         // This will only be true if the brush was constructed on the correct device.
         Assert::IsTrue(createSolidColorBrushCalled);
@@ -297,13 +290,12 @@ public:
         ComPtr<StubD2DDeviceContextWithGetFactory> d2dDeviceContext =
             Make<StubD2DDeviceContextWithGetFactory>();
 
-        auto manager = std::make_shared<CanvasDrawingSessionManager>();
-        ComPtr<CanvasDrawingSession> drawingSession = manager->Create(
-            canvasDevice.Get(),
+        ComPtr<CanvasDrawingSession> drawingSession = CanvasDrawingSession::CreateNew(
             d2dDeviceContext.Get(),
-            std::make_shared<StubCanvasDrawingSessionAdapter>());
+            std::make_shared<StubCanvasDrawingSessionAdapter>(),
+            canvasDevice.Get());
 
-        auto createdBrush = m_colorBrushManager->Create(drawingSession.Get(), Color{ 255, 0, 0, 0 });
+        auto createdBrush = CanvasSolidColorBrush::CreateNew(drawingSession.Get(), Color{ 255, 0, 0, 0 });
 
         // Verify that the Create occurred on the DrawingSession device, and not on some
         // other device. Verify it wrapped around the correct brush.
@@ -312,5 +304,118 @@ public:
         ThrowIfFailed(createdBrush.As(&createdBrushInternal));
         ComPtr<ID2D1Brush> createdD2DBrush = createdBrushInternal->GetD2DBrush(nullptr, GetBrushFlags::None);
         Assert::AreEqual(static_cast<ID2D1Brush*>(expectedBrush.Get()), createdD2DBrush.Get());
+    }
+
+    TEST_METHOD_EX(CanvasSolidColorBrush_CreateHdr_FailsWhenPassedInvalidParameters)
+    {
+        auto factory = Make<CanvasSolidColorBrushFactory>();
+
+        auto device = Make<MockCanvasDevice>();
+
+        ComPtr<ICanvasSolidColorBrush> brush;
+        
+        Assert::AreEqual(E_INVALIDARG, factory->CreateHdr(nullptr, Vector4{}, &brush));
+        Assert::AreEqual(E_INVALIDARG, factory->CreateHdr(device.Get(), Vector4{}, nullptr));
+    }
+
+    TEST_METHOD_EX(CanvasSolidColorBrush_CreateHdr_PassesColorThroughToCreateSolidColorBrush)
+    {
+        auto anyColorHdr = Vector4{ 1, 2, 3, 4 };
+
+        auto d2dDeviceContext = Make<MockD2DDeviceContext>();
+        auto d2dDevice = Make<MockD2DDevice>();
+        auto d3dDevice = Make<StubD3D11Device>();
+        auto d2dBrush = Make<MockD2DSolidColorBrush>();
+        auto device = Make<CanvasDevice>(d2dDevice.Get(), d3dDevice.Get());        
+        auto factory = Make<CanvasSolidColorBrushFactory>();
+
+        d2dDevice->MockCreateDeviceContext =
+            [=] (D2D1_DEVICE_CONTEXT_OPTIONS, ID2D1DeviceContext1** deviceContext)
+            {
+                ThrowIfFailed(d2dDeviceContext.CopyTo(deviceContext));
+            };
+
+        d2dDeviceContext->CreateSolidColorBrushMethod.SetExpectedCalls(1,
+            [=] (D2D1_COLOR_F const* color, D2D1_BRUSH_PROPERTIES const* properties, ID2D1SolidColorBrush** theValue)
+            {
+                Assert::AreEqual(anyColorHdr.X, color->r);
+                Assert::AreEqual(anyColorHdr.Y, color->g);
+                Assert::AreEqual(anyColorHdr.Z, color->b);
+                Assert::AreEqual(anyColorHdr.W, color->a);
+
+                Assert::IsNull(properties);
+
+                return d2dBrush.CopyTo(theValue);
+            });
+
+        ComPtr<ICanvasSolidColorBrush> brush;
+        ThrowIfFailed(factory->CreateHdr(device.Get(), anyColorHdr, &brush));
+
+        Assert::IsNotNull(brush.Get());
+        auto wrappedBrush = GetWrappedResource<ID2D1SolidColorBrush>(brush);
+        Assert::IsTrue(IsSameInstance(d2dBrush.Get(), wrappedBrush.Get()));
+    }
+
+    TEST_METHOD_EX(CanvasSolidColorBrush_get_ColorHdr_CallsThroughToUnderlyingBrush)
+    {
+        auto device = Make<MockCanvasDevice>();
+        auto d2dBrush = Make<MockD2DSolidColorBrush>();
+        auto brush = Make<CanvasSolidColorBrush>(device.Get(), d2dBrush.Get());
+
+        d2dBrush->GetColorMethod.SetExpectedCalls(1,
+            [] { return D2D1_COLOR_F{ 1, 2, 3, 4 }; });
+
+        Vector4 colorHdr;
+        ThrowIfFailed(brush->get_ColorHdr(&colorHdr));
+
+        Assert::AreEqual(1.0f, colorHdr.X);
+        Assert::AreEqual(2.0f, colorHdr.Y);
+        Assert::AreEqual(3.0f, colorHdr.Z);
+        Assert::AreEqual(4.0f, colorHdr.W);            
+    }
+
+    TEST_METHOD_EX(CanvasSolidColorBrush_put_ColorHdr_CallsThroughToUnderlyingBrush)
+    {
+        auto device = Make<MockCanvasDevice>();
+        auto d2dBrush = Make<MockD2DSolidColorBrush>();
+        auto brush = Make<CanvasSolidColorBrush>(device.Get(), d2dBrush.Get());
+
+        d2dBrush->SetColorMethod.SetExpectedCalls(1,
+            [] (D2D1_COLOR_F const* color)
+            {
+                Assert::AreEqual(1.0f, color->r);
+                Assert::AreEqual(2.0f, color->g);
+                Assert::AreEqual(3.0f, color->b);
+                Assert::AreEqual(4.0f, color->a);
+            });
+
+        ThrowIfFailed(brush->put_ColorHdr(Vector4{ 1, 2, 3, 4}));
+    }
+
+    TEST_METHOD_EX(CanvasSolidColorBrush_get_Color_ClampsHighColor)
+    {
+        auto device = Make<MockCanvasDevice>();
+        auto d2dBrush = Make<MockD2DSolidColorBrush>();
+        auto brush = Make<CanvasSolidColorBrush>(device.Get(), d2dBrush.Get());
+
+        std::pair<D2D1_COLOR_F, Color> testCases[] =
+        {
+            //                R    G    B    A             A    R    G    B
+            { D2D1_COLOR_F{ 100,   0,   0,   0 }, Color{   0, 255,   0,   0 } },
+            { D2D1_COLOR_F{   0, 100,   0,   0 }, Color{   0,   0, 255,   0 } },
+            { D2D1_COLOR_F{   0,   0, 100,   0 }, Color{   0,   0,   0, 255 } },
+            { D2D1_COLOR_F{   0,   0,   0, 100 }, Color{ 255,   0,   0,   0 } },
+        };
+
+        for (auto testCase : testCases)
+        {
+            d2dBrush->GetColorMethod.SetExpectedCalls(1,            
+                [=] { return testCase.first; });
+
+            Color color;
+            ThrowIfFailed(brush->get_Color(&color));
+
+            Assert::AreEqual(testCase.second, color);
+        }
     }
 };

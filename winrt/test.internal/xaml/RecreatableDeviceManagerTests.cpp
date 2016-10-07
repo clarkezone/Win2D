@@ -291,10 +291,13 @@ public:
             [=](ICanvasDevice*, RunWithDeviceFlags)
             {
                 deviceThatGetsLost->MarkAsLost();
-                ThrowHR(DXGI_ERROR_DEVICE_REMOVED);
+                ThrowHR(DXGI_ERROR_DEVICE_REMOVED, L"message");
             });
 
         f.VerifyDeviceGetsRecreated();
+
+        // As the exception was handled there should be no stored error state
+        ValidateStoredErrorState(S_OK, nullptr);
     }
 
     //
@@ -556,16 +559,16 @@ public:
 
         auto onCreateResources = Callback<CreateResourcesHandler>(
             [&](IInspectable* sender, ICanvasCreateResourcesEventArgs* args)
-        {
-            auto expectedReason = (createCount == 0) ? CanvasCreateResourcesReason::FirstTime : CanvasCreateResourcesReason::NewDevice;
-            createCount++;
+            {
+                auto expectedReason = (createCount == 0) ? CanvasCreateResourcesReason::FirstTime : CanvasCreateResourcesReason::NewDevice;
+                createCount++;
 
-            CanvasCreateResourcesReason reason = (CanvasCreateResourcesReason)-1;
-            ThrowIfFailed(args->get_Reason(&reason));
-            Assert::AreEqual(expectedReason, reason);
+                CanvasCreateResourcesReason reason = (CanvasCreateResourcesReason)-1;
+                ThrowIfFailed(args->get_Reason(&reason));
+                Assert::AreEqual(expectedReason, reason);
 
-            return S_OK;
-        });
+                return S_OK;
+            });
 
         f.DeviceManager->AddCreateResources(f.AnySender, onCreateResources.Get());
 
@@ -581,10 +584,10 @@ public:
 
         f.CallRunWithDevice(
             [=](ICanvasDevice*, RunWithDeviceFlags)
-        {
-            deviceThatGetsLost->MarkAsLost();
-            ThrowHR(DXGI_ERROR_DEVICE_REMOVED);
-        });
+            {
+                deviceThatGetsLost->MarkAsLost();
+                ThrowHR(DXGI_ERROR_DEVICE_REMOVED);
+            });
 
         // Recover to a second device.
         f.DeviceFactory->ExpectToActivateOne();
@@ -600,16 +603,16 @@ public:
 
         auto onCreateResources = Callback<CreateResourcesHandler>(
             [&](IInspectable* sender, ICanvasCreateResourcesEventArgs* args)
-        {
-            auto expectedReason = (createCount == 0) ? CanvasCreateResourcesReason::FirstTime : CanvasCreateResourcesReason::DpiChanged;
-            createCount++;
+            {
+                auto expectedReason = (createCount == 0) ? CanvasCreateResourcesReason::FirstTime : CanvasCreateResourcesReason::DpiChanged;
+                createCount++;
 
-            CanvasCreateResourcesReason reason = (CanvasCreateResourcesReason)-1;
-            ThrowIfFailed(args->get_Reason(&reason));
-            Assert::AreEqual(expectedReason, reason);
+                CanvasCreateResourcesReason reason = (CanvasCreateResourcesReason)-1;
+                ThrowIfFailed(args->get_Reason(&reason));
+                Assert::AreEqual(expectedReason, reason);
 
-            return S_OK;
-        });
+                return S_OK;
+            });
 
         f.DeviceManager->AddCreateResources(f.AnySender, onCreateResources.Get());
 
@@ -1067,16 +1070,16 @@ public:
 
         auto onCreateResources = Callback<CreateResourcesHandler>(
             [&](IInspectable* sender, ICanvasCreateResourcesEventArgs* args)
-        {
-            auto expectedReason = (createCount == 0) ? CanvasCreateResourcesReason::FirstTime : CanvasCreateResourcesReason::DpiChanged;
-            createCount++;
+            {
+                auto expectedReason = (createCount == 0) ? CanvasCreateResourcesReason::FirstTime : CanvasCreateResourcesReason::DpiChanged;
+                createCount++;
 
-            CanvasCreateResourcesReason reason = (CanvasCreateResourcesReason)-1;
-            ThrowIfFailed(args->get_Reason(&reason));
-            Assert::AreEqual(expectedReason, reason);
+                CanvasCreateResourcesReason reason = (CanvasCreateResourcesReason)-1;
+                ThrowIfFailed(args->get_Reason(&reason));
+                Assert::AreEqual(expectedReason, reason);
 
-            return S_OK;
-        });
+                return S_OK;
+            });
 
         f.DeviceManager->AddCreateResources(f.AnySender, onCreateResources.Get());
         f.CallRunWithDevice();

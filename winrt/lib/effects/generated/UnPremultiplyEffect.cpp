@@ -9,15 +9,18 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    UnPremultiplyEffect::UnPremultiplyEffect()
-        : CanvasEffect(CLSID_D2D1UnPremultiply, 0, 1, true)
+    UnPremultiplyEffect::UnPremultiplyEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 0, 1, true, device, effect, static_cast<IUnPremultiplyEffect*>(this))
     {
-        // Set default values
+        if (!effect)
+        {
+            // Set default values
+        }
     }
 
     IMPLEMENT_EFFECT_SOURCE_PROPERTY(UnPremultiplyEffect,
         Source,
         0)
 
-    ActivatableClass(UnPremultiplyEffect);
+    ActivatableClassWithFactory(UnPremultiplyEffect, SimpleAgileActivationFactory<UnPremultiplyEffect>);
 }}}}}

@@ -21,7 +21,7 @@ public:
         : SurfaceContentsLostEventSource(Make<MockEventSourceUntyped>(L"SurfaceContentsLost"))
         , CompositionRenderingEventSource(Make<MockEventSourceUntyped>(L"CompositionRendering"))
     {
-        DeviceFactory->GetSharedDeviceMethod.AllowAnyCall(
+        DeviceFactory->GetSharedDeviceWithForceSoftwareRendererMethod.AllowAnyCall(
             [&](boolean, ICanvasDevice** device)
             {
                 auto stubDevice = Make<StubCanvasDevice>();
@@ -77,13 +77,13 @@ public:
         auto sisFactory = Make<MockSurfaceImageSourceFactory>();
         sisFactory->MockCreateInstanceWithDimensionsAndOpacity =
             [&](int32_t actualWidth, int32_t actualHeight, bool isOpaque, IInspectable* outer)
-        {
-            return Make<StubSurfaceImageSource>();
-        };
+            {
+                return Make<StubSurfaceImageSource>();
+            };
 
         auto dsFactory = std::make_shared<MockCanvasImageSourceDrawingSessionFactory>();
         dsFactory->CreateMethod.AllowAnyCall(
-            [&](ICanvasDevice*, ISurfaceImageSourceNativeWithD2D*, Color const&, RECT const&, float)
+            [&](ICanvasDevice*, ISurfaceImageSourceNativeWithD2D*, Color const&, Rect const&, float)
             {
                 if (OnCanvasImageSourceDrawingSessionFactory_Create)
                 {

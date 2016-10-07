@@ -41,7 +41,7 @@ namespace Microsoft.Graphics.Canvas.Effects
 
     [version(VERSION), uuid(5673248E-7266-5E49-B2AB-2589D5D875C3), exclusiveto(BlendEffect)]
     interface IBlendEffect : IInspectable
-        requires Microsoft.Graphics.Canvas.ICanvasImage
+        requires ICanvasEffect
     {
         [propget]
         HRESULT Mode([out, retval] BlendEffectMode* value);
@@ -63,10 +63,9 @@ namespace Microsoft.Graphics.Canvas.Effects
 
     };
 
-    [version(VERSION), activatable(VERSION)]
+    [STANDARD_ATTRIBUTES, activatable(VERSION)]
     runtimeclass BlendEffect
     {
         [default] interface IBlendEffect;
-        interface IGRAPHICSEFFECT;
     }
 }

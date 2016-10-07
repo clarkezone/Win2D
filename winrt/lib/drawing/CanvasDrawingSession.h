@@ -6,37 +6,60 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 {
+    using namespace ABI::Microsoft::Graphics::Canvas::Geometry;
     using namespace ABI::Microsoft::Graphics::Canvas::Numerics;
     using namespace ABI::Windows::Foundation;
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+    using namespace ABI::Windows::UI::Input::Inking;
+    using namespace ABI::Windows::UI::ViewManagement;
+#endif
+
     using namespace ::Microsoft::WRL;
 
     class ICanvasDrawingSessionAdapter
     {
     public:
         virtual ~ICanvasDrawingSessionAdapter() = default;
-        virtual D2D1_POINT_2F GetRenderingSurfaceOffset() = 0;
-        virtual void EndDraw() = 0;
+
+        virtual void EndDraw(ID2D1DeviceContext1* d2dDeviceContext) = 0;
     };
 
-    class CanvasDrawingSessionManager;
-    class CanvasDrawingSession;
+#if WINVER > _WIN32_WINNT_WINBLUE
+    class DefaultInkAdapter;
 
-    struct CanvasDrawingSessionTraits
+    class InkAdapter : public Singleton<InkAdapter, DefaultInkAdapter>
     {
-        typedef ID2D1DeviceContext1 resource_t;
-        typedef CanvasDrawingSession wrapper_t;
-        typedef ICanvasDrawingSession wrapper_interface_t;
-        typedef CanvasDrawingSessionManager manager_t;
+    public:
+        virtual ~InkAdapter() = default;
+
+        virtual ComPtr<IInkD2DRenderer> CreateInkRenderer() = 0;
+        virtual bool IsHighContrastEnabled() = 0;
     };
+
+    class DefaultInkAdapter : public InkAdapter
+    {
+        ComPtr<IAccessibilitySettings> m_accessibilitySettings;
+
+    public:
+        virtual ComPtr<IInkD2DRenderer> CreateInkRenderer() override;
+        virtual bool IsHighContrastEnabled() override;
+    };
+#endif
 
     class CanvasDrawingSession : RESOURCE_WRAPPER_RUNTIME_CLASS(
-        CanvasDrawingSessionTraits,
+        ID2D1DeviceContext1,
+        CanvasDrawingSession,
+        ICanvasDrawingSession,
         ICanvasResourceCreatorWithDpi,
         ICanvasResourceCreator)
     {
         InspectableClass(RuntimeClass_Microsoft_Graphics_Canvas_CanvasDrawingSession, BaseTrust);
 
         std::shared_ptr<ICanvasDrawingSessionAdapter> m_adapter;
+        std::shared_ptr<bool> m_targetHasActiveDrawingSession;
+        D2D1_POINT_2F const m_offset;
+        
         ComPtr<ID2D1SolidColorBrush> m_solidColorBrush;
         ComPtr<ICanvasTextFormat> m_defaultTextFormat;
 
@@ -56,12 +79,26 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         //
         ComPtr<ICanvasDevice> m_owner;
 
+#if WINVER > _WIN32_WINNT_WINBLUE
+        ComPtr<IInkD2DRenderer> m_inkD2DRenderer;
+        ComPtr<ID2D1DrawingStateBlock1> m_inkStateBlock;
+#endif
+
     public:
-        CanvasDrawingSession(
-            std::shared_ptr<CanvasDrawingSessionManager> manager,
-            ICanvasDevice* owner,
+        static ComPtr<CanvasDrawingSession> CreateNew(
             ID2D1DeviceContext1* deviceContext,
-            std::shared_ptr<ICanvasDrawingSessionAdapter> drawingSessionAdapter);
+            std::shared_ptr<ICanvasDrawingSessionAdapter> drawingSessionAdapter,
+            ICanvasDevice* owner = nullptr,
+            std::shared_ptr<bool> targetHasActiveDrawingSession = nullptr,
+            D2D1_POINT_2F offset = D2D1_POINT_2F{ 0, 0 });
+
+        CanvasDrawingSession(
+            ID2D1DeviceContext1* deviceContext,
+            std::shared_ptr<ICanvasDrawingSessionAdapter> drawingSessionAdapter = nullptr,
+            ICanvasDevice* owner = nullptr,
+            std::shared_ptr<bool> targetHasActiveDrawingSession = nullptr,
+            D2D1_POINT_2F offset = D2D1_POINT_2F{ 0, 0 });
+
 
         virtual ~CanvasDrawingSession();
 
@@ -73,6 +110,11 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
         IFACEMETHOD(Clear)(
             ABI::Windows::UI::Color color) override;
+
+        IFACEMETHOD(ClearHdr)(
+            Vector4 colorHdr) override;
+
+        IFACEMETHOD(Flush)() override;
 
         // 
         // DrawImage
@@ -1122,24 +1164,51 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             ICanvasCachedGeometry* cachedGeometry,
             ABI::Windows::UI::Color color) override;
 
+#if WINVER > _WIN32_WINNT_WINBLUE
+        //
+        // DrawInk
+        //
+        IFACEMETHOD(DrawInk)(IIterable<InkStroke*>* inkStrokes) override;
+
+        IFACEMETHOD(DrawInkWithHighContrast)(IIterable<InkStroke*>* inkStrokes, boolean highContrast) override;
+        
+        //
+        // DrawGradientMesh
+        //
+        IFACEMETHOD(DrawGradientMeshAtOrigin)(ICanvasGradientMesh* gradientMesh) override;
+
+        IFACEMETHOD(DrawGradientMesh)(ICanvasGradientMesh* gradientMesh, Vector2 point) override;
+
+        IFACEMETHOD(DrawGradientMeshAtCoords)(ICanvasGradientMesh* gradientMesh, float x, float y) override;
+#endif
+
         //
         // State properties
         //
 
-        IFACEMETHOD(get_Antialiasing)(CanvasAntialiasing* value);
-        IFACEMETHOD(put_Antialiasing)(CanvasAntialiasing value);
+        IFACEMETHOD(get_Antialiasing)(CanvasAntialiasing* value) override;
+        IFACEMETHOD(put_Antialiasing)(CanvasAntialiasing value) override;
 
-        IFACEMETHOD(get_Blend)(CanvasBlend* value);
-        IFACEMETHOD(put_Blend)(CanvasBlend value);
+        IFACEMETHOD(get_Blend)(CanvasBlend* value) override;
+        IFACEMETHOD(put_Blend)(CanvasBlend value) override;
 
-        IFACEMETHOD(get_TextAntialiasing)(CanvasTextAntialiasing* value);
-        IFACEMETHOD(put_TextAntialiasing)(CanvasTextAntialiasing value);
+        IFACEMETHOD(get_TextAntialiasing)(CanvasTextAntialiasing* value) override;
+        IFACEMETHOD(put_TextAntialiasing)(CanvasTextAntialiasing value) override;
 
-        IFACEMETHOD(get_Transform)(ABI::Microsoft::Graphics::Canvas::Numerics::Matrix3x2* value);
-        IFACEMETHOD(put_Transform)(ABI::Microsoft::Graphics::Canvas::Numerics::Matrix3x2 value);
+        IFACEMETHOD(get_TextRenderingParameters)(ICanvasTextRenderingParameters** value) override;
+        IFACEMETHOD(put_TextRenderingParameters)(ICanvasTextRenderingParameters* value) override;
 
-        IFACEMETHOD(get_Units)(CanvasUnits* value);
-        IFACEMETHOD(put_Units)(CanvasUnits value);
+        IFACEMETHOD(get_Transform)(ABI::Microsoft::Graphics::Canvas::Numerics::Matrix3x2* value) override;
+        IFACEMETHOD(put_Transform)(ABI::Microsoft::Graphics::Canvas::Numerics::Matrix3x2 value) override;
+
+        IFACEMETHOD(get_Units)(CanvasUnits* value) override;
+        IFACEMETHOD(put_Units)(CanvasUnits value) override;
+
+        IFACEMETHOD(get_EffectBufferPrecision)(IReference<CanvasBufferPrecision>** value) override;
+        IFACEMETHOD(put_EffectBufferPrecision)(IReference<CanvasBufferPrecision>* value) override;
+
+        IFACEMETHOD(get_EffectTileSize)(BitmapSize* value) override;
+        IFACEMETHOD(put_EffectTileSize)(BitmapSize value) override;
 
         //
         // CreateLayer
@@ -1194,20 +1263,85 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             CanvasLayerOptions options,
             ICanvasActiveLayer** layer) override;
 
+        
+        IFACEMETHOD(DrawGlyphRun)(
+            Vector2 point,
+            ICanvasFontFace* fontFace,
+            float fontSize,
+            uint32_t glyphCount,
+            CanvasGlyph* glyphs,
+            boolean isSideways,
+            uint32_t bidiLevel,
+            ICanvasBrush* brush) override;
+
+        IFACEMETHOD(DrawGlyphRunWithMeasuringMode)(
+            Vector2 point,
+            ICanvasFontFace* fontFace,
+            float fontSize,
+            uint32_t glyphCount,
+            CanvasGlyph* glyphs,
+            boolean isSideways,
+            uint32_t bidiLevel,
+            ICanvasBrush* brush,
+            CanvasTextMeasuringMode textMeasuringMode) override;
+
+        IFACEMETHOD(DrawGlyphRunWithMeasuringModeAndDescription)(
+            Vector2 point,
+            ICanvasFontFace* fontFace,
+            float fontSize,
+            uint32_t glyphCount,
+            CanvasGlyph* glyphs,
+            boolean isSideways,
+            uint32_t bidiLevel,
+            ICanvasBrush* brush,
+            CanvasTextMeasuringMode textMeasuringMode,
+            HSTRING localeName,
+            HSTRING textString,
+            uint32_t clusterMapIndicesCount,
+            int* clusterMapIndices,
+            uint32_t textPosition) override;
+
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+
+        //
+        // CreateSpriteBatch
+        //
+
+        IFACEMETHOD(CreateSpriteBatch)(
+            ICanvasSpriteBatch** spriteBatch) override;
+
+        IFACEMETHOD(CreateSpriteBatchWithSortMode)(
+            CanvasSpriteSortMode sortMode,
+            ICanvasSpriteBatch** spriteBatch) override;
+
+        IFACEMETHOD(CreateSpriteBatchWithSortModeAndInterpolation)(
+            CanvasSpriteSortMode sortMode,
+            CanvasImageInterpolation interpolation,
+            ICanvasSpriteBatch** spriteBatch) override;
+
+        IFACEMETHOD(CreateSpriteBatchWithSortModeAndInterpolationAndOptions)(
+            CanvasSpriteSortMode sortMode,
+            CanvasImageInterpolation interpolation,
+            CanvasSpriteOptions options,
+            ICanvasSpriteBatch** spriteBatch) override;
+
+#endif
+
         //
         // ICanvasResourceCreator
         //
 
-        IFACEMETHODIMP get_Device(ICanvasDevice** value);
+        IFACEMETHODIMP get_Device(ICanvasDevice** value) override;
 
         //
         // ICanvasResourceCreatorWithDpi
         //
 
-        IFACEMETHODIMP get_Dpi(float* dpi);
+        IFACEMETHODIMP get_Dpi(float* dpi) override;
 
-        IFACEMETHODIMP ConvertPixelsToDips(int pixels, float* dips);
-        IFACEMETHODIMP ConvertDipsToPixels(float dips, CanvasDpiRounding dpiRounding, int* pixels);
+        IFACEMETHODIMP ConvertPixelsToDips(int pixels, float* dips) override;
+        IFACEMETHODIMP ConvertDipsToPixels(float dips, CanvasDpiRounding dpiRounding, int* pixels) override;
 
     private:
         void DrawLineImpl(
@@ -1267,6 +1401,13 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             ID2D1Brush* brush,
             ICanvasTextFormat* format);
 
+        void DrawTextImpl(
+            HSTRING text,
+            Rect const& rect,
+            ID2D1Brush* brush,
+            IDWriteTextFormat* format,
+            D2D1_DRAW_TEXT_OPTIONS options);
+
         ICanvasTextFormat* GetDefaultTextFormat();
 
         void DrawGeometryImpl(
@@ -1315,41 +1456,14 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             ICanvasActiveLayer** layer);
 
         void PopLayer(int layerId, bool isAxisAlignedClip);
-    };
 
+#if WINVER > _WIN32_WINNT_WINBLUE
+        void DrawInkImpl(IIterable<InkStroke*>* inkStrokeCollection, bool highContrast);
+#endif
 
-    class CanvasDrawingSessionManager : public ResourceManager<CanvasDrawingSessionTraits>
-    {
-        std::shared_ptr<ICanvasDrawingSessionAdapter> m_adapter;
+        ComPtr<ICanvasDevice> const& GetDevice();
 
-    public:
-        CanvasDrawingSessionManager();
-
-        ComPtr<CanvasDrawingSession> CreateNew(
-            ICanvasDevice* owner,
-            ID2D1DeviceContext1* deviceContext,
-            std::shared_ptr<ICanvasDrawingSessionAdapter> drawingSessionAdapter);
-
-        ComPtr<CanvasDrawingSession> CreateNew(
-            ID2D1DeviceContext1* deviceContext,
-            std::shared_ptr<ICanvasDrawingSessionAdapter> drawingSessionAdapter);
-
-        ComPtr<CanvasDrawingSession> CreateWrapper(
-            ID2D1DeviceContext1* resource);
-
-    private:
         static void InitializeDefaultState(ID2D1DeviceContext1* deviceContext);
-    };
-
-
-    class CanvasDrawingSessionFactory
-        : public ActivationFactory<ICanvasDrawingSessionStatics, CloakedIid<ICanvasFactoryNative>>,
-          public PerApplicationManager<CanvasDrawingSessionFactory, CanvasDrawingSessionManager>
-    {
-        InspectableClassStatic(RuntimeClass_Microsoft_Graphics_Canvas_CanvasDrawingSession, BaseTrust);
-
-    public:
-        IMPLEMENT_DEFAULT_ICANVASFACTORYNATIVE();
     };
 
 
@@ -1360,23 +1474,15 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
     class SimpleCanvasDrawingSessionAdapter : public ICanvasDrawingSessionAdapter,
                                               private LifespanTracker<SimpleCanvasDrawingSessionAdapter>
     {
-        ComPtr<ID2D1DeviceContext1> m_d2dDeviceContext;
-
     public:
         SimpleCanvasDrawingSessionAdapter(ID2D1DeviceContext1* d2dDeviceContext)
-            : m_d2dDeviceContext(d2dDeviceContext) 
         {
             d2dDeviceContext->BeginDraw();
         }
 
-        virtual D2D1_POINT_2F GetRenderingSurfaceOffset() override
+        virtual void EndDraw(ID2D1DeviceContext1* d2dDeviceContext) override
         {
-            return D2D1::Point2F(0, 0);
-        }
-
-        virtual void EndDraw() override
-        {
-            ThrowIfFailed(m_d2dDeviceContext->EndDraw());
+            ThrowIfFailed(d2dDeviceContext->EndDraw());
         }
     };
 }}}}

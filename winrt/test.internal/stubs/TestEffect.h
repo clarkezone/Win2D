@@ -26,13 +26,8 @@ class TestEffect : public RuntimeClass <
     InspectableClass(RuntimeClass_Microsoft_Graphics_Canvas_Effects_GaussianBlurEffect, BaseTrust);
 
 public:
-    TestEffect(GUID effectId, int propertiesSize, int sourcesSize, bool isSourcesSizeFixed)
-        : CanvasEffect(effectId, propertiesSize, sourcesSize, isSourcesSizeFixed)
-    {
-    }
-
-    TestEffect()
-        : CanvasEffect(CLSID_D2D1GaussianBlur, 1, 1, true)
+    TestEffect(GUID effectId = CLSID_D2D1GaussianBlur, int propertiesSize = 1, int sourcesSize = 1, bool isSourcesSizeFixed = true)
+        : CanvasEffect(effectId, propertiesSize, sourcesSize, isSourcesSizeFixed, nullptr, nullptr, nullptr)
     {
     }
 
@@ -64,11 +59,11 @@ public:
         return CanvasEffect::GetSource(index, source);
     }
 
-    STDMETHOD(SetSource)(unsigned int index, IGraphicsEffectSource* source)
+    STDMETHOD_(void, SetSource)(unsigned int index, IGraphicsEffectSource* source)
     {
         if (MockSetSource)
             MockSetSource();
-        return CanvasEffect::SetSource(index, source);
+        CanvasEffect::SetSource(index, source);
     }
 
     template<typename TBoxed, typename TPublic>
@@ -114,5 +109,5 @@ inline void CheckEffectTypeAndInput(
     ID2D1DeviceContext* deviceContext,
     float expectedDpi = 0)
 {
-    CheckEffectTypeAndInput(mockEffect, expectedId, As<ICanvasImageInternal>(expectedInput)->GetD2DImage(deviceContext).Get(), expectedDpi);
+    CheckEffectTypeAndInput(mockEffect, expectedId, As<ICanvasImageInternal>(expectedInput)->GetD2DImage(nullptr, deviceContext).Get(), expectedDpi);
 }

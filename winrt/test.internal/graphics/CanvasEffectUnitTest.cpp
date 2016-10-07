@@ -7,6 +7,14 @@
 #include <lib/images/CanvasCommandList.h>
 
 #include "stubs/TestEffect.h"
+#include "stubs/StubD2DEffect.h"
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+#include <lib/effects/generated/AlphaMaskEffect.h>
+#include <lib/effects/generated/CrossFadeEffect.h>
+#include <lib/effects/generated/OpacityEffect.h>
+#include <lib/effects/generated/TintEffect.h>
+#endif
 
 using namespace Microsoft::VisualStudio::CppUnitTestFramework;
 
@@ -76,12 +84,15 @@ public:
         Numerics::Matrix3x2 matrix = { 0 };
 
         auto canvasEffect = Make<TestEffect>(m_blurGuid, m_realPropertiesSize, m_realSourcesSize, false);
-        auto drawingSession = CreateStubDrawingSession();
+        auto device = Make<StubCanvasDevice>();
 
         Assert::AreEqual(S_OK, canvasEffect->Close());
 
-        Assert::AreEqual(RO_E_CLOSED, canvasEffect->GetBounds(drawingSession.Get(), &bounds));
-        Assert::AreEqual(RO_E_CLOSED, canvasEffect->GetBoundsWithTransform(drawingSession.Get(), matrix, &bounds));
+        Assert::AreEqual(RO_E_CLOSED, canvasEffect->GetBounds(device.Get(), &bounds));
+        Assert::AreEqual(RO_E_CLOSED, canvasEffect->GetBoundsWithTransform(device.Get(), matrix, &bounds));
+
+        ComPtr<ID2D1Effect> resource;
+        Assert::AreEqual(RO_E_CLOSED, canvasEffect->GetNativeResource(nullptr, 0, IID_PPV_ARGS(&resource)));
     }
 
     TEST_METHOD_EX(CanvasEffect_Sources)
@@ -136,20 +147,18 @@ public:
 
     struct Fixture
     {
-        std::shared_ptr<CanvasDrawingSessionManager> m_drawingSessionManager;
         ComPtr<StubD2DDevice> m_stubDevice;
         ComPtr<StubD2DDeviceContextWithGetFactory> m_deviceContext;
         ComPtr<CanvasDrawingSession> m_drawingSession;
-        ComPtr<MockD2DEffect> m_mockEffect;
+        ComPtr<StubCanvasDevice> m_canvasDevice;
         float m_dpi;
 
         Fixture()
         {
-            m_drawingSessionManager = std::make_shared<CanvasDrawingSessionManager>();
             m_stubDevice = Make<StubD2DDevice>();
             m_deviceContext = MakeDeviceContext();
-            m_drawingSession = m_drawingSessionManager->Create(m_deviceContext.Get(), std::make_shared<StubCanvasDrawingSessionAdapter>());
-            m_mockEffect = Make<MockD2DEffect>();
+            m_canvasDevice = Make<StubCanvasDevice>(m_stubDevice);
+            m_drawingSession = CanvasDrawingSession::CreateNew(m_deviceContext.Get(), std::make_shared<StubCanvasDrawingSessionAdapter>(), m_canvasDevice.Get());
             m_dpi = DEFAULT_DPI;
         }
 
@@ -162,10 +171,10 @@ public:
 
             deviceContext->GetDpiMethod.AllowAnyCall(
                 [&](float* dpiX, float* dpiY)
-            {
-                *dpiX = m_dpi;
-                *dpiY = m_dpi;
-            });
+                {
+                    *dpiX = m_dpi;
+                    *dpiY = m_dpi;
+                });
 
             deviceContext->GetTargetMethod.AllowAnyCall(
                 [] (ID2D1Image** target)
@@ -177,87 +186,107 @@ public:
         }
     };
 
-    void VerifyEffectRealizationSources(
-        std::shared_ptr<CanvasDrawingSessionManager> const& drawingSessionManager,
-        TestEffect* testEffect)
-    {
-        Fixture f;
-
-        f.m_deviceContext->DrawImageMethod.AllowAnyCall();
-
-        bool setInputCalled = false;
-        bool setInputCountCalled = false;
-        bool setValueCalled = false;
-
-        f.m_deviceContext->CreateEffectMethod.SetExpectedCalls(1,
-            [&](IID const&, ID2D1Effect** effect)
-            {
-                ComPtr<MockD2DEffect> mockEffect = Make<MockD2DEffect>();
-                mockEffect.CopyTo(effect);
-
-                mockEffect->MockSetInput =
-                    [&](UINT32, ID2D1Image*)
-                    {
-                        Assert::IsFalse(setInputCalled);
-                        setInputCalled = true;
-                    };
-
-                mockEffect->MockSetInputCount =
-                    [&]
-                    {
-                        Assert::IsFalse(setInputCountCalled);
-                        setInputCountCalled = true;
-                        return S_OK;
-                    };
-
-                mockEffect->MockSetValue =
-                    [&](UINT32, D2D1_PROPERTY_TYPE, CONST BYTE*, UINT32)
-                    {
-                        Assert::IsFalse(setValueCalled);
-                        setValueCalled = true;
-                        return S_OK;
-                    };
-
-                return S_OK;
-            });
-
-        f.m_drawingSession = drawingSessionManager->Create(f.m_deviceContext.Get(), std::make_shared<StubCanvasDrawingSessionAdapter>());
-
-        f.m_drawingSession->DrawImageAtOrigin(testEffect);
-
-        Assert::IsTrue(setInputCalled);
-        Assert::IsTrue(setInputCountCalled);
-        Assert::IsTrue(setValueCalled);
-
-        // Drawing on a second device context that shares the same device should NOT rerealize the effect.
-        auto deviceContext2 = f.MakeDeviceContext();
-        
-        deviceContext2->DrawImageMethod.AllowAnyCall();
-        deviceContext2->CreateEffectMethod.SetExpectedCalls(0);
-
-        auto drawingSession2 = drawingSessionManager->Create(deviceContext2.Get(), std::make_shared<StubCanvasDrawingSessionAdapter>());
-
-        drawingSession2->DrawImageAtOrigin(testEffect);
-    }
-
     TEST_METHOD_EX(CanvasEffect_Rerealize)
     {
         // Use a test effect with one source and one property.
         auto testEffect = Make<TestEffect>(m_blurGuid, 1, 1, false);
 
-        auto drawingSessionManager = std::make_shared<CanvasDrawingSessionManager>();
-        
         // This test realizes m_testEffect twice, each time with different 
         // devices. Verifies that the D2D effect is re-created, and 
         // its sources and properties are set.
-        
-        // Set a source and non-default value.
-        ThrowIfFailed(testEffect->put_Source(As<IGraphicsEffectSource>(CreateStubCanvasBitmap()).Get()));
-        ThrowIfFailed(testEffect->put_BlurAmount(99));
+        for (int pass = 0; pass < 2; pass++)
+        {
+            Fixture f;
 
-        VerifyEffectRealizationSources(drawingSessionManager, testEffect.Get());
-        VerifyEffectRealizationSources(drawingSessionManager, testEffect.Get());
-    }
+            // Set a source and non-default value.
+            auto stubBitmap = CreateStubCanvasBitmap(DEFAULT_DPI, f.m_canvasDevice.Get());
+
+            ThrowIfFailed(testEffect->put_Source(As<IGraphicsEffectSource>(stubBitmap).Get()));
+            ThrowIfFailed(testEffect->put_BlurAmount(99));
+
+            f.m_deviceContext->DrawImageMethod.AllowAnyCall();
+
+            bool setInputCalled = false;
+            bool setInputCountCalled = false;
+            bool setValueCalled = false;
+
+            f.m_deviceContext->CreateEffectMethod.SetExpectedCalls(1,
+                [&](IID const&, ID2D1Effect** effect)
+                {
+                    ComPtr<MockD2DEffect> mockEffect = Make<MockD2DEffect>();
+                    mockEffect.CopyTo(effect);
+
+                    mockEffect->MockSetInput =
+                        [&](UINT32, ID2D1Image*)
+                        {
+                            Assert::IsFalse(setInputCalled);
+                            setInputCalled = true;
+                        };
+
+                    mockEffect->MockGetInput =
+                        [&](UINT32, ID2D1Image** input)
+                        {
+                            ThrowIfFailed(stubBitmap->GetD2DImage(nullptr, nullptr, (GetImageFlags)0, 0, nullptr).CopyTo(input));
+                        };
+
+                    mockEffect->MockGetInputCount =
+                        []
+                        {
+                            return 1;
+                        };
+
+                    mockEffect->MockSetInputCount =
+                        [&](UINT32)
+                        {
+                            Assert::IsFalse(setInputCountCalled);
+                            setInputCountCalled = true;
+                            return S_OK;
+                        };
+
+                    mockEffect->MockSetValue =
+                        [&](UINT32, D2D1_PROPERTY_TYPE, CONST BYTE*, UINT32)
+                        {
+                            Assert::IsFalse(setValueCalled);
+                            setValueCalled = true;
+                            return S_OK;
+                        };
+
+                    mockEffect->MockGetType =
+                        [](UINT32)
+                        {
+                            return D2D1_PROPERTY_TYPE_FLOAT;
+                        };
+
+                    mockEffect->MockGetValue =
+                        [](UINT32 index, D2D1_PROPERTY_TYPE type, BYTE *data, UINT32 dataSize)
+                        {
+                            ZeroMemory(data, dataSize);
+                            return S_OK;
+                        };
+
+                    return S_OK;
+                });
+
+            f.m_drawingSession = nullptr;
+            f.m_drawingSession = CanvasDrawingSession::CreateNew(f.m_deviceContext.Get(), std::make_shared<StubCanvasDrawingSessionAdapter>(), f.m_canvasDevice.Get());
+
+            ThrowIfFailed(f.m_drawingSession->DrawImageAtOrigin(testEffect.Get()));
+
+            Assert::IsTrue(setInputCalled);
+            Assert::IsTrue(setInputCountCalled);
+            Assert::IsTrue(setValueCalled);
+
+            // Drawing on a second device context that shares the same device should NOT rerealize the effect.
+            auto deviceContext2 = f.MakeDeviceContext();
+        
+            deviceContext2->DrawImageMethod.AllowAnyCall();
+            deviceContext2->CreateEffectMethod.SetExpectedCalls(0);
+
+            auto drawingSession2 = CanvasDrawingSession::CreateNew(deviceContext2.Get(), std::make_shared<StubCanvasDrawingSessionAdapter>(), f.m_canvasDevice.Get());
+
+            ThrowIfFailed(drawingSession2->DrawImageAtOrigin(testEffect.Get()));
+        }
+    };
 
     class InvalidEffectSourceType : public RuntimeClass<IGraphicsEffectSource>
     {
@@ -271,18 +300,13 @@ public:
         f.m_deviceContext->CreateEffectMethod.AllowAnyCall(
             [&](IID const&, ID2D1Effect** effect)
             {
-                return f.m_mockEffect.CopyTo(effect);
+                return Make<StubD2DEffect>(m_blurGuid).CopyTo(effect);
             });
-
-        f.m_mockEffect->MockSetInputCount = [&]
-        {
-            return S_OK;
-        };
 
         auto testEffect = Make<TestEffect>(m_blurGuid, 0, 1, false);
 
         // Validate drawing with a null source.
-        Assert::AreEqual(E_POINTER, f.m_drawingSession->DrawImageAtOrigin(testEffect.Get()));
+        Assert::AreEqual(E_INVALIDARG, f.m_drawingSession->DrawImageAtOrigin(testEffect.Get()));
         
         // Validate drawing with a source that is not the right type.
         auto invalidSource = Make<InvalidEffectSourceType>();
@@ -301,17 +325,8 @@ public:
         f.m_deviceContext->CreateEffectMethod.AllowAnyCall(
             [&](IID const&, ID2D1Effect** effect)
             {
-                return f.m_mockEffect.CopyTo(effect);
+                return Make<StubD2DEffect>(m_blurGuid).CopyTo(effect);
             });
-
-        bool setInputCountCalled = false;
-
-        f.m_mockEffect->MockSetInputCount = [&]
-        {
-            Assert::IsFalse(setInputCountCalled);
-            setInputCountCalled = true;
-            return S_OK;
-        };
 
         auto testEffect = Make<TestEffect>(m_blurGuid, 0, 1, false);
 
@@ -329,32 +344,55 @@ public:
         Numerics::Matrix3x2 matrix = { 0 };
 
         auto canvasEffect = Make<TestEffect>(m_blurGuid, m_realPropertiesSize, m_realSourcesSize, false);
-        auto drawingSession = CreateStubDrawingSession();
+        auto device = Make<StubCanvasDevice>();
 
         Assert::AreEqual(E_INVALIDARG, canvasEffect->GetBounds(nullptr, &bounds));
-        Assert::AreEqual(E_INVALIDARG, canvasEffect->GetBounds(drawingSession.Get(), nullptr));
+        Assert::AreEqual(E_INVALIDARG, canvasEffect->GetBounds(device.Get(), nullptr));
         Assert::AreEqual(E_INVALIDARG, canvasEffect->GetBoundsWithTransform(nullptr, matrix, &bounds));
-        Assert::AreEqual(E_INVALIDARG, canvasEffect->GetBoundsWithTransform(drawingSession.Get(), matrix, nullptr));
+        Assert::AreEqual(E_INVALIDARG, canvasEffect->GetBoundsWithTransform(device.Get(), matrix, nullptr));
     }
 
     TEST_METHOD_EX(CanvasEffect_RealizationRecursion)
     {
         Fixture f;
 
-        auto stubBitmap = CreateStubCanvasBitmap();
+        auto stubBitmap = CreateStubCanvasBitmap(DEFAULT_DPI, f.m_canvasDevice.Get());
 
         std::vector<ComPtr<MockD2DEffectThatCountsCalls>> mockEffects;
+
         auto createCountingEffect =
             [&](IID const&, ID2D1Effect** effect)
             {
-                mockEffects.push_back(Make<MockD2DEffectThatCountsCalls>());
-                return mockEffects.back().CopyTo(effect);
+                auto mockEffect = Make<MockD2DEffectThatCountsCalls>();
+
+                mockEffect->MockGetType =
+                    [](UINT32)
+                    {
+                        return D2D1_PROPERTY_TYPE_FLOAT;
+                    };
+
+                mockEffect->MockGetValue =
+                    [](UINT32 index, D2D1_PROPERTY_TYPE type, BYTE *data, UINT32 dataSize)
+                    {
+                        ZeroMemory(data, dataSize);
+                        return S_OK;
+                    };
+
+                mockEffects.push_back(mockEffect);
+
+                return mockEffect.CopyTo(effect);
             };
 
         std::vector<ComPtr<TestEffect>> testEffects;
 
         f.m_deviceContext->CreateEffectMethod.AllowAnyCall(createCountingEffect);        
         f.m_deviceContext->DrawImageMethod.AllowAnyCall();
+
+        f.m_canvasDevice->GetResourceCreationDeviceContextMethod.AllowAnyCall(
+            [&]
+            {
+                return DeviceContextLease(As<ID2D1DeviceContext1>(f.m_deviceContext));
+            });
 
         // Create three effects, connected as each other's sources.
         for (int i = 0; i < 3; i++)
@@ -415,22 +453,6 @@ public:
         // Draw starting at the third level of the graph should not re-set anything.
         ThrowIfFailed(f.m_drawingSession->DrawImageAtOrigin(testEffects[2].Get()));
         CheckCallCount(mockEffects, 3, { 2, 2, 2 }, { 2, 2, 2 });
-
-        // Drawing the third level effect on a second device should re-realize just that effect.
-        auto deviceContext2 = f.MakeDeviceContext();
-        auto drawingSession2 = f.m_drawingSessionManager->Create(deviceContext2.Get(), std::make_shared<StubCanvasDrawingSessionAdapter>());
-        auto stubDevice2 = Make<StubD2DDevice>();
-
-        deviceContext2->GetDeviceMethod.AllowAnyCallAlwaysCopyValueToParam(stubDevice2);
-        deviceContext2->CreateEffectMethod.AllowAnyCall(createCountingEffect);
-        deviceContext2->DrawImageMethod.AllowAnyCall();
-
-        ThrowIfFailed(drawingSession2->DrawImageAtOrigin(testEffects[2].Get()));
-        CheckCallCount(mockEffects, 4, { 2, 2, 2, 1 }, { 2, 2, 2, 1 });
-
-        // Drawing the root effect back on the original device should notice that the third level effect needs to be re-realized.
-        ThrowIfFailed(f.m_drawingSession->DrawImageAtOrigin(testEffects[0].Get()));
-        CheckCallCount(mockEffects, 5, { 2, 3, 2, 1, 1 }, { 2, 2, 2, 1, 1 });
     }
 
     static void CheckCallCount(std::vector<ComPtr<MockD2DEffectThatCountsCalls>> const& mockEffects,
@@ -448,8 +470,13 @@ public:
 
         for (size_t i = 0; i < expectedEffectCount; i++)
         {
-            Assert::AreEqual(*expectedSetInputs, (*effect)->m_setInputCalls);
-            Assert::AreEqual(*expectedSetValues, (*effect)->m_setValueCalls);
+            wchar_t input_msg[256], value_msg[256];
+
+            swprintf_s(input_msg, L"effect #%Id inputs", i);
+            swprintf_s(value_msg, L"effect #%Id values", i);
+
+            Assert::AreEqual(*expectedSetInputs, (*effect)->m_setInputCalls, input_msg);
+            Assert::AreEqual(*expectedSetValues, (*effect)->m_setValueCalls, value_msg);
 
             ++effect;
             ++expectedSetInputs;
@@ -472,8 +499,14 @@ public:
                 return mockEffects.back().CopyTo(effect);
             });
 
+        f.m_canvasDevice->GetResourceCreationDeviceContextMethod.AllowAnyCall(
+            [&]
+            {
+                return DeviceContextLease(As<ID2D1DeviceContext1>(f.m_deviceContext));
+            });
+
         // First we draw a default DPI bitmap onto a default DPI context. This should not insert any DPI compensation.
-        auto testBitmap = CreateStubCanvasBitmap(DEFAULT_DPI);
+        auto testBitmap = CreateStubCanvasBitmap(DEFAULT_DPI, f.m_canvasDevice.Get());
         auto testEffect = Make<TestEffect>(m_blurGuid, 0, 1, true);
 
         ThrowIfFailed(testEffect->put_Source(testBitmap.Get()));
@@ -484,7 +517,7 @@ public:
 
         // Now draw a high DPI bitmap. This should insert a DPI compensation effect.
         const float highDpi = 144;
-        auto highDpiBitmap = CreateStubCanvasBitmap(highDpi);
+        auto highDpiBitmap = CreateStubCanvasBitmap(highDpi, f.m_canvasDevice.Get());
 
         ThrowIfFailed(testEffect->put_Source(highDpiBitmap.Get()));
         ThrowIfFailed(f.m_drawingSession->DrawImageAtOrigin(testEffect.Get()));
@@ -495,7 +528,7 @@ public:
 
         // Drawing a different bitmap should reuse the existing DPI compensation effect.
         const float highDpi2 = 192;
-        auto highDpiBitmap2 = CreateStubCanvasBitmap(highDpi2);
+        auto highDpiBitmap2 = CreateStubCanvasBitmap(highDpi2, f.m_canvasDevice.Get());
 
         ThrowIfFailed(testEffect->put_Source(highDpiBitmap2.Get()));
         ThrowIfFailed(f.m_drawingSession->DrawImageAtOrigin(testEffect.Get()));
@@ -532,7 +565,7 @@ public:
         Assert::AreEqual<size_t>(4, mockEffects.size());
         CheckEffectTypeAndInput(mockEffects[0].Get(), m_blurGuid, mockEffects[3].Get());
         CheckEffectTypeAndInput(mockEffects[3].Get(), CLSID_D2D1DpiCompensation, highDpiBitmap.Get(), f.m_deviceContext.Get());
-        Assert::IsTrue(IsSameInstance(mockEffects[3].Get(), As<ICanvasImageInternal>(dpiCompensationEffect)->GetD2DImage(f.m_deviceContext.Get()).Get()));
+        Assert::IsTrue(IsSameInstance(mockEffects[3].Get(), As<ICanvasImageInternal>(dpiCompensationEffect)->GetD2DImage(f.m_canvasDevice.Get(), f.m_deviceContext.Get()).Get()));
     }
 
     struct CommandListFixture
@@ -587,7 +620,7 @@ public:
                     return d2dCl;
                 });
 
-            CanvasDevice->CreateDeviceContextMethod.SetExpectedCalls(1, [=] { return DeviceContext; });            
+            CanvasDevice->CreateDeviceContextForDrawingSessionMethod.SetExpectedCalls(1, [=] { return DeviceContext; });            
         }
 
         ComPtr<ICanvasCommandList> CreateCommandList()
@@ -620,7 +653,7 @@ public:
     {
         CommandListFixture f;
 
-        auto testBitmap = CreateStubCanvasBitmap(dpi);
+        auto testBitmap = CreateStubCanvasBitmap(dpi, f.CanvasDevice.Get());
         auto testEffect = Make<TestEffect>(m_blurGuid, 0, 1, true);
         ThrowIfFailed(testEffect->put_Source(testBitmap.Get()));
 
@@ -650,47 +683,46 @@ public:
         SwitchableTestBrushFixture f;
 
         // Feed a bitmap into an effect into the image brush.
-        auto testBitmap = CreateStubCanvasBitmap(DEFAULT_DPI);
+        auto testBitmap = CreateStubCanvasBitmap(DEFAULT_DPI, f.m_canvasDevice.Get());
         auto testEffect = Make<TestEffect>(m_blurGuid, 0, 1, true);
+        
+        std::vector<ComPtr<MockD2DEffectThatCountsCalls>> mockEffects;
+
+        f.m_d2dDeviceContext->CreateEffectMethod.AllowAnyCall(
+            [&](IID const& effectId, ID2D1Effect** effect)
+            {
+                mockEffects.push_back(Make<MockD2DEffectThatCountsCalls>(effectId));
+                return mockEffects.back().CopyTo(effect);
+            });
 
         ThrowIfFailed(testEffect->put_Source(testBitmap.Get()));
 
-        f.m_canvasImageBrush->SetImage(testEffect.Get());
+        ThrowIfFailed(f.m_canvasImageBrush->put_Image(testEffect.Get()));
 
         auto sourceRectangle = Make<Nullable<Rect>>(Rect{ 0, 0, 1, 1 });
         ThrowIfFailed(f.m_canvasImageBrush->put_SourceRectangle(sourceRectangle.Get()));
 
         // Create a drawing session.
-        auto manager = std::make_shared<CanvasDrawingSessionManager>();
-        auto d2dDeviceContext = Make<StubD2DDeviceContextWithGetFactory>();
-        auto drawingSession = manager->Create(f.m_canvasDevice.Get(), d2dDeviceContext.Get(), std::make_shared<StubCanvasDrawingSessionAdapter>());
+        auto drawingSession = CanvasDrawingSession::CreateNew(f.m_d2dDeviceContext.Get(), std::make_shared<StubCanvasDrawingSessionAdapter>(), f.m_canvasDevice.Get());
 
-        d2dDeviceContext->FillRectangleMethod.AllowAnyCall();
-        d2dDeviceContext->GetDeviceMethod.AllowAnyCallAlwaysCopyValueToParam(Make<StubD2DDevice>());
+        f.m_d2dDeviceContext->FillRectangleMethod.AllowAnyCall();
+        f.m_d2dDeviceContext->GetDeviceMethod.AllowAnyCallAlwaysCopyValueToParam(f.m_canvasDevice->GetD2DDevice());
+        f.m_d2dDeviceContext->GetTargetMethod.AllowAnyCallAlwaysCopyValueToParam<ID2D1Image>(nullptr);
 
         float currentDpi = DEFAULT_DPI;
 
-        d2dDeviceContext->GetDpiMethod.AllowAnyCall(
+        f.m_d2dDeviceContext->GetDpiMethod.AllowAnyCall(
             [&](float* dpiX, float* dpiY)
-        {
-            *dpiX = currentDpi;
-            *dpiY = currentDpi;
-        });
-
-        std::vector<ComPtr<MockD2DEffectThatCountsCalls>> mockEffects;
-
-        d2dDeviceContext->CreateEffectMethod.AllowAnyCall(
-            [&](IID const& effectId, ID2D1Effect** effect)
-        {
-            mockEffects.push_back(Make<MockD2DEffectThatCountsCalls>(effectId));
-            return mockEffects.back().CopyTo(effect);
-        });
+            {
+                *dpiX = currentDpi;
+                *dpiY = currentDpi;
+            });
 
         // Drawing at default DPI should realize the effect graph, but not insert any DPI compensation.
         ThrowIfFailed(drawingSession->FillRectangleAtCoordsWithBrush(0, 0, 0, 0, f.m_canvasImageBrush.Get()));
 
         Assert::AreEqual<size_t>(1, mockEffects.size());
-        CheckEffectTypeAndInput(mockEffects[0].Get(), m_blurGuid, testBitmap.Get(), d2dDeviceContext.Get());
+        CheckEffectTypeAndInput(mockEffects[0].Get(), m_blurGuid, testBitmap.Get(), f.m_d2dDeviceContext.Get());
 
         // Drawing with the image brush at a different DPI should insert a DPI compensation effect.
         currentDpi *= 2;
@@ -699,8 +731,379 @@ public:
 
         Assert::AreEqual<size_t>(2, mockEffects.size());
         CheckEffectTypeAndInput(mockEffects[0].Get(), m_blurGuid, mockEffects[1].Get());
-        CheckEffectTypeAndInput(mockEffects[1].Get(), CLSID_D2D1DpiCompensation, testBitmap.Get(), d2dDeviceContext.Get(), DEFAULT_DPI);
+        CheckEffectTypeAndInput(mockEffects[1].Get(), CLSID_D2D1DpiCompensation, testBitmap.Get(), f.m_d2dDeviceContext.Get(), DEFAULT_DPI);
     }
+
+    TEST_METHOD_EX(CanvasEffect_InvalidateSourceRectangle)
+    {
+        Fixture f;
+
+        auto testEffect = Make<TestEffect>(m_blurGuid, 0, 1);
+        auto mockD2DEffect = Make<MockD2DEffectThatCountsCalls>();
+
+        f.m_deviceContext->CreateEffectMethod.SetExpectedCalls(1, [&](IID const& effectId, ID2D1Effect** effect) { return mockD2DEffect.CopyTo(effect); });
+
+        Rect rect = { 1, 2, 3, 4 };
+
+        Assert::AreEqual(E_INVALIDARG, testEffect->InvalidateSourceRectangle(nullptr, 0, rect));
+        Assert::AreEqual(E_INVALIDARG, testEffect->InvalidateSourceRectangle(f.m_drawingSession.Get(), 1, rect));
+
+        f.m_deviceContext->InvalidateEffectInputRectangleMethod.SetExpectedCalls(1,
+            [&](ID2D1Effect* effect, UINT32 input, D2D1_RECT_F const* invalidRect)
+            {
+                Assert::IsTrue(IsSameInstance(effect, mockD2DEffect.Get()));
+                Assert::AreEqual(0u, input);
+                Assert::AreEqual(rect, FromD2DRect(*invalidRect));
+
+                return S_OK;
+            });
+
+        ThrowIfFailed(testEffect->InvalidateSourceRectangle(f.m_drawingSession.Get(), 0, rect));
+    }
+
+    TEST_METHOD_EX(CanvasEffect_GetInvalidRectangles)
+    {
+        Fixture f;
+
+        auto testEffect = Make<TestEffect>(m_blurGuid, 0, 1);
+        auto mockD2DEffect = Make<MockD2DEffectThatCountsCalls>();
+
+        f.m_deviceContext->CreateEffectMethod.SetExpectedCalls(1, [&](IID const& effectId, ID2D1Effect** effect) { return mockD2DEffect.CopyTo(effect); });
+
+        Rect rect1 = { 1, 2, 3, 4 };
+        Rect rect2 = { 5, 6, 7, 8 };
+
+        ComArray<Rect> result;
+
+        Assert::AreEqual(E_INVALIDARG, testEffect->GetInvalidRectangles(nullptr, result.GetAddressOfSize(), result.GetAddressOfData()));
+        Assert::AreEqual(E_INVALIDARG, testEffect->GetInvalidRectangles(f.m_drawingSession.Get(), nullptr, result.GetAddressOfData()));
+        Assert::AreEqual(E_INVALIDARG, testEffect->GetInvalidRectangles(f.m_drawingSession.Get(), result.GetAddressOfSize(), nullptr));
+
+        f.m_deviceContext->GetEffectInvalidRectangleCountMethod.SetExpectedCalls(1,
+            [&](ID2D1Effect* effect, UINT32* count)
+            {
+                Assert::IsTrue(IsSameInstance(effect, mockD2DEffect.Get()));
+                *count = 2;
+
+                return S_OK;
+            });
+
+        f.m_deviceContext->GetEffectInvalidRectanglesMethod.SetExpectedCalls(1,
+            [&](ID2D1Effect* effect, D2D1_RECT_F* rects, UINT32 count)
+            {
+                Assert::IsTrue(IsSameInstance(effect, mockD2DEffect.Get()));
+                Assert::AreEqual(2u, count);
+
+                rects[0] = ToD2DRect(rect1);
+                rects[1] = ToD2DRect(rect2);
+
+                return S_OK;
+            });
+
+        ThrowIfFailed(testEffect->GetInvalidRectangles(f.m_drawingSession.Get(), result.GetAddressOfSize(), result.GetAddressOfData()));
+
+        Assert::AreEqual(2u, result.GetSize());
+     
+        Assert::AreEqual(rect1, result[0]);
+        Assert::AreEqual(rect2, result[1]);
+    }
+
+    TEST_METHOD_EX(CanvasEffect_GetRequiredSourceRectangle)
+    {
+        Fixture f;
+
+        auto testEffect = Make<TestEffect>(m_blurGuid, 0, 1);
+        auto inputEffect = Make<TestEffect>(m_blurGuid, 0, 1);
+
+        testEffect->SetSource(0, inputEffect.Get());
+
+        std::vector<ComPtr<MockD2DEffectThatCountsCalls>> mockEffects;
+
+        f.m_deviceContext->CreateEffectMethod.SetExpectedCalls(2,
+            [&](IID const& effectId, ID2D1Effect** effect)
+            {
+                mockEffects.push_back(Make<MockD2DEffectThatCountsCalls>(effectId));
+                return mockEffects.back().CopyTo(effect);
+            });
+
+        Rect outputRect = { 1, 2, 3, 4 };
+        Rect inputBounds = { 5, 6, 7, 8 };
+        Rect expectedResult = { 9, 10, 11, 12 };
+        Rect result;
+
+        Assert::AreEqual(E_INVALIDARG, testEffect->GetRequiredSourceRectangle(nullptr, outputRect, inputEffect.Get(), 0, inputBounds, &result));
+        Assert::AreEqual(E_INVALIDARG, testEffect->GetRequiredSourceRectangle(f.m_drawingSession.Get(), outputRect, nullptr, 0, inputBounds, &result));
+        Assert::AreEqual(E_INVALIDARG, testEffect->GetRequiredSourceRectangle(f.m_drawingSession.Get(), outputRect, inputEffect.Get(), 1, inputBounds, &result));
+        Assert::AreEqual(E_INVALIDARG, testEffect->GetRequiredSourceRectangle(f.m_drawingSession.Get(), outputRect, inputEffect.Get(), 0, inputBounds, nullptr));
+
+        f.m_deviceContext->GetEffectRequiredInputRectanglesMethod.SetExpectedCalls(1,
+            [&](ID2D1Effect* effect, D2D1_RECT_F const* output, D2D1_EFFECT_INPUT_DESCRIPTION const* desc, D2D1_RECT_F* result, UINT32 count)
+            {
+                Assert::IsTrue(IsSameInstance(mockEffects[0].Get(), effect));
+                Assert::AreEqual(outputRect, FromD2DRect(*output));
+                Assert::AreEqual(1u, count);
+
+                Assert::IsTrue(IsSameInstance(mockEffects[1].Get(), desc[0].effect));
+                Assert::AreEqual(0u, desc[0].inputIndex);
+                Assert::AreEqual(inputBounds, FromD2DRect(desc[0].inputRectangle));
+
+                result[0] = ToD2DRect(expectedResult);
+
+                return S_OK;
+            });
+
+        ThrowIfFailed(testEffect->GetRequiredSourceRectangle(f.m_drawingSession.Get(), outputRect, inputEffect.Get(), 0, inputBounds, &result));
+
+        Assert::AreEqual(expectedResult, result);
+    }
+
+    TEST_METHOD_EX(CanvasEffect_GetRequiredSourceRectangles)
+    {
+        Fixture f;
+
+        auto testEffect = Make<TestEffect>(m_blurGuid, 0, 2);
+        auto inputEffect1 = Make<TestEffect>(m_blurGuid, 0, 1);
+        auto inputEffect2 = Make<TestEffect>(m_blurGuid, 0, 1);
+
+        testEffect->SetSource(0, inputEffect1.Get());
+        testEffect->SetSource(1, inputEffect2.Get());
+
+        std::vector<ComPtr<MockD2DEffectThatCountsCalls>> mockEffects;
+
+        f.m_deviceContext->CreateEffectMethod.SetExpectedCalls(3,
+            [&](IID const& effectId, ID2D1Effect** effect)
+            {
+                mockEffects.push_back(Make<MockD2DEffectThatCountsCalls>(effectId));
+                return mockEffects.back().CopyTo(effect);
+            });
+
+        Rect outputRect = { 1, 2, 3, 4 };
+        Rect inputBounds1 = { 5, 6, 7, 8 };
+        Rect inputBounds2 = { 9, 10, 11, 12 };
+        Rect expectedResult1 = { 13, 14, 15, 16 };
+        Rect expectedResult2 = { 17, 18, 19, 20 };
+        
+        ICanvasEffect* inputEffects[] = { inputEffect1.Get(), inputEffect2.Get() };
+        uint32_t inputIndices[] = { 0, 0 };
+        uint32_t badIndices1[] = { 1, 0 };
+        uint32_t badIndices2[] = { 0, 1 };
+        Rect inputBounds[] = { inputBounds1, inputBounds2 };
+
+        ComArray<Rect> result;
+
+        Assert::AreEqual(E_INVALIDARG, testEffect->GetRequiredSourceRectangles(nullptr, outputRect, 2, inputEffects, 2, inputIndices, 2, inputBounds, result.GetAddressOfSize(), result.GetAddressOfData()));
+        Assert::AreEqual(E_INVALIDARG, testEffect->GetRequiredSourceRectangles(f.m_drawingSession.Get(), outputRect, 2, nullptr, 2, inputIndices, 2, inputBounds, result.GetAddressOfSize(), result.GetAddressOfData()));
+        Assert::AreEqual(E_INVALIDARG, testEffect->GetRequiredSourceRectangles(f.m_drawingSession.Get(), outputRect, 2, inputEffects, 2, nullptr, 2, inputBounds, result.GetAddressOfSize(), result.GetAddressOfData()));
+        Assert::AreEqual(E_INVALIDARG, testEffect->GetRequiredSourceRectangles(f.m_drawingSession.Get(), outputRect, 2, inputEffects, 2, inputIndices, 2, nullptr, result.GetAddressOfSize(), result.GetAddressOfData()));
+        Assert::AreEqual(E_INVALIDARG, testEffect->GetRequiredSourceRectangles(f.m_drawingSession.Get(), outputRect, 2, inputEffects, 2, inputIndices, 2, inputBounds, nullptr, result.GetAddressOfData()));
+        Assert::AreEqual(E_INVALIDARG, testEffect->GetRequiredSourceRectangles(f.m_drawingSession.Get(), outputRect, 2, inputEffects, 2, inputIndices, 2, inputBounds, result.GetAddressOfSize(), nullptr));
+        Assert::AreEqual(E_INVALIDARG, testEffect->GetRequiredSourceRectangles(f.m_drawingSession.Get(), outputRect, 1, inputEffects, 2, inputIndices, 2, inputBounds, result.GetAddressOfSize(), result.GetAddressOfData()));
+        Assert::AreEqual(E_INVALIDARG, testEffect->GetRequiredSourceRectangles(f.m_drawingSession.Get(), outputRect, 2, inputEffects, 1, inputIndices, 2, inputBounds, result.GetAddressOfSize(), result.GetAddressOfData()));
+        Assert::AreEqual(E_INVALIDARG, testEffect->GetRequiredSourceRectangles(f.m_drawingSession.Get(), outputRect, 2, inputEffects, 2, inputIndices, 1, inputBounds, result.GetAddressOfSize(), result.GetAddressOfData()));
+        Assert::AreEqual(E_INVALIDARG, testEffect->GetRequiredSourceRectangles(f.m_drawingSession.Get(), outputRect, 2, inputEffects, 2, badIndices1, 2, inputBounds, result.GetAddressOfSize(), result.GetAddressOfData()));
+        Assert::AreEqual(E_INVALIDARG, testEffect->GetRequiredSourceRectangles(f.m_drawingSession.Get(), outputRect, 2, inputEffects, 2, badIndices2, 2, inputBounds, result.GetAddressOfSize(), result.GetAddressOfData()));
+
+        f.m_deviceContext->GetEffectRequiredInputRectanglesMethod.SetExpectedCalls(1,
+            [&](ID2D1Effect* effect, D2D1_RECT_F const* output, D2D1_EFFECT_INPUT_DESCRIPTION const* desc, D2D1_RECT_F* result, UINT32 count)
+            {
+                Assert::IsTrue(IsSameInstance(mockEffects[0].Get(), effect));
+                Assert::AreEqual(outputRect, FromD2DRect(*output));
+                Assert::AreEqual(2u, count);
+
+                Assert::IsTrue(IsSameInstance(mockEffects[1].Get(), desc[0].effect));
+                Assert::AreEqual(0u, desc[0].inputIndex);
+                Assert::AreEqual(inputBounds1, FromD2DRect(desc[0].inputRectangle));
+
+                Assert::IsTrue(IsSameInstance(mockEffects[2].Get(), desc[1].effect));
+                Assert::AreEqual(0u, desc[1].inputIndex);
+                Assert::AreEqual(inputBounds2, FromD2DRect(desc[1].inputRectangle));
+
+                result[0] = ToD2DRect(expectedResult1);
+                result[1] = ToD2DRect(expectedResult2);
+
+                return S_OK;
+            });
+
+        ThrowIfFailed(testEffect->GetRequiredSourceRectangles(f.m_drawingSession.Get(), outputRect, 2, inputEffects, 2, inputIndices, 2, inputBounds, result.GetAddressOfSize(), result.GetAddressOfData()));
+
+        Assert::AreEqual(2u, result.GetSize());
+     
+        Assert::AreEqual(expectedResult1, result[0]);
+        Assert::AreEqual(expectedResult2, result[1]);
+    }
+
+    struct EffectRealizationContextFixture : public Fixture
+    {
+        ComPtr<TestEffect> m_testEffect;
+        ComPtr<CanvasBitmap> m_stubBitmap;
+
+        std::vector<ComPtr<MockD2DEffectThatCountsCalls>> m_mockEffects;
+
+        EffectRealizationContextFixture(int expectedCreateEffectCalls)
+        {
+            m_testEffect = Make<TestEffect>(CLSID_D2D1GaussianBlur, 0, 1);
+            m_stubBitmap = CreateStubCanvasBitmap(DEFAULT_DPI, m_canvasDevice.Get());
+            m_testEffect->SetSource(0, m_stubBitmap.Get());
+
+            m_deviceContext->CreateEffectMethod.SetExpectedCalls(expectedCreateEffectCalls,
+                [=](IID const& effectId, ID2D1Effect** effect)
+                {
+                    m_mockEffects.push_back(Make<MockD2DEffectThatCountsCalls>(effectId));
+                    return m_mockEffects.back().CopyTo(effect);
+                });
+
+            m_deviceContext->InvalidateEffectInputRectangleMethod.SetExpectedCalls(1);
+        }
+    };
+
+    TEST_METHOD_EX(CanvasEffect_EffectRealizationContext_ResourceCreatorIsDeviceContext)
+    {
+        EffectRealizationContextFixture f(1);
+
+        ThrowIfFailed(f.m_testEffect->InvalidateSourceRectangle(f.m_drawingSession.Get(), 0, Rect{}));
+
+        Assert::AreEqual<size_t>(1, f.m_mockEffects.size());
+        Assert::AreEqual(CLSID_D2D1GaussianBlur, f.m_mockEffects[0]->m_effectId);
+    }
+
+    TEST_METHOD_EX(CanvasEffect_EffectRealizationContext_ResourceCreatorIsNotDeviceContext)
+    {
+        EffectRealizationContextFixture f(1);
+
+        f.m_canvasDevice->GetResourceCreationDeviceContextMethod.SetExpectedCalls(1,
+            [&]
+            {
+                return DeviceContextLease(f.m_deviceContext);
+            });
+
+        ThrowIfFailed(f.m_testEffect->InvalidateSourceRectangle(f.m_stubBitmap.Get(), 0, Rect{}));
+
+        Assert::AreEqual<size_t>(1, f.m_mockEffects.size());
+        Assert::AreEqual(CLSID_D2D1GaussianBlur, f.m_mockEffects[0]->m_effectId);
+    }
+
+    TEST_METHOD_EX(CanvasEffect_EffectRealizationContext_WhenContextIsCommandList_InsertsDpiCompensation)
+    {
+        EffectRealizationContextFixture f(2);
+
+        auto commandList = Make<MockD2DCommandList>();
+        
+        f.m_deviceContext->GetTargetMethod.SetExpectedCalls(1,
+            [&](ID2D1Image** value)
+            {
+                commandList.CopyTo(value);
+            });
+
+        ThrowIfFailed(f.m_testEffect->InvalidateSourceRectangle(f.m_drawingSession.Get(), 0, Rect{}));
+
+        Assert::AreEqual<size_t>(2, f.m_mockEffects.size());
+        Assert::AreEqual(CLSID_D2D1GaussianBlur, f.m_mockEffects[0]->m_effectId);
+        Assert::AreEqual(CLSID_D2D1DpiCompensation, f.m_mockEffects[1]->m_effectId);
+    }
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+
+    class D2DFactoryWithOptional5Support : public MockD2DFactory
+    {
+        bool m_supportFactory5;
+
+    public:
+        D2DFactoryWithOptional5Support(bool supportFactory5)
+            : m_supportFactory5(supportFactory5)
+        { }
+
+        STDMETHOD(QueryInterface)(REFIID riid, void **ppvObject) override
+        {
+            if (IsEqualGUID(riid, __uuidof(ID2D1Factory5)))
+            {
+                // Major cheat here! We don't actually bother implementing all of ID2D1Factory5, but
+                // instead QI for the base ID2D1Factory interface. This is not even remotely correct
+                // COM, but good enough for these tests because we happen to know that the
+                // implementation only checks the return pointer for being non-null, then releases it.
+                if (m_supportFactory5)
+                    return MockD2DFactory::QueryInterface(__uuidof(ID2D1Factory), ppvObject);
+                else
+                    return E_NOINTERFACE;
+            }
+
+            return MockD2DFactory::QueryInterface(riid, ppvObject);
+        }
+    };
+
+    struct NewEffectsAreSupportedFixture
+    {
+        std::shared_ptr<TestDeviceAdapter> m_deviceAdapter;
+
+        NewEffectsAreSupportedFixture(bool supportFactory5)
+            : m_deviceAdapter(std::make_shared<TestDeviceAdapter>())
+        {
+            m_deviceAdapter->m_overrideD2DFactory = Make<D2DFactoryWithOptional5Support>(supportFactory5);
+
+            CanvasDeviceAdapter::SetInstance(m_deviceAdapter);
+        }
+    };
+
+    TEST_METHOD_EX(CanvasEffect_NewEffectConstructorsFailWhenID2D1Factory5NotSupported)
+    {
+        NewEffectsAreSupportedFixture fixture(false);
+
+        ExpectHResultException(E_NOTIMPL, [] { Make<AlphaMaskEffect>(); });
+        ValidateStoredErrorState(E_NOTIMPL, Strings::NotSupportedOnThisVersionOfWindows);
+
+        ExpectHResultException(E_NOTIMPL, [] { Make<CrossFadeEffect>(); });
+        ValidateStoredErrorState(E_NOTIMPL, Strings::NotSupportedOnThisVersionOfWindows);
+
+        ExpectHResultException(E_NOTIMPL, [] { Make<OpacityEffect>(); });
+        ValidateStoredErrorState(E_NOTIMPL, Strings::NotSupportedOnThisVersionOfWindows);
+
+        ExpectHResultException(E_NOTIMPL, [] { Make<TintEffect>(); });
+        ValidateStoredErrorState(E_NOTIMPL, Strings::NotSupportedOnThisVersionOfWindows);
+    }
+
+    TEST_METHOD_EX(CanvasEffect_NewEffectConstructorsSucceedWhenID2D1Factory5Supported)
+    {
+        NewEffectsAreSupportedFixture fixture(true);
+
+        CheckMakeResult(Make<AlphaMaskEffect>());
+        CheckMakeResult(Make<CrossFadeEffect>());
+        CheckMakeResult(Make<OpacityEffect>());
+        CheckMakeResult(Make<TintEffect>());
+    }
+
+    template<typename TFactory>
+    static void TestIsSupported(boolean expected)
+    {
+        auto factory = Make<TFactory>();
+
+        boolean result;
+        ThrowIfFailed(factory->get_IsSupported(&result));
+
+        Assert::AreEqual(expected, result);
+
+        Assert::AreEqual(E_INVALIDARG, factory->get_IsSupported(nullptr));
+    }
+
+    TEST_METHOD_EX(CanvasEffect_NewEffectIsSupportedReturnsFalseWhenID2D1Factory5NotSupported)
+    {
+        NewEffectsAreSupportedFixture fixture(false);
+
+        TestIsSupported<AlphaMaskEffectFactory>(false);
+        TestIsSupported<CrossFadeEffectFactory>(false);
+        TestIsSupported<OpacityEffectFactory>(false);
+        TestIsSupported<TintEffectFactory>(false);
+    }
+
+    TEST_METHOD_EX(CanvasEffect_NewEffectIsSupportedReturnsTrueWhenID2D1Factory5Supported)
+    {
+        NewEffectsAreSupportedFixture fixture(true);
+
+        TestIsSupported<AlphaMaskEffectFactory>(true);
+        TestIsSupported<CrossFadeEffectFactory>(true);
+        TestIsSupported<OpacityEffectFactory>(true);
+        TestIsSupported<TintEffectFactory>(true);
+    }
+
+#endif
 
     // DImage defines separate (but identical) enum types for different effects.
     // Effects codegen tool collapses this duplication in the WinRT projection.

@@ -9,11 +9,14 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    TileEffect::TileEffect()
-        : CanvasEffect(CLSID_D2D1Tile, 1, 1, true)
+    TileEffect::TileEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 1, 1, true, device, effect, static_cast<ITileEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<float[4]>(D2D1_TILE_PROP_RECT, Rect{ 0, 0, 100, 100 });
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<float[4]>(D2D1_TILE_PROP_RECT, Rect{ 0, 0, 100, 100 });
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY(TileEffect,
@@ -29,5 +32,5 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
     IMPLEMENT_EFFECT_PROPERTY_MAPPING(TileEffect,
         { L"SourceRectangle", D2D1_TILE_PROP_RECT, GRAPHICS_EFFECT_PROPERTY_MAPPING_RECT_TO_VECTOR4 })
 
-    ActivatableClass(TileEffect);
+    ActivatableClassWithFactory(TileEffect, SimpleAgileActivationFactory<TileEffect>);
 }}}}}

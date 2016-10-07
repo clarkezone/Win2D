@@ -11,10 +11,9 @@ Licensed under the MIT License. See LICENSE.txt in the project root for license 
   </assembly>
   <members>
 
-    <member name="T:Microsoft.Graphics.Canvas.Effects.DiscreteTransferEffect">
+    <member name="T:Microsoft.Graphics.Canvas.Effects.DiscreteTransferEffect" NoComposition="true">
       <summary>
-        <p>Alters the colors of an image using a quantized transfer function defined by an arbitrary lookup table.</p>
-        <p><i>Supported by Win2D but not Windows.UI.Composition.</i></p>
+        Alters the colors of an image using a quantized transfer function defined by an arbitrary lookup table.
       </summary>
       <remarks>
         <p>
@@ -39,9 +38,6 @@ Licensed under the MIT License. See LICENSE.txt in the project root for license 
     </member>
     <member name="M:Microsoft.Graphics.Canvas.Effects.DiscreteTransferEffect.#ctor">
       <summary>Initializes a new instance of the DiscreteTransferEffect class.</summary>
-    </member>
-    <member name="M:Microsoft.Graphics.Canvas.Effects.DiscreteTransferEffect.Dispose">
-      <summary>Releases all resources used by the DiscreteTransferEffect.</summary>
     </member>
     <member name="P:Microsoft.Graphics.Canvas.Effects.DiscreteTransferEffect.Source">
       <summary>Gets or sets the input source for DiscreteTransfer effect.</summary>
@@ -80,18 +76,8 @@ Licensed under the MIT License. See LICENSE.txt in the project root for license 
       <summary>Disables the alpha channel transfer table. Default value false.</summary>
     </member>
 
-    <member name="M:Microsoft.Graphics.Canvas.Effects.DiscreteTransferEffect.GetBounds(Microsoft.Graphics.Canvas.CanvasDrawingSession)">
-      <summary>Retrieves the bounds of this CanvasImage, in device-independent units.</summary>
-      <inheritdoc/>
-    </member>
-    <member name="M:Microsoft.Graphics.Canvas.Effects.DiscreteTransferEffect.GetBounds(Microsoft.Graphics.Canvas.CanvasDrawingSession,Microsoft.Graphics.Canvas.Numerics.Matrix3x2)">
-      <summary>Retrieves the bounds of the CanvasImage, in device-independent units.</summary>
-      <inheritdoc/>
-    </member>
-    <member name="P:Microsoft.Graphics.Canvas.Effects.DiscreteTransferEffect.Name">
-      <summary>Attaches a user-defined name string to the effect.</summary>
-      <inheritdoc/>
-    </member>
+    <inherittemplate name="EffectTemplate" replacement="DiscreteTransferEffect" />
+    <inherittemplate name="ICanvasEffectTemplate" replacement="DiscreteTransferEffect" />
 
   </members>
 </doc>

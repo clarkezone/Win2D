@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "stubs/StubD2DEffect.h"
+
 namespace canvas
 {
     class SwitchableTestBrushFixture
@@ -15,6 +17,8 @@ namespace canvas
         ComPtr<CanvasImageBrush> m_canvasImageBrush;
         ComPtr<ICanvasBrushInternal> m_canvasBrushInternal;
         ComPtr<MockCanvasDevice> m_canvasDevice;
+        ComPtr<StubD2DDevice> m_d2dDevice;
+        ComPtr<MockD2DDeviceContext> m_d2dDeviceContext;
 
         D2D1_MATRIX_3X2_F m_transform;
 
@@ -25,26 +29,6 @@ namespace canvas
             m_bitmapBrush = Make<MockD2DBitmapBrush>();
             m_imageBrush = Make<MockD2DImageBrush>();
 
-            m_canvasDevice->MockGetD2DImage =
-                [&](ICanvasImage* canvasImage) -> ComPtr<ID2D1Image>
-                {
-                    ComPtr<IGraphicsEffect> effect;
-                    ComPtr<ICanvasBitmap> bitmap;
-                    if (SUCCEEDED(canvasImage->QueryInterface(IID_PPV_ARGS(&effect))))
-                    {
-                        return Make<MockD2DEffect>();
-                    }
-                    else if (SUCCEEDED(canvasImage->QueryInterface(IID_PPV_ARGS(&bitmap))))
-                    {
-                        return Make<MockD2DBitmap>();
-                    }
-                    else
-                    {
-                        Assert::Fail(); // command list: notimpl
-                        return nullptr;
-                    }
-                };
-            
             m_canvasDevice->MockCreateBitmapBrush =
                 [&](ID2D1Bitmap1* bitmap)
                 {
@@ -58,10 +42,10 @@ namespace canvas
                         m_targetImage = bitmap;
                     };
 
-                    m_bitmapBrush->MockGetExtendModeX = [&]() { return D2D1_EXTEND_MODE_MIRROR; };
-                    m_bitmapBrush->MockGetExtendModeY = [&]() { return D2D1_EXTEND_MODE_WRAP; };
-                    m_bitmapBrush->MockGetInterpolationMode1 = [&]() { return D2D1_INTERPOLATION_MODE_ANISOTROPIC; };
-                    m_bitmapBrush->MockGetOpacity = [&]() { return 0.1f; };
+                    m_bitmapBrush->MockGetExtendModeX = [&] { return D2D1_EXTEND_MODE_MIRROR; };
+                    m_bitmapBrush->MockGetExtendModeY = [&] { return D2D1_EXTEND_MODE_WRAP; };
+                    m_bitmapBrush->MockGetInterpolationMode1 = [&] { return D2D1_INTERPOLATION_MODE_ANISOTROPIC; };
+                    m_bitmapBrush->MockGetOpacity = [&] { return 0.1f; };
                     m_bitmapBrush->MockGetTransform = [&](D2D1_MATRIX_3X2_F* transform) { *transform = m_transform; };
 
                     m_bitmapBrush->MockSetExtendModeX = [&](D2D1_EXTEND_MODE extend) { Assert::AreEqual(D2D1_EXTEND_MODE_MIRROR, extend); };
@@ -74,8 +58,10 @@ namespace canvas
                 };
             
             m_canvasDevice->MockCreateImageBrush =
-                [&](ID2D1Image* image)
+                [&](ID2D1Image* initialImage)
                 {
+                    m_targetImage = initialImage;
+
                     m_imageBrush->MockGetImage = [&](ID2D1Image** image) 
                     {
                         if (m_targetImage) m_targetImage.CopyTo(image);
@@ -86,10 +72,10 @@ namespace canvas
                         m_targetImage = image;
                     };
 
-                    m_imageBrush->MockGetExtendModeX = [&]() { return D2D1_EXTEND_MODE_MIRROR; };
-                    m_imageBrush->MockGetExtendModeY = [&]() { return D2D1_EXTEND_MODE_WRAP; };
-                    m_imageBrush->MockGetInterpolationMode = [&]() { return D2D1_INTERPOLATION_MODE_ANISOTROPIC; };
-                    m_imageBrush->MockGetOpacity = [&]() { return 0.1f; };
+                    m_imageBrush->MockGetExtendModeX = [&] { return D2D1_EXTEND_MODE_MIRROR; };
+                    m_imageBrush->MockGetExtendModeY = [&] { return D2D1_EXTEND_MODE_WRAP; };
+                    m_imageBrush->MockGetInterpolationMode = [&] { return D2D1_INTERPOLATION_MODE_ANISOTROPIC; };
+                    m_imageBrush->MockGetOpacity = [&] { return 0.1f; };
                     m_imageBrush->MockGetTransform = [&](D2D1_MATRIX_3X2_F* transform) { *transform = m_transform; };
                     m_imageBrush->MockGetSourceRectangle = [&](D2D1_RECT_F* rect) { *rect = D2D1::RectF(0, 0, 10, 10); };
 
@@ -113,9 +99,25 @@ namespace canvas
                 canvasBitmap = CreateStubCanvasBitmap();
             }
 
-            m_canvasImageBrush = Make<CanvasImageBrush>(m_canvasDevice.Get());
-            m_canvasImageBrush->SetImage(canvasBitmap.Get());
+            m_canvasImageBrush = Make<CanvasImageBrush>(m_canvasDevice.Get(), canvasBitmap.Get());
             ThrowIfFailed(m_canvasImageBrush.As(&m_canvasBrushInternal));
+
+            m_d2dDevice = Make<StubD2DDevice>();
+            m_canvasDevice->MockGetD2DDevice = [&] { return m_d2dDevice; };
+
+            m_d2dDeviceContext = Make<StubD2DDeviceContextWithGetFactory>();
+
+            m_canvasDevice->GetResourceCreationDeviceContextMethod.AllowAnyCall(
+                [&]
+                {
+                    return DeviceContextLease(As<ID2D1DeviceContext1>(m_d2dDeviceContext));
+                });
+
+            m_d2dDeviceContext->CreateEffectMethod.AllowAnyCall(
+                [](IID const& iid, ID2D1Effect** effect)
+                {
+                    return Make<StubD2DEffect>(iid).CopyTo(effect);
+                });
         }
     };
 }

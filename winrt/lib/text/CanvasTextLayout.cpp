@@ -10,7 +10,9 @@
 #include "brushes/CanvasImageBrush.h"
 
 #include "CanvasTextLayout.h"
+#include "CanvasFontFace.h"
 #include "TextUtilities.h"
+#include "InternalDWriteTextRenderer.h"
 
 using namespace ABI::Microsoft::Graphics::Canvas;
 using namespace ABI::Microsoft::Graphics::Canvas::Text;
@@ -44,23 +46,16 @@ CanvasTextLayoutRegion ToHitTestDescription(DWRITE_HIT_TEST_METRICS const& hitTe
     return description;
 }
 
-//
-// CanvasTextLayoutManager implementation
-//
 
-CanvasTextLayoutManager::CanvasTextLayoutManager(std::shared_ptr<ICanvasTextFormatAdapter> adapter)
-    : CustomFontManager(adapter)
-{
-}
-
-ComPtr<CanvasTextLayout> CanvasTextLayoutManager::CreateNew(
+ComPtr<CanvasTextLayout> CanvasTextLayout::CreateNew(
     ICanvasResourceCreator* resourceCreator,
     HSTRING text,
     ICanvasTextFormat* textFormat,
     float requestedWidth,
     float requestedHeight)
 {
-    auto dwriteFactory = GetSharedFactory();
+    auto customFontManager = CustomFontManager::GetInstance();
+    auto dwriteFactory = customFontManager->GetSharedFactory();
 
     uint32_t textLength;
     auto textBuffer = WindowsGetStringRawBuffer(text, &textLength);
@@ -79,41 +74,27 @@ ComPtr<CanvasTextLayout> CanvasTextLayoutManager::CreateNew(
     ThrowIfFailed(resourceCreator->get_Device(&device));
 
     auto textLayout = Make<CanvasTextLayout>(
-        shared_from_this(),
-        As<IDWriteTextLayout2>(dwriteTextLayout).Get(),
-        device.Get());
+        device.Get(),
+        As<DWriteTextLayoutType>(dwriteTextLayout).Get());
     CheckMakeResult(textLayout);
 
+    CanvasLineSpacingMode lineSpacingMode{};
+#if WINVER > _WIN32_WINNT_WINBLUE
+    ThrowIfFailed(textFormat->get_LineSpacingMode(&lineSpacingMode));
+#endif
+    textLayout->SetLineSpacingModeInternal(lineSpacingMode);
+
+    CanvasTrimmingSign trimmingSign;
+    ThrowIfFailed(textFormat->get_TrimmingSign(&trimmingSign));
+    textLayout->SetTrimmingSignInternal(trimmingSign);
+
     return textLayout;
-}
-
-ComPtr<CanvasTextLayout> CanvasTextLayoutManager::CreateWrapper(
-    ICanvasDevice* device,
-    IDWriteTextLayout2* resource)
-{
-    auto canvasTextLayout = Make<CanvasTextLayout>(
-        shared_from_this(),
-        resource,
-        device);
-    CheckMakeResult(canvasTextLayout);
-
-    return canvasTextLayout;
 }
 
 
 //
 // CanvasTextLayoutFactory implementation
 //
-
-
-CanvasTextLayoutFactory::CanvasTextLayoutFactory()
-{
-}
-
-std::shared_ptr<CanvasTextLayoutManager> CanvasTextLayoutFactory::CreateManager()
-{
-    return std::make_shared<CanvasTextLayoutManager>(std::make_shared<CanvasTextFormatAdapter>());
-}
 
 IFACEMETHODIMP CanvasTextLayoutFactory::Create(
     ICanvasResourceCreator* resourceCreator,
@@ -129,7 +110,7 @@ IFACEMETHODIMP CanvasTextLayoutFactory::Create(
             CheckInPointer(textFormat);
             CheckAndClearOutPointer(textLayout);
 
-            auto newTextLayout = GetManager()->Create(
+            auto newTextLayout = CanvasTextLayout::CreateNew(
                 resourceCreator,
                 textString,
                 textFormat,
@@ -140,16 +121,44 @@ IFACEMETHODIMP CanvasTextLayoutFactory::Create(
         });
 }
 
-CanvasTextLayout::CanvasTextLayout(
-    std::shared_ptr<CanvasTextLayoutManager> manager, 
-    IDWriteTextLayout2* layout,
-    ICanvasDevice* device)
-    : ResourceWrapper(manager, layout)
-    , m_drawTextOptions(CanvasDrawTextOptions::Default)
-    , m_device(device)
+
+IFACEMETHODIMP CanvasTextLayoutFactory::GetGlyphOrientationTransform(
+    CanvasGlyphOrientation glyphOrientation,
+    boolean isSideways,
+    Vector2 position,
+    Matrix3x2* transform)
 {
+    return ExceptionBoundary(
+        [&]
+        {
+            CheckInPointer(transform);
+
+            auto analyzer = CustomFontManager::GetInstance()->GetTextAnalyzer();
+
+            DWRITE_MATRIX dwriteTransform;
+            ThrowIfFailed(analyzer->GetGlyphOrientationTransform(
+                ToDWriteGlyphOrientationAngle(glyphOrientation),
+                isSideways,
+                position.X,
+                position.Y,
+                &dwriteTransform));
+
+            *transform = *(ReinterpretAs<Matrix3x2*>(&dwriteTransform));
+        });
 }
 
+
+CanvasTextLayout::CanvasTextLayout(
+    ICanvasDevice* device,
+    DWriteTextLayoutType* layout)
+    : ResourceWrapper(layout)
+    , m_drawTextOptions(CanvasDrawTextOptions::Default)
+    , m_device(device)
+    , m_customFontManager(CustomFontManager::GetInstance())
+    , m_lineSpacingMode(CanvasLineSpacingMode::Default)
+{
+    EnsureCustomTrimmingSignDevice(layout, device);
+}
 
 IFACEMETHODIMP CanvasTextLayout::GetFormatChangeIndices(
     uint32_t* positionCount,
@@ -224,6 +233,8 @@ IFACEMETHODIMP CanvasTextLayout::##name(valueType value)            \
                                                                     \
             ThrowIfInvalid(value);                                  \
             resource->dwriteMethod(conversionFunc(value));          \
+                                                                    \
+            m_trimmingSignInformation.RecreateInternalTrimmingSignIfNeeded(resource.Get()); \
         });                                                         \
 }
 
@@ -285,6 +296,8 @@ IFACEMETHODIMP CanvasTextLayout::put_Direction(CanvasTextDirection value)
             auto entry = DWriteToCanvasTextDirection::Lookup(value);
             ThrowIfFailed(resource->SetReadingDirection(entry->ReadingDirection));
             ThrowIfFailed(resource->SetFlowDirection(entry->FlowDirection));
+
+            m_trimmingSignInformation.RecreateInternalTrimmingSignIfNeeded(resource.Get());
         });
 }
 
@@ -327,7 +340,18 @@ IFACEMETHODIMP CanvasTextLayout::put_LineSpacing(
 
             DWriteLineSpacing originalSpacing(resource.Get());
 
-            DWriteLineSpacing::Set(resource.Get(), value, originalSpacing.Baseline);
+            CanvasLineSpacingMode lineSpacingMode{};
+#if WINVER > _WIN32_WINNT_WINBLUE
+            lineSpacingMode = ToCanvasLineSpacingMode(originalSpacing.Method);
+#endif
+
+            DWriteLineSpacing::Set(
+                resource.Get(),
+                lineSpacingMode,
+                value, 
+                originalSpacing.Baseline);
+
+            m_trimmingSignInformation.RecreateInternalTrimmingSignIfNeeded(resource.Get());
         });
 }
 
@@ -338,11 +362,18 @@ IFACEMETHODIMP CanvasTextLayout::get_LineSpacingBaseline(
         [&]
         {
             CheckInPointer(value);
-            auto& resource = GetResource(); 
+            auto& resource = GetResource();
+
+            //
+            // The Win10 IDWriteTextLayout3 interface definition omits a 'using' while
+            // defining method overloads, requiring us to explicitly do a cast 
+            // if we want IDWriteTextLayout2 overloads.
+            //
+            IDWriteTextLayout2* resource2 = static_cast<IDWriteTextLayout2*>(resource.Get());
 
             DWRITE_LINE_SPACING_METHOD unusedMethod;
             float unusedSpacing;
-            ThrowIfFailed(resource->GetLineSpacing(&unusedMethod, &unusedSpacing, value));
+            ThrowIfFailed(resource2->GetLineSpacing(&unusedMethod, &unusedSpacing, value));
         });
 }
 
@@ -352,16 +383,66 @@ IFACEMETHODIMP CanvasTextLayout::put_LineSpacingBaseline(
     return ExceptionBoundary(
         [&]
         {
-            auto& resource = GetResource(); 
+            auto& resource = GetResource();
+
+            //
+            // The Win10 IDWriteTextLayout3 interface definition omits a 'using' while
+            // defining method overloads, requiring us to explicitly do a cast 
+            // if we want IDWriteTextLayout2 overloads.
+            //
+            IDWriteTextLayout2* resource2 = static_cast<IDWriteTextLayout2*>(resource.Get());
 
             DWRITE_LINE_SPACING_METHOD method;
             float spacing;
             float unusedBaseline;
-            ThrowIfFailed(resource->GetLineSpacing(&method, &spacing, &unusedBaseline));
+            ThrowIfFailed(resource2->GetLineSpacing(&method, &spacing, &unusedBaseline));
 
-            ThrowIfFailed(resource->SetLineSpacing(method, spacing, value));
+            ThrowIfFailed(resource2->SetLineSpacing(method, spacing, value));
+
+            m_trimmingSignInformation.RecreateInternalTrimmingSignIfNeeded(resource.Get());
         });
 }
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+
+IFACEMETHODIMP CanvasTextLayout::get_LineSpacingMode(
+    CanvasLineSpacingMode* value)
+{
+    return ExceptionBoundary(
+        [&]
+        {
+            CheckInPointer(value);
+            auto& resource = GetResource();
+
+            DWriteLineSpacing spacing(resource.Get());
+            bool allowUniform = m_lineSpacingMode == CanvasLineSpacingMode::Uniform;
+            *value = spacing.GetAdjustedLineSpacingMode(allowUniform);
+        });
+}
+
+IFACEMETHODIMP CanvasTextLayout::put_LineSpacingMode(
+    CanvasLineSpacingMode value)
+{
+    return ExceptionBoundary(
+        [&]
+        {
+            auto& resource = GetResource();
+
+            DWriteLineSpacing originalSpacing(resource.Get());
+
+            DWriteLineSpacing::Set(
+                resource.Get(),
+                value,
+                originalSpacing.GetAdjustedSpacing(),
+                originalSpacing.Baseline);
+
+            m_lineSpacingMode = value;
+
+            m_trimmingSignInformation.RecreateInternalTrimmingSignIfNeeded(resource.Get());
+        });
+}
+
+#endif
 
 IFACEMETHODIMP CanvasTextLayout::get_TrimmingGranularity(
     CanvasTextTrimmingGranularity* value)
@@ -396,6 +477,8 @@ IFACEMETHODIMP CanvasTextLayout::put_TrimmingGranularity(
             trimming.granularity = static_cast<DWRITE_TRIMMING_GRANULARITY>(value);
 
             ThrowIfFailed(resource->SetTrimming(&trimming, inlineObject.Get()));
+
+            m_trimmingSignInformation.RecreateInternalTrimmingSignIfNeeded(resource.Get());
         });
 }
 
@@ -412,7 +495,7 @@ IFACEMETHODIMP CanvasTextLayout::get_TrimmingDelimiter(
             ComPtr<IDWriteInlineObject> inlineObject;
             ThrowIfFailed(resource->GetTrimming(&trimming, &inlineObject));
 
-            WinString winStr = ToCanvasTrimmingDelimiter(trimming.delimiter);
+            WinString winStr = ConvertCharacterCodepointToString(trimming.delimiter);
             winStr.CopyTo(value);
         });
 }
@@ -433,6 +516,8 @@ IFACEMETHODIMP CanvasTextLayout::put_TrimmingDelimiter(
             trimming.delimiter = ToTrimmingDelimiter(WinString(value));
 
             ThrowIfFailed(resource->SetTrimming(&trimming, inlineObject.Get()));
+
+            m_trimmingSignInformation.RecreateInternalTrimmingSignIfNeeded(resource.Get());
         });
 }
 
@@ -471,6 +556,8 @@ IFACEMETHODIMP CanvasTextLayout::put_TrimmingDelimiterCount(
             trimming.delimiterCount = static_cast<uint32_t>(value);
 
             ThrowIfFailed(resource->SetTrimming(&trimming, inlineObject.Get()));
+
+            m_trimmingSignInformation.RecreateInternalTrimmingSignIfNeeded(resource.Get());
         });
 }
 
@@ -527,75 +614,6 @@ IFACEMETHODIMP CanvasTextLayout::put_RequestedSize(
         });
 }
 
-ComPtr<ICanvasBrush> CanvasTextLayout::PolymorphicGetOrCreateBrush(
-    ComPtr<IUnknown> const& resource)
-{
-    auto& device = m_device.EnsureNotClosed();
-
-    if (!resource)
-    {
-        return nullptr;
-    }
-
-    auto solidColorBrush = MaybeAs<ID2D1SolidColorBrush>(resource);
-    if (solidColorBrush)
-    {
-        auto canvasSolidColorBrushManager = CanvasSolidColorBrushFactory::GetOrCreateManager();
-
-        return canvasSolidColorBrushManager->GetOrCreate(
-            device.Get(),
-            solidColorBrush.Get());
-    }
-
-    auto linearGradientBrush = MaybeAs<ID2D1LinearGradientBrush>(resource);
-    if (linearGradientBrush)
-    {
-        auto canvasLinearGradientBrushManager = CanvasLinearGradientBrushFactory::GetOrCreateManager();
-
-        return canvasLinearGradientBrushManager->GetOrCreate(
-            device.Get(),
-            linearGradientBrush.Get());
-    }
-
-    auto radialGradientBrush = MaybeAs<ID2D1RadialGradientBrush>(resource);
-    if (radialGradientBrush)
-    {
-        auto canvasRadialGradientBrushManager = CanvasRadialGradientBrushFactory::GetOrCreateManager();
-
-        return canvasRadialGradientBrushManager->GetOrCreate(
-            device.Get(),
-            radialGradientBrush.Get());
-    }
-
-    auto bitmapBrush = MaybeAs<ID2D1BitmapBrush>(resource);
-    auto imageBrush = MaybeAs<ID2D1ImageBrush>(resource);
-    if (bitmapBrush || imageBrush)
-    {
-        //
-        // TODO #4047 - Use a resource manager shared across all image
-        // brushes, rather than creating a new factory here. This works
-        // because there isn't any state stored in the factory.
-        //
-        auto imageBrushFactory = Make<CanvasImageBrushFactory>();
-        CheckMakeResult(imageBrushFactory);
-
-        ComPtr<ICanvasBrush> wrappedBrush;
-
-        if (bitmapBrush)
-            ThrowIfFailed(imageBrushFactory->GetOrCreate(device.Get(), bitmapBrush.Get(), &wrappedBrush));
-        else
-            ThrowIfFailed(imageBrushFactory->GetOrCreate(device.Get(), imageBrush.Get(), &wrappedBrush));
-
-        return wrappedBrush;
-    }
-
-    //
-    // It's possible to reach here in the case of interop, where a non-brush drawing effect has
-    // been set to the text layout. It's not possible to return this as a brush, so we throw.
-    //
-    ThrowHR(E_NOINTERFACE);
-}
-
 IFACEMETHODIMP CanvasTextLayout::GetBrush(
     int32_t characterIndex,
     ICanvasBrush** brush)
@@ -605,17 +623,14 @@ IFACEMETHODIMP CanvasTextLayout::GetBrush(
         {
             CheckAndClearOutPointer(brush);
 
-            ThrowIfNegative(characterIndex);
+            ComPtr<ICanvasBrush> wrappedBrush;
 
-            auto& resource = GetResource();
-
-            ComPtr<IUnknown> drawingEffect;
-            ThrowIfFailed(resource->GetDrawingEffect(characterIndex, &drawingEffect, nullptr));
-
-            auto wrappedBrush = PolymorphicGetOrCreateBrush(drawingEffect);
+            auto brushInspectable = GetCustomBrushInternal(characterIndex);
+            if (brushInspectable)
+                wrappedBrush = As<ICanvasBrush>(brushInspectable.Get());
 
             ThrowIfFailed(wrappedBrush.CopyTo(brush));
-        });
+    });
 }
 
 IFACEMETHODIMP CanvasTextLayout::GetFontFamily(
@@ -788,19 +803,19 @@ IFACEMETHODIMP CanvasTextLayout::SetColor(
 {
     return ExceptionBoundary(
         [&]
-    {
-        auto& resource = GetResource();
+        {
+            auto& resource = GetResource();
 
-        auto textRange = ToDWriteTextRange(characterIndex, characterCount);
+            auto textRange = ToDWriteTextRange(characterIndex, characterCount);
 
-        auto& device = m_device.EnsureNotClosed();
+            auto& device = m_device.EnsureNotClosed();
 
-        auto deviceInternal = As<ICanvasDeviceInternal>(device);
+            auto deviceInternal = As<ICanvasDeviceInternal>(device);
 
-        auto d2dBrush = deviceInternal->CreateSolidColorBrush(ToD2DColor(color));
+            auto d2dBrush = deviceInternal->CreateSolidColorBrush(ToD2DColor(color));
 
-        ThrowIfFailed(resource->SetDrawingEffect(d2dBrush.Get(), textRange));
-    });
+            ThrowIfFailed(resource->SetDrawingEffect(d2dBrush.Get(), textRange));
+        });
 }
 
 IFACEMETHODIMP CanvasTextLayout::SetBrush(
@@ -811,34 +826,7 @@ IFACEMETHODIMP CanvasTextLayout::SetBrush(
     return ExceptionBoundary(
         [&]
         {
-            auto& resource = GetResource();
-
-            //
-            // The brush parameter is allowed to be null. This will reset 
-            // that part of the layout back to its default brush behavior.
-            //
-            ComPtr<ID2D1Brush> d2dBrush;
-
-            if (brush)
-            {
-                auto brushInternal = As<ICanvasBrushInternal>(brush);
-
-                //
-                // The device context passed to GetD2DBrush is *not* used to key off of DPI.
-                // It is used to construct the appropriate DPI compensation effect, if necessary.
-                //
-                // The DPI compensation effect will be inserted into the effect graph and the resulting
-                // d2dbrush will be committed to the text layout.
-                //
-                auto& device = m_device.EnsureNotClosed();
-                auto deviceInternal = As<ICanvasDeviceInternal>(device);
-
-                d2dBrush = brushInternal->GetD2DBrush(deviceInternal->GetResourceCreationDeviceContext().Get(), GetBrushFlags::AlwaysInsertDpiCompensation);
-            }
-
-            auto textRange = ToDWriteTextRange(characterIndex, characterCount);
-
-            ThrowIfFailed(resource->SetDrawingEffect(d2dBrush.Get(), textRange));
+            SetCustomBrushInternal(characterIndex, characterCount, brush);
         });
 }
 
@@ -856,7 +844,7 @@ IFACEMETHODIMP CanvasTextLayout::SetFontFamily(
             auto const& uri = uriAndFontFamily.first;
             auto const& fontFamily = uriAndFontFamily.second;
 
-            ComPtr<IDWriteFontCollection> fontCollection = Manager()->GetFontCollectionFromUri(uri);
+            ComPtr<IDWriteFontCollection> fontCollection = m_customFontManager->GetFontCollectionFromUri(uri);
 
             auto textRange = ToDWriteTextRange(characterIndex, characterCount);
 
@@ -1102,6 +1090,8 @@ IFACEMETHODIMP CanvasTextLayout::put_VerticalGlyphOrientation(
             auto& resource = GetResource();
 
             ThrowIfFailed(resource->SetVerticalGlyphOrientation(ToVerticalGlyphOrientation(value)));
+
+            m_trimmingSignInformation.RecreateInternalTrimmingSignIfNeeded(resource.Get());
         });
 }
 
@@ -1128,6 +1118,8 @@ IFACEMETHODIMP CanvasTextLayout::put_OpticalAlignment(
             auto& resource = GetResource();
 
             ThrowIfFailed(resource->SetOpticalAlignment(ToOpticalAlignment(value)));
+
+            m_trimmingSignInformation.RecreateInternalTrimmingSignIfNeeded(resource.Get());
         });
 }
 
@@ -1155,6 +1147,73 @@ IFACEMETHODIMP CanvasTextLayout::put_LastLineWrapping(
             auto& resource = GetResource();
 
             ThrowIfFailed(resource->SetLastLineWrapping(value));
+
+            m_trimmingSignInformation.RecreateInternalTrimmingSignIfNeeded(resource.Get());
+        });
+}
+
+IFACEMETHODIMP CanvasTextLayout::get_TrimmingSign(
+    CanvasTrimmingSign* value)
+{
+    return ExceptionBoundary(
+        [&]
+        {
+            CheckInPointer(value);
+
+            auto& resource = GetResource();
+
+            *value = m_trimmingSignInformation.GetTrimmingSignFromResource(resource.Get());
+        });
+}
+
+IFACEMETHODIMP CanvasTextLayout::put_TrimmingSign(
+    CanvasTrimmingSign value)
+{
+    return ExceptionBoundary(
+        [&]
+        {
+            auto& resource = GetResource();
+
+            m_trimmingSignInformation.SetTrimmingSignOnResource(value, resource.Get());
+        });
+}
+
+
+IFACEMETHODIMP CanvasTextLayout::get_CustomTrimmingSign(
+    ICanvasTextInlineObject** value)
+{
+    return ExceptionBoundary(
+        [&]
+        {
+            CheckAndClearOutPointer(value);
+            auto& resource = GetResource();
+
+            DWRITE_TRIMMING unused;
+            ComPtr<IDWriteInlineObject> dwriteInlineObject;
+            ThrowIfFailed(resource->GetTrimming(&unused, &dwriteInlineObject));
+
+            auto canvasTrimmingSign = GetCanvasInlineObjectFromDWriteInlineObject(dwriteInlineObject);
+
+            ThrowIfFailed(canvasTrimmingSign.CopyTo(value));
+        });
+}
+
+IFACEMETHODIMP CanvasTextLayout::put_CustomTrimmingSign(
+    ICanvasTextInlineObject* value)
+{
+    return ExceptionBoundary(
+        [&]
+        {
+            auto& resource = GetResource();
+
+            auto dwriteInlineObject = Make<InternalDWriteInlineObject>(value, m_device.EnsureNotClosed());
+            CheckMakeResult(dwriteInlineObject);
+
+            DWRITE_TRIMMING dwriteTrimming;
+            ComPtr<IDWriteInlineObject> unused;
+            ThrowIfFailed(resource->GetTrimming(&dwriteTrimming, &unused));
+
+            ThrowIfFailed(resource->SetTrimming(&dwriteTrimming, dwriteInlineObject.Get()));
         });
 }
 
@@ -1170,6 +1229,50 @@ IFACEMETHODIMP CanvasTextLayout::get_LayoutBounds(Rect* value)
             ThrowIfFailed(resource->GetMetrics(&dwriteMetrics));
 
             Rect rect{ dwriteMetrics.left, dwriteMetrics.top, dwriteMetrics.width, dwriteMetrics.height };
+
+            //
+            // There's an adjustment to do here because 'left' and 'top' fields of this 
+            // struct are not always computed in the same way.
+            //
+            // On left-to-right reading direction, for example, the 'left' field is the left layout bound
+            // and everything is straightforward. As for right-to-left reading direction, however, 'left'
+            // is equal to the {right layout bound- not reported directly} - {widthIncludingTrailingWhitespace}. 
+            // Since the width of the rect we return doesn't include whitespace, its left bound needs to be
+            // adjusted accordingly. Likewise goes for bottom-to-top reading direction.
+            //
+            // Note that on horizontal reading directions, heightIncludingTrailingWhitespace == height.
+            // And on vertical ones, widthIncludingTrailingWhitespace == width.
+            //
+
+            auto readingDirection = resource->GetReadingDirection();
+
+            if (readingDirection == DWRITE_READING_DIRECTION_RIGHT_TO_LEFT)
+            {
+                const float whitespace = dwriteMetrics.widthIncludingTrailingWhitespace - dwriteMetrics.width;
+                rect.X += whitespace;
+            }
+            else if (readingDirection == DWRITE_READING_DIRECTION_BOTTOM_TO_TOP)
+            {
+                const float whitespace = dwriteMetrics.heightIncludingTrailingWhitespace - dwriteMetrics.height;
+                rect.Y += whitespace;
+            }
+
+            *value = rect;
+        });
+}
+
+IFACEMETHODIMP CanvasTextLayout::get_LayoutBoundsIncludingTrailingWhitespace(Rect* value)
+{
+    return ExceptionBoundary(
+        [&]
+        {
+            CheckInPointer(value);
+            auto& resource = GetResource();
+
+            DWRITE_TEXT_METRICS1 dwriteMetrics;
+            ThrowIfFailed(resource->GetMetrics(&dwriteMetrics));
+
+            Rect rect{ dwriteMetrics.left, dwriteMetrics.top, dwriteMetrics.widthIncludingTrailingWhitespace, dwriteMetrics.heightIncludingTrailingWhitespace };
 
             *value = rect;
         });
@@ -1212,6 +1315,23 @@ IFACEMETHODIMP CanvasTextLayout::get_DrawBounds(Rect* value)
             Rect rect{ left, top, width, height };
 
             *value = rect;
+        });
+}
+
+IFACEMETHODIMP CanvasTextLayout::get_MaximumBidiReorderingDepth(int32_t* value)
+{
+    return ExceptionBoundary(
+        [&]
+        {
+            CheckInPointer(value);
+            auto& resource = GetResource();
+
+            DWRITE_TEXT_METRICS1 dwriteMetrics;
+            ThrowIfFailed(resource->GetMetrics(&dwriteMetrics));
+
+            assert(dwriteMetrics.maxBidiReorderingDepth >= 0);
+
+            *value = static_cast<int32_t>(dwriteMetrics.maxBidiReorderingDepth);
         });
 }
 
@@ -1380,6 +1500,328 @@ IFACEMETHODIMP CanvasTextLayout::GetCharacterRegions(
         });
 }
 
+
+IFACEMETHODIMP CanvasTextLayout::DrawToTextRenderer(
+    ICanvasTextRenderer* textRenderer,
+    Vector2 position)
+{
+    return DrawToTextRendererWithCoords(textRenderer, position.X, position.Y);
+}
+
+IFACEMETHODIMP CanvasTextLayout::DrawToTextRendererWithCoords(
+    ICanvasTextRenderer* textRenderer,
+    float x,
+    float y)
+{
+    return ExceptionBoundary(
+        [&]
+        {
+            CheckInPointer(textRenderer);
+
+            auto& resource = GetResource();
+
+            auto& device = m_device.EnsureNotClosed();
+
+            auto dwriteTextRenderer = Make<InternalDWriteTextRenderer>(device, textRenderer);
+            CheckMakeResult(dwriteTextRenderer);
+
+            ThrowIfFailed(resource->Draw(
+                nullptr,
+                dwriteTextRenderer.Get(),
+                x,
+                y));
+        });
+}
+
+
+
+IFACEMETHODIMP CanvasTextLayout::SetInlineObject(
+    int32_t characterIndex,
+    int32_t characterCount,
+    ICanvasTextInlineObject* inlineObject)
+{
+    return ExceptionBoundary(
+        [&]
+        {
+            ThrowIfNegative(characterIndex);
+            ThrowIfNegative(characterCount);
+
+            auto& resource = GetResource();
+
+            ComPtr<IDWriteInlineObject> dwriteInlineObject;
+            if (inlineObject)
+            {
+                dwriteInlineObject = Make<InternalDWriteInlineObject>(inlineObject, m_device.EnsureNotClosed());
+                CheckMakeResult(dwriteInlineObject);
+            }
+
+            ThrowIfFailed(resource->SetInlineObject(dwriteInlineObject.Get(), ToDWriteTextRange(characterIndex, characterCount)));
+        });
+}
+
+IFACEMETHODIMP CanvasTextLayout::GetInlineObject(
+    int32_t characterIndex,
+    ICanvasTextInlineObject** inlineObject)
+{
+    return ExceptionBoundary(
+        [&]
+        {
+            CheckAndClearOutPointer(inlineObject);
+            ThrowIfNegative(characterIndex);
+
+            auto& resource = GetResource();
+
+            ComPtr<IDWriteInlineObject> dwriteInlineObject;
+            ThrowIfFailed(resource->GetInlineObject(characterIndex, &dwriteInlineObject, nullptr));
+
+            auto canvasInlineObject = GetCanvasInlineObjectFromDWriteInlineObject(dwriteInlineObject);
+
+            ThrowIfFailed(canvasInlineObject.CopyTo(inlineObject));
+        });
+}
+
+
+IFACEMETHODIMP CanvasTextLayout::get_LineMetrics(
+    uint32_t* valueCount,
+    CanvasLineMetrics** valueElements)
+{
+    return ExceptionBoundary(
+        [&]
+        {
+            CheckInPointer(valueCount);
+            CheckAndClearOutPointer(valueElements);
+
+            auto& resource = GetResource();
+
+            uint32_t lineCount;
+            HRESULT hr = resource->GetLineMetrics(nullptr, 0, &lineCount);
+
+            assert(hr == E_NOT_SUFFICIENT_BUFFER);
+            if (hr != E_NOT_SUFFICIENT_BUFFER)
+                ThrowHR(E_UNEXPECTED);
+
+            std::vector<DWriteMetricsType> dwriteMetrics(lineCount);
+            ThrowIfFailed(resource->GetLineMetrics(dwriteMetrics.data(), lineCount, &lineCount));
+
+            auto returnedMetrics = TransformToComArray<CanvasLineMetrics>(
+                dwriteMetrics.begin(), 
+                dwriteMetrics.end(),
+                [](DWriteMetricsType const& dwriteMetrics)
+                {                
+                    CanvasLineMetrics metrics{};
+                    metrics.CharacterCount = dwriteMetrics.length;
+                    metrics.TrailingWhitespaceCount = dwriteMetrics.trailingWhitespaceLength;
+                    metrics.TerminalNewlineCount = dwriteMetrics.newlineLength;
+                    metrics.Height = dwriteMetrics.height;
+                    metrics.Baseline = dwriteMetrics.baseline;
+                    metrics.IsTrimmed = !!dwriteMetrics.isTrimmed;
+#if WINVER > _WIN32_WINNT_WINBLUE
+                    metrics.LeadingWhitespaceBefore = dwriteMetrics.leadingBefore;
+                    metrics.LeadingWhitespaceAfter = dwriteMetrics.leadingAfter;
+#endif
+                    return metrics;
+                });
+
+            returnedMetrics.Detach(valueCount, valueElements);
+        });
+}
+
+IFACEMETHODIMP CanvasTextLayout::get_ClusterMetrics(
+    uint32_t* valueCount,
+    CanvasClusterMetrics** valueElements)
+{
+    return ExceptionBoundary(
+        [&]
+        {
+            CheckInPointer(valueCount);
+            CheckAndClearOutPointer(valueElements);
+
+            auto& resource = GetResource();
+
+            uint32_t clusterCount;
+            HRESULT hr = resource->GetClusterMetrics(nullptr, 0, &clusterCount);
+
+            //
+            // GetClusterMetrics can return S_OK here, since it's valid for a 
+            // text layout to contain no clusters.
+            //
+
+            if (FAILED(hr) && hr != E_NOT_SUFFICIENT_BUFFER)
+                ThrowHR(E_UNEXPECTED);
+
+            std::vector<DWRITE_CLUSTER_METRICS> dwriteMetrics(clusterCount);
+
+            if (clusterCount > 0)
+                ThrowIfFailed(resource->GetClusterMetrics(dwriteMetrics.data(), clusterCount, &clusterCount));
+
+            auto returnedMetrics = TransformToComArray<CanvasClusterMetrics>(
+                dwriteMetrics.begin(), 
+                dwriteMetrics.end(),
+                [](DWRITE_CLUSTER_METRICS const& dwriteMetrics)
+                {                
+                    CanvasClusterMetrics metrics{};
+                    metrics.CharacterCount = dwriteMetrics.length;
+                    metrics.Width = dwriteMetrics.width;
+
+                    if (dwriteMetrics.canWrapLineAfter)
+                        metrics.Properties |= CanvasClusterProperties::CanWrapLineAfter;
+
+                    if (dwriteMetrics.isWhitespace)
+                        metrics.Properties |= CanvasClusterProperties::Whitespace;
+
+                    if (dwriteMetrics.isNewline) 
+                        metrics.Properties |= CanvasClusterProperties::Newline;
+
+                    if (dwriteMetrics.isSoftHyphen)
+                        metrics.Properties |= CanvasClusterProperties::SoftHyphen;
+
+                    if (dwriteMetrics.isRightToLeft)
+                        metrics.Properties |= CanvasClusterProperties::RightToLeft;
+
+                    return metrics;
+                });
+
+            returnedMetrics.Detach(valueCount, valueElements);
+        });
+}
+
+IFACEMETHODIMP CanvasTextLayout::GetCustomBrush(
+    int32_t characterIndex,
+    IInspectable** brush)
+{
+    return ExceptionBoundary(
+        [&]
+        {
+            CheckAndClearOutPointer(brush);
+
+            auto inspectable = GetCustomBrushInternal(characterIndex);
+
+            ThrowIfFailed(inspectable.CopyTo(brush));
+        });
+}
+
+ComPtr<IInspectable> CanvasTextLayout::GetCustomBrushInternal(
+    int32_t characterIndex)
+{
+    ThrowIfNegative(characterIndex);
+
+    auto& resource = GetResource();
+    auto& device = m_device.EnsureNotClosed();
+
+    ComPtr<IUnknown> drawingEffect;
+    ThrowIfFailed(resource->GetDrawingEffect(characterIndex, &drawingEffect, nullptr));
+
+    ComPtr<IInspectable> inspectable;
+    if (drawingEffect)
+    {
+        inspectable = GetCustomDrawingObjectInspectable(device.Get(), drawingEffect.Get());
+
+        if (!inspectable)
+            ThrowHR(E_NOINTERFACE);
+    }
+
+    return inspectable;
+}
+
+IFACEMETHODIMP CanvasTextLayout::SetCustomBrush(
+    int32_t characterIndex,
+    int32_t characterCount,
+    IInspectable* brush)
+{
+    return ExceptionBoundary(
+        [&]
+        {
+            SetCustomBrushInternal(characterIndex, characterCount, brush);
+        });
+}
+
+void CanvasTextLayout::SetCustomBrushInternal(
+    int32_t characterIndex,
+    int32_t characterCount, 
+    IInspectable* brush)
+{
+    auto& resource = GetResource();
+
+    auto textRange = ToDWriteTextRange(characterIndex, characterCount);
+
+    ComPtr<IUnknown> drawingEffect;
+
+    if (brush)
+    {
+        //
+        // This has the behavior of unwrapping brushes before setting them to
+        // the text layout. All other types of objects are left unwrapped.
+        //
+        auto wrappedBrushInternal = MaybeAs<ICanvasBrushInternal>(brush);
+        if (wrappedBrushInternal)
+        {
+            //
+            // The device context passed to GetD2DBrush is *not* used to key off of DPI.
+            // It is used to construct the appropriate DPI compensation effect, if necessary.
+            //
+            // The DPI compensation effect will be inserted into the effect graph and the resulting
+            // d2dbrush will be committed to the text layout.
+            //
+            auto& device = m_device.EnsureNotClosed();
+            auto deviceInternal = As<ICanvasDeviceInternal>(device);
+
+            drawingEffect = wrappedBrushInternal->GetD2DBrush(deviceInternal->GetResourceCreationDeviceContext().Get(), GetBrushFlags::AlwaysInsertDpiCompensation);
+        }
+        else
+        {
+            drawingEffect = brush;
+        }
+    }
+
+    ThrowIfFailed(resource->SetDrawingEffect(drawingEffect.Get(), textRange));
+}
+
+IFACEMETHODIMP CanvasTextLayout::GetTypography(
+    int32_t characterIndex,
+    ICanvasTypography** typography)
+{
+    return ExceptionBoundary(
+        [&]
+        {
+            CheckAndClearOutPointer(typography);
+            ThrowIfNegative(characterIndex);
+
+            auto& resource = GetResource();
+
+            ComPtr<IDWriteTypography> dwriteTypography;
+            ThrowIfFailed(resource->GetTypography(characterIndex, &dwriteTypography, nullptr));
+
+            ComPtr<ICanvasTypography> canvasTypography;
+
+            if (dwriteTypography)
+                canvasTypography = ResourceManager::GetOrCreate<ICanvasTypography>(dwriteTypography.Get());
+
+            ThrowIfFailed(canvasTypography.CopyTo(typography));
+        });
+}
+
+IFACEMETHODIMP CanvasTextLayout::SetTypography(
+    int32_t characterIndex,
+    int32_t characterCount,
+    ICanvasTypography* typography)
+{
+    return ExceptionBoundary(
+        [&]
+        {
+            ThrowIfNegative(characterIndex);
+            ThrowIfNegative(characterCount);
+
+            auto& resource = GetResource();
+
+            ComPtr<IDWriteTypography> dwriteTypography;
+
+            if (typography)
+                dwriteTypography = GetWrappedResource<IDWriteTypography>(typography);
+
+            ThrowIfFailed(resource->SetTypography(dwriteTypography.Get(), ToDWriteTextRange(characterIndex, characterCount)));
+        });
+}
+
 IFACEMETHODIMP CanvasTextLayout::Close()
 {
     m_device.Close();
@@ -1396,6 +1838,30 @@ IFACEMETHODIMP CanvasTextLayout::get_Device(ICanvasDevice** device)
 
             ThrowIfFailed(m_device.EnsureNotClosed().CopyTo(device));
         });
+}
+
+void CanvasTextLayout::SetLineSpacingModeInternal(CanvasLineSpacingMode lineSpacingMode)
+{
+    m_lineSpacingMode = lineSpacingMode;
+}
+
+void CanvasTextLayout::SetTrimmingSignInternal(CanvasTrimmingSign trimmingSign)
+{
+    m_trimmingSignInformation.SetTrimmingSignOnResource(trimmingSign, GetResource().Get());
+}
+
+
+void CanvasTextLayout::EnsureCustomTrimmingSignDevice(IDWriteTextLayout2* layout, ICanvasDevice* device)
+{
+    DWRITE_TRIMMING trimming;
+    ComPtr<IDWriteInlineObject> trimmingSign;
+    ThrowIfFailed(layout->GetTrimming(&trimming, &trimmingSign));
+    if (!trimmingSign) return;
+
+    auto internalDWriteInlineObject = MaybeAs<IInternalDWriteInlineObject>(trimmingSign);
+    if (!internalDWriteInlineObject) return;
+
+    internalDWriteInlineObject->SetDevice(device);
 }
 
 ActivatableClassWithFactory(CanvasTextLayout, CanvasTextLayoutFactory);

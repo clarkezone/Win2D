@@ -5,9 +5,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using System.Text.RegularExpressions;
 
 namespace CodeGen
 {
@@ -57,9 +54,8 @@ namespace CodeGen
                     // Check if property represent enum that is common to some group of effects
                     if (property.Type == "enum" && property.EnumFields.IsRepresentative && property.ShouldProject)
                     {
-                        var registeredEffects = effects.Where(EffectGenerator.IsEffectEnabled);
                         // Check if any registred property need this enum
-                        if (registeredEffects.Any(e => e.Properties.Any(p => p.TypeNameIdl == property.TypeNameIdl)))
+                        if (effects.Any(e => e.Properties.Any(p => p.TypeNameIdl == property.TypeNameIdl)))
                         {
                             if (isFirstOutput)
                             {
@@ -76,6 +72,62 @@ namespace CodeGen
             }
             output.Unindent();
             output.WriteLine("}");
+        }
+
+        public static void OutputEffectMakers(List<Effects.Effect> effects, Formatter output)
+        {
+            OutputDataTypes.OutputLeadingComment(output);
+
+            output.WriteLine("#include \"pch.h\"");
+            output.WriteLine();
+
+            var effectsByVersion = from effect in effects
+                                   orderby effect.ClassName
+                                   group effect by (effect.Overrides != null ? effect.Overrides.WinVer : null) into versionGroup
+                                   orderby versionGroup.Key
+                                   select versionGroup;
+
+            foreach (var versionGroup in effectsByVersion)
+            {
+                OutputVersionConditional(versionGroup.Key, output);
+
+                foreach (var effect in versionGroup)
+                {
+                    output.WriteLine("#include \"" + effect.ClassName + ".h\"");
+                }
+
+                EndVersionConditional(versionGroup.Key, output);
+                output.WriteLine();
+            }
+
+            output.WriteLine();
+            output.WriteLine("std::pair<IID, CanvasEffect::MakeEffectFunction> CanvasEffect::m_effectMakers[] =");
+            output.WriteLine("{");
+
+            int longestName = effects.Select(effect => effect.ClassName.Length).Max();
+
+            foreach (var versionGroup in effectsByVersion)
+            {
+                OutputVersionConditional(versionGroup.Key, output);
+                output.Indent();
+
+                foreach (var effect in versionGroup)
+                {
+                    string padding = new string(' ', longestName - effect.ClassName.Length);
+
+                    output.WriteLine("{ " + effect.ClassName + "::EffectId(), " + padding + "MakeEffect<" + effect.ClassName + "> " + padding + "},");
+                }
+
+                output.Unindent();
+                EndVersionConditional(versionGroup.Key, output);
+                output.WriteLine();
+            }
+
+            output.Indent();
+            output.WriteLine("{ GUID_NULL, nullptr }");
+            output.Unindent();
+
+            output.WriteLine("};");
         }
 
         public static void OutputEffectIdl(Effects.Effect effect, Formatter output)
@@ -105,7 +157,7 @@ namespace CodeGen
             output.WriteLine("[version(VERSION), uuid(" + effect.Uuid + "), exclusiveto(" + effect.ClassName + ")]");
             output.WriteLine("interface " + effect.InterfaceName + " : IInspectable");
             output.WriteIndent();
-            output.WriteLine("requires Microsoft.Graphics.Canvas.ICanvasImage");
+            output.WriteLine("requires ICanvasEffect");
             output.WriteLine("{");
             output.Indent();
 
@@ -165,12 +217,41 @@ namespace CodeGen
             output.WriteLine("};");
             output.WriteLine();
 
-            output.WriteLine("[version(VERSION), activatable(VERSION)]");
+            string staticAttribute = "";
+
+            if (HasStatics(effect))
+            {
+                string staticsInterfaceName = effect.InterfaceName + "Statics";
+                string staticsUuid = EffectGenerator.GenerateUuid(staticsInterfaceName);
+
+                staticAttribute = ", static(" + staticsInterfaceName + ", VERSION)";
+
+                output.WriteLine("[version(VERSION), uuid(" + staticsUuid + "), exclusiveto(" + effect.ClassName + ")]");
+                output.WriteLine("interface " + staticsInterfaceName + " : IInspectable");
+                output.WriteLine("{");
+                output.Indent();
+
+                foreach (var customIdl in effect.Overrides.CustomStaticMethodIdl)
+                {
+                    output.WriteLine(customIdl.Trim());
+                }
+
+                if (!string.IsNullOrEmpty(effect.Overrides.IsSupportedCheck))
+                {
+                    output.WriteLine("[propget] HRESULT IsSupported([out, retval] boolean* value);");
+                }
+
+                output.Unindent();
+                output.WriteLine("}");
+                output.WriteLine();
+            }
+            
+            output.WriteLine("[STANDARD_ATTRIBUTES, activatable(VERSION)" + staticAttribute + "]");
+
             output.WriteLine("runtimeclass " + effect.ClassName);
             output.WriteLine("{");
             output.Indent();
             output.WriteLine("[default] interface " + effect.InterfaceName + ";");
-            output.WriteLine("interface IGRAPHICSEFFECT;");
             output.Unindent();
             output.WriteLine("}");
             output.Unindent();
@@ -207,7 +288,9 @@ namespace CodeGen
             output.Unindent();
             output.WriteLine("public:");
             output.Indent();
-            output.WriteLine(effect.ClassName + "();");
+            output.WriteLine(effect.ClassName + "(ICanvasDevice* device = nullptr, ID2D1Effect* effect = nullptr);");
+            output.WriteLine();
+            output.WriteLine("static IID const& EffectId() { return " + GetEffectCLSID(effect) + "; }");
             output.WriteLine();
 
             foreach (var property in effect.Properties)
@@ -251,6 +334,38 @@ namespace CodeGen
 
             output.Unindent();
             output.WriteLine("};");
+
+            if (HasStatics(effect))
+            {
+                output.WriteLine();
+                output.WriteLine("class " + effect.ClassName + "Factory");
+                output.Indent();
+                output.WriteLine(": public AgileActivationFactory<I" + effect.ClassName + "Statics>");
+                output.WriteLine(", private LifespanTracker<" + effect.ClassName + "Factory>");
+                output.Unindent();
+                output.WriteLine("{");
+                output.Indent();
+                output.WriteLine("InspectableClassStatic(RuntimeClass_Microsoft_Graphics_Canvas_Effects_" + effect.ClassName + ", BaseTrust);");
+                output.WriteLine();
+                output.Unindent();
+                output.WriteLine("public:");
+                output.Indent();
+                output.WriteLine("IFACEMETHODIMP ActivateInstance(IInspectable**) override;");
+
+                foreach (var customDecl in effect.Overrides.CustomStaticMethodDecl)
+                {
+                    output.WriteLine(customDecl.Trim());
+                }
+
+                if (!string.IsNullOrEmpty(effect.Overrides.IsSupportedCheck))
+                {
+                    output.WriteLine("IFACEMETHOD(get_IsSupported)(boolean* value) override;");
+                }
+
+                output.Unindent();
+                output.WriteLine("};");
+            }
+            
             output.Unindent();
             output.WriteLine("}}}}}");
 
@@ -273,13 +388,26 @@ namespace CodeGen
             output.WriteLine("namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects");
             output.WriteLine("{");
             output.Indent();
-            output.WriteLine(effect.ClassName + "::" + effect.ClassName + "()");
+            output.WriteLine(effect.ClassName + "::" + effect.ClassName + "(ICanvasDevice* device, ID2D1Effect* effect)");
             output.WriteIndent();
-            output.WriteLine(": CanvasEffect("
-                             + GetEffectCLSID(effect) + ", "
-                             + (effect.Properties.Count(p => !p.IsHandCoded) - 4) + ", "
+            output.WriteLine(": CanvasEffect(EffectId(), "
+                             + (effect.Properties.Count(p => (!p.IsHandCoded && !p.IsHdrAlias)) - 4) + ", "
                              + inputsCount + ", "
-                             + isInputSizeFixed.ToString().ToLower() + ")");
+                             + isInputSizeFixed.ToString().ToLower() + ", "
+                             + "device, effect, static_cast<" + effect.InterfaceName + "*>(this))");
+            output.WriteLine("{");
+            output.Indent();
+
+            if (effect.Overrides != null && !string.IsNullOrEmpty(effect.Overrides.IsSupportedCheck))
+            {
+                output.WriteLine("if (!SharedDeviceState::GetInstance()->Is" + effect.Overrides.IsSupportedCheck + "Supported())");
+                output.Indent();
+                output.WriteLine("ThrowHR(E_NOTIMPL, Strings::NotSupportedOnThisVersionOfWindows);");
+                output.Unindent();
+                output.WriteLine();
+            }
+            
+            output.WriteLine("if (!effect)");
             output.WriteLine("{");
             output.Indent();
             output.WriteLine("// Set default values");
@@ -288,6 +416,8 @@ namespace CodeGen
             {
                 WritePropertyInitialization(output, property);
             }
+            output.Unindent();
+            output.WriteLine("}");
             output.Unindent();
             output.WriteLine("}");
             output.WriteLine();
@@ -317,7 +447,47 @@ namespace CodeGen
 
             WritePropertyMapping(effect, output);
 
-            output.WriteLine("ActivatableClass(" + effect.ClassName + ");");
+            if (HasStatics(effect))
+            {
+                output.WriteLine("IFACEMETHODIMP " + effect.ClassName + "Factory::ActivateInstance(IInspectable** instance)");
+                output.WriteLine("{");
+                output.Indent();
+                output.WriteLine("return ExceptionBoundary([&]");
+                output.WriteLine("{");
+                output.Indent();
+                output.WriteLine("auto effect = Make<" + effect.ClassName + ">();");
+                output.WriteLine("CheckMakeResult(effect);");
+                output.WriteLine();
+                output.WriteLine("ThrowIfFailed(effect.CopyTo(instance));");
+                output.Unindent();
+                output.WriteLine("});");
+                output.Unindent();
+                output.WriteLine("}");
+                output.WriteLine();
+
+                if (!string.IsNullOrEmpty(effect.Overrides.IsSupportedCheck))
+                {
+                    output.WriteLine("IFACEMETHODIMP " + effect.ClassName + "Factory::get_IsSupported(_Out_ boolean* result)");
+                    output.WriteLine("{");
+                    output.Indent();
+                    output.WriteLine("return ExceptionBoundary([&]");
+                    output.WriteLine("{");
+                    output.Indent();
+                    output.WriteLine("CheckInPointer(result);");
+                    output.WriteLine("*result = SharedDeviceState::GetInstance()->Is" + effect.Overrides.IsSupportedCheck + "Supported();");
+                    output.Unindent();
+                    output.WriteLine("});");
+                    output.Unindent();
+                    output.WriteLine("}");
+                    output.WriteLine();
+                }
+
+                output.WriteLine("ActivatableClassWithFactory(" + effect.ClassName + ", " + effect.ClassName + "Factory);");
+            }
+            else
+            {
+                output.WriteLine("ActivatableClassWithFactory(" + effect.ClassName + ", SimpleAgileActivationFactory<" + effect.ClassName + ">);");
+            }
 
             output.Unindent();
             output.WriteLine("}}}}}");
@@ -337,18 +507,32 @@ namespace CodeGen
             }
         }
 
+        private static bool HasStatics(Effects.Effect effect)
+        {
+            if (effect.Overrides == null)
+                return false;
+
+            return effect.Overrides.CustomStaticMethodIdl.Count > 0 ||
+                   effect.Overrides.CustomStaticMethodDecl.Count > 0 ||
+                   !string.IsNullOrEmpty(effect.Overrides.IsSupportedCheck);
+        }
+
         private static void WritePropertyInitialization(Formatter output, Effects.Property property)
         {
             // Property with type string describes 
             // name/author/category/description of effect but not input type
-            if (property.Type == "string" || property.IsHandCoded)
+            if (property.Type == "string" || property.IsHandCoded || property.IsHdrAlias)
                 return;
 
             string defaultValue = property.Properties.Find(internalProperty => internalProperty.Name == "Default").Value;
 
             string setFunction = property.IsArray ? "SetArrayProperty" : "SetBoxedProperty";
 
-            output.WriteLine(setFunction + "<" + property.TypeNameBoxed + ">(" + property.NativePropertyName + ", " + FormatPropertyValue(property, defaultValue) + ");");
+            string customConversion = null;
+            if (property.ConvertColorHdrToVector3)
+                customConversion = "ConvertColorHdrToVector3";
+
+            output.WriteLine(setFunction + "<" + (customConversion?? property.TypeNameBoxed) + ">(" + property.NativePropertyName + ", " + FormatPropertyValue(property, defaultValue) + ");");
         }
 
         private static void WritePropertyImplementation(Effects.Effect effect, Formatter output, Effects.Property property)
@@ -368,6 +552,10 @@ namespace CodeGen
             if (property.ConvertRadiansToDegrees)
             {
                 customConversion = "ConvertRadiansToDegrees";
+            }
+            else if (property.ConvertColorHdrToVector3)
+            {
+                customConversion = "ConvertColorHdrToVector3";
             }
             else if (property.Name == "AlphaMode")
             {
@@ -508,6 +696,10 @@ namespace CodeGen
             {
                 value = "{ " + value + " }";
             }
+            else if (value == "null")
+            {
+                value = "static_cast<" + property.TypeNameCpp + ">(nullptr)";
+            }
 
             return value;
         }
@@ -545,7 +737,7 @@ namespace CodeGen
 
         static string FloatToString(float value)
         {
-            if(float.IsInfinity(value))
+            if (float.IsInfinity(value))
             {
                 return (value < 0 ? "-" : "") + stdInfinity;
             }
@@ -637,6 +829,11 @@ namespace CodeGen
             else if (property.TypeNameCpp == "Color")
             {
                 return "GRAPHICS_EFFECT_PROPERTY_MAPPING_COLOR_TO_VECTOR" + property.Type.Single(char.IsDigit);
+            }
+            else if (property.IsHdrAlias)
+            {
+                // The platform doesn't natively support HDR colors, so we set the mapping type to unknown.
+                return "GRAPHICS_EFFECT_PROPERTY_MAPPING_UNKNOWN";
             }
             else if (property.TypeNameCpp == "Rect")
             {

@@ -45,8 +45,21 @@ namespace ExampleGallery
         {
             Draw(args.DrawingSession, "Canvas\nAnimated\nControl", sender.Size);
         }
-        
-        
+
+
+        // Draw to the CanvasVirtualControl
+        void virtualControl_RegionsInvalidated(CanvasVirtualControl sender, CanvasRegionsInvalidatedEventArgs args)
+        {
+            foreach (var region in args.InvalidatedRegions)
+            {
+                using (var ds = sender.CreateDrawingSession(region))
+                {
+                    Draw(ds, "Canvas\nVirtual\nControl", sender.Size);
+                }
+            }
+        }
+
+
         // Draw to the CanvasImageSource.
         void DrawToImageSource(Size size)
         {
@@ -83,7 +96,7 @@ namespace ExampleGallery
             }
             else
             {
-                swapChain.ResizeBuffers(size);
+                swapChain.ResizeBuffers((float)size.Width, (float)size.Height, canvasControl.Dpi);
             }
 
             using (var ds = swapChain.CreateDrawingSession(Colors.Transparent))
@@ -149,6 +162,12 @@ namespace ExampleGallery
         }
 
 
+        private void virtualControl_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            virtualControl.Invalidate();
+        }
+
+
         void AnimateTransform_Click(object sender, RoutedEventArgs e)
         {
             sizeAnimation.Stop();
@@ -181,6 +200,9 @@ namespace ExampleGallery
 
             swapChainPanel.RemoveFromVisualTree();
             swapChainPanel = null;
+
+            virtualControl.RemoveFromVisualTree();
+            virtualControl = null;
         }
     }
 }

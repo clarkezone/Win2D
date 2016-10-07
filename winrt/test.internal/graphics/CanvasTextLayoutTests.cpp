@@ -7,19 +7,24 @@
 #include <lib/brushes/CanvasSolidColorBrush.h>
 #include <lib/brushes/CanvasLinearGradientBrush.h>
 #include <lib/text/CanvasTextLayout.h>
+#include <lib/text/CanvasTypography.h>
 
-#include "mocks/MockDWriteFactory.h"
-#include "mocks/MockDWriteFontCollection.h"
-#include "mocks/MockDWriteTextLayout.h"
 #include "stubs/StubCanvasBrush.h"
-#include "stubs/StubCanvasTextFormatAdapter.h"
 #include "stubs/StubCanvasTextLayoutAdapter.h"
-#include "stubs/TestBitmapResourceCreationAdapter.h"
 #include "stubs/TestEffect.h"
+#include "stubs/CustomInlineObject.h"
+
+#include "mocks/MockDWriteTextRenderer.h"
+#include "mocks/MockDWriteTypography.h"
+#include "mocks/MockDWriteTextAnalyzer.h"
+
+#include "utils/TextHelpers.h"
 
 namespace canvas
 {
     using namespace ABI::Windows::UI::Text;
+
+    static const CanvasTrimmingSign sc_trimmingSigns[] = { CanvasTrimmingSign::None, CanvasTrimmingSign::Ellipsis };
 
     TEST_CLASS(CanvasTextLayoutTests)
     {
@@ -28,34 +33,27 @@ namespace canvas
         struct Fixture
         {
             ComPtr<ICanvasTextFormat> Format;
-            std::shared_ptr<CanvasTextLayoutManager> LayoutManager;
             std::shared_ptr<StubCanvasTextLayoutAdapter> Adapter;
             ComPtr<MockD2DDeviceContext> DeviceContext;
             ComPtr<StubCanvasDevice> Device;
             std::vector<ComPtr<MockD2DEffectThatCountsCalls>> MockEffects;
+            ComPtr<CanvasTypographyFactory> TypographyFactory;
 
             Fixture()
                 : Adapter(std::make_shared<StubCanvasTextLayoutAdapter>())
                 , Device(Make<StubCanvasDevice>())
                 , DeviceContext(Make<MockD2DDeviceContext>())
             {
-                auto formatAdapter = std::make_shared<StubCanvasTextFormatAdapter>();
-                auto formatManager = std::make_shared<CanvasTextFormatManager>(formatAdapter);
+                CustomFontManagerAdapter::SetInstance(Adapter);
 
-                Format = formatManager->Create();
+                Format = Make<CanvasTextFormat>();
 
-                LayoutManager = std::make_shared<CanvasTextLayoutManager>(Adapter);
-
-                Device->CreateDeviceContextMethod.AllowAnyCall(
-                    [=]
-                    {
-                        return DeviceContext;
-                    });
+                TypographyFactory = Make<CanvasTypographyFactory>();
 
                 Device->GetResourceCreationDeviceContextMethod.AllowAnyCall(
                     [=]
                     {
-                        return DeviceContext; 
+                        return DeviceContextLease(DeviceContext);
                     });
 
                 Device->MockCreateBitmapBrush =
@@ -64,10 +62,10 @@ namespace canvas
                         auto bitmapBrush = Make<MockD2DBitmapBrush>();
                         bitmapBrush->MockGetBitmap = [&](ID2D1Bitmap** bitmap){  *bitmap = nullptr; };
                         bitmapBrush->MockSetBitmap = [&](ID2D1Bitmap* bitmap){};
-                        bitmapBrush->MockGetExtendModeX = [&]() { return D2D1_EXTEND_MODE_MIRROR; };
-                        bitmapBrush->MockGetExtendModeY = [&]() { return D2D1_EXTEND_MODE_WRAP; };
-                        bitmapBrush->MockGetInterpolationMode1 = [&]() { return D2D1_INTERPOLATION_MODE_ANISOTROPIC; };
-                        bitmapBrush->MockGetOpacity = [&]() { return 0.1f; };
+                        bitmapBrush->MockGetExtendModeX = [&] { return D2D1_EXTEND_MODE_MIRROR; };
+                        bitmapBrush->MockGetExtendModeY = [&] { return D2D1_EXTEND_MODE_WRAP; };
+                        bitmapBrush->MockGetInterpolationMode1 = [&] { return D2D1_INTERPOLATION_MODE_ANISOTROPIC; };
+                        bitmapBrush->MockGetOpacity = [&] { return 0.1f; };
                         bitmapBrush->MockGetTransform = [&](D2D1_MATRIX_3X2_F* transform) { *transform = D2D1_MATRIX_3X2_F{}; };
                         bitmapBrush->MockSetExtendModeX = [&](D2D1_EXTEND_MODE extend) {};
                         bitmapBrush->MockSetExtendModeY = [&](D2D1_EXTEND_MODE extend) {};
@@ -78,15 +76,16 @@ namespace canvas
                     };
 
                 Device->MockCreateImageBrush =
-                    [&](ID2D1Image*)
+                    [&](ID2D1Image* initialImage)
                     {
                         auto imageBrush = Make<MockD2DImageBrush>();
-                        imageBrush->MockGetImage = [&](ID2D1Image** image) {*image = nullptr;  };
-                        imageBrush->MockSetImage = [&](ID2D1Image* image) {};
-                        imageBrush->MockGetExtendModeX = [&]() { return D2D1_EXTEND_MODE_MIRROR; };
-                        imageBrush->MockGetExtendModeY = [&]() { return D2D1_EXTEND_MODE_WRAP; };
-                        imageBrush->MockGetInterpolationMode = [&]() { return D2D1_INTERPOLATION_MODE_ANISOTROPIC; };
-                        imageBrush->MockGetOpacity = [&]() { return 0.1f; };
+                        auto currentImage = std::make_shared<ComPtr<ID2D1Image>>(initialImage);
+                        imageBrush->MockGetImage = [currentImage](ID2D1Image** image) { currentImage->CopyTo(image); };
+                        imageBrush->MockSetImage = [currentImage](ID2D1Image* image) { *currentImage = image; };
+                        imageBrush->MockGetExtendModeX = [&] { return D2D1_EXTEND_MODE_MIRROR; };
+                        imageBrush->MockGetExtendModeY = [&] { return D2D1_EXTEND_MODE_WRAP; };
+                        imageBrush->MockGetInterpolationMode = [&] { return D2D1_INTERPOLATION_MODE_ANISOTROPIC; };
+                        imageBrush->MockGetOpacity = [&] { return 0.1f; };
                         imageBrush->MockGetTransform = [&](D2D1_MATRIX_3X2_F* transform) { *transform = D2D1_MATRIX_3X2_F{}; };
                         imageBrush->MockGetSourceRectangle = [&](D2D1_RECT_F* rect) { *rect = D2D1::RectF(0, 0, 10, 10); };
                         imageBrush->MockSetExtendModeX = [&](D2D1_EXTEND_MODE extend) {};
@@ -98,26 +97,6 @@ namespace canvas
                         return imageBrush;
                     };                
 
-                    Device->MockGetD2DImage =
-                        [&](ICanvasImage* canvasImage) -> ComPtr<ID2D1Image>
-                        {
-                            ComPtr<IGraphicsEffect> effect;
-                            ComPtr<ICanvasBitmap> bitmap;
-                            if (SUCCEEDED(canvasImage->QueryInterface(IID_PPV_ARGS(&effect))))
-                            {
-                                return Make<MockD2DEffect>();
-                            }
-                            else if (SUCCEEDED(canvasImage->QueryInterface(IID_PPV_ARGS(&bitmap))))
-                            {
-                                return Make<MockD2DBitmap>();
-                            }
-                            else
-                            {
-                                Assert::Fail(); // command list: notimpl
-                                return nullptr;
-                            }
-                        };
-                
                 DeviceContext->CreateEffectMethod.AllowAnyCall(
                     [=](IID const& effectId, ID2D1Effect** effect)
                     {
@@ -133,11 +112,27 @@ namespace canvas
                         *dpiX = DEFAULT_DPI;
                         *dpiY = DEFAULT_DPI;
                     });
+
+                Adapter->GetMockDWriteFactory()->CreateTypographyMethod.AllowAnyCall(
+                    [](IDWriteTypography** typography)
+                    {
+                        auto mockTypography = Make<MockDWriteTypography>();
+
+                        return mockTypography.CopyTo(typography);
+                    });
             }
 
             ComPtr<CanvasTextLayout> CreateSimpleTextLayout()
             {
-                return LayoutManager->Create(Device.Get(), WinString(L"A string"), Format.Get(), 0.0f, 0.0f);
+                return CanvasTextLayout::CreateNew(Device.Get(), WinString(L"A string"), Format.Get(), 0.0f, 0.0f);
+            }
+
+            ComPtr<ICanvasTypography> CreateTypography()
+            {
+                ComPtr<IInspectable> inspectable;
+                ThrowIfFailed(TypographyFactory->ActivateInstance(&inspectable));
+
+                return As<ICanvasTypography>(inspectable);
             }
         };
 
@@ -184,6 +179,12 @@ namespace canvas
             CanvasTextLayoutRegion* hitTestDescArr{};
             ComPtr<ICanvasBrush> canvasBrush;
             ComPtr<ICanvasDevice> canvasDevice;
+            CanvasTrimmingSign ts;
+            ComPtr<ICanvasTextInlineObject> inlineObj;
+            CanvasLineMetrics* lm{};
+            CanvasClusterMetrics* cm{};
+            ComPtr<IInspectable> customBrush;
+            ComPtr<ICanvasTypography> typography;
 
             Assert::AreEqual(RO_E_CLOSED, textLayout->GetFormatChangeIndices(&u, &arr));
 
@@ -278,6 +279,9 @@ namespace canvas
             Assert::AreEqual(RO_E_CLOSED, textLayout->get_LastLineWrapping(&b));
             Assert::AreEqual(RO_E_CLOSED, textLayout->put_LastLineWrapping(b));
 
+            Assert::AreEqual(RO_E_CLOSED, textLayout->get_TrimmingSign(&ts));
+            Assert::AreEqual(RO_E_CLOSED, textLayout->put_TrimmingSign(ts));
+
             Assert::AreEqual(RO_E_CLOSED, textLayout->get_LayoutBounds(&rect));
             Assert::AreEqual(RO_E_CLOSED, textLayout->get_LineCount(&i));
             Assert::AreEqual(RO_E_CLOSED, textLayout->get_DrawBounds(&rect));
@@ -294,6 +298,28 @@ namespace canvas
             Assert::AreEqual(RO_E_CLOSED, textLayout->SetColor(0, 0, Color{}));
 
             Assert::AreEqual(RO_E_CLOSED, textLayout->get_Device(&canvasDevice));
+
+            Assert::AreEqual(RO_E_CLOSED, textLayout->DrawToTextRenderer(reinterpret_cast<ICanvasTextRenderer*>(0x12345678), Vector2{ 0, 0 }));
+            Assert::AreEqual(RO_E_CLOSED, textLayout->DrawToTextRendererWithCoords(reinterpret_cast<ICanvasTextRenderer*>(0x12345678), 0, 0));
+
+            Assert::AreEqual(RO_E_CLOSED, textLayout->get_CustomTrimmingSign(&inlineObj));
+            Assert::AreEqual(RO_E_CLOSED, textLayout->put_CustomTrimmingSign(inlineObj.Get()));
+
+            Assert::AreEqual(RO_E_CLOSED, textLayout->GetInlineObject(0, &inlineObj));
+            Assert::AreEqual(RO_E_CLOSED, textLayout->SetInlineObject(0, 0, inlineObj.Get()));
+
+            Assert::AreEqual(RO_E_CLOSED, textLayout->get_LineMetrics(&u, &lm));
+
+            Assert::AreEqual(RO_E_CLOSED, textLayout->get_ClusterMetrics(&u, &cm));
+
+            Assert::AreEqual(RO_E_CLOSED, textLayout->GetCustomBrush(0, &customBrush));
+            Assert::AreEqual(RO_E_CLOSED, textLayout->SetCustomBrush(0, 0, nullptr));
+
+            Assert::AreEqual(RO_E_CLOSED, textLayout->get_LayoutBoundsIncludingTrailingWhitespace(&rect));
+            Assert::AreEqual(RO_E_CLOSED, textLayout->get_MaximumBidiReorderingDepth(&i));
+
+            Assert::AreEqual(RO_E_CLOSED, textLayout->GetTypography(0, &typography));
+            Assert::AreEqual(RO_E_CLOSED, textLayout->SetTypography(0, 0, nullptr));
         }
 
         TEST_METHOD_EX(CanvasTextLayoutTests_NullArgs)
@@ -306,6 +332,9 @@ namespace canvas
             CanvasTextLayoutRegion hitTestDesc{};
             CanvasTextLayoutRegion* hitTestDescArr{};
             boolean b{};
+            CanvasLineMetrics* lm{};
+            CanvasClusterMetrics* cm{};
+            uint32_t u{};
             Assert::AreEqual(E_INVALIDARG, textLayout->GetFormatChangeIndices(nullptr, &arr));
             Assert::AreEqual(E_INVALIDARG, textLayout->get_Direction(nullptr));
             Assert::AreEqual(E_INVALIDARG, textLayout->get_DefaultFontFamily(nullptr));
@@ -352,6 +381,17 @@ namespace canvas
             Assert::AreEqual(E_INVALIDARG, textLayout->GetCharacterRegions(0, 0, nullptr, &hitTestDescArr));
             Assert::AreEqual(E_INVALIDARG, textLayout->GetBrush(0, nullptr));
             Assert::AreEqual(E_INVALIDARG, textLayout->get_Device(nullptr));
+            Assert::AreEqual(E_INVALIDARG, textLayout->get_TrimmingSign(nullptr));
+            Assert::AreEqual(E_INVALIDARG, textLayout->get_CustomTrimmingSign(nullptr));
+            Assert::AreEqual(E_INVALIDARG, textLayout->get_LineMetrics(nullptr, &lm));
+            Assert::AreEqual(E_INVALIDARG, textLayout->get_LineMetrics(&u, nullptr));
+            Assert::AreEqual(E_INVALIDARG, textLayout->get_ClusterMetrics(nullptr, &cm));
+            Assert::AreEqual(E_INVALIDARG, textLayout->get_ClusterMetrics(&u, nullptr));
+            Assert::AreEqual(E_INVALIDARG, textLayout->GetCustomBrush(0, nullptr));
+            Assert::AreEqual(E_INVALIDARG, textLayout->get_LayoutBoundsIncludingTrailingWhitespace(nullptr));
+            Assert::AreEqual(E_INVALIDARG, textLayout->get_MaximumBidiReorderingDepth(nullptr));
+            Assert::AreEqual(E_INVALIDARG, textLayout->GetInlineObject(0, nullptr));
+            Assert::AreEqual(E_INVALIDARG, textLayout->GetTypography(0, nullptr));
         }
 
         TEST_METHOD_EX(CanvasTextLayoutTests_NegativeIntegralArgs)
@@ -371,6 +411,8 @@ namespace canvas
             Vector2 pt{};
             CanvasTextLayoutRegion* hitTestDescArr{};
             uint32_t u{};
+            ComPtr<ICanvasTextInlineObject> inlineObj;
+            ComPtr<ICanvasTypography> typography;
 
             Assert::AreEqual(E_INVALIDARG, textLayout->put_TrimmingDelimiterCount(-1));
 
@@ -427,6 +469,14 @@ namespace canvas
             Assert::AreEqual(E_INVALIDARG, textLayout->SetBrush(0, -1, stubBrush.Get()));
             Assert::AreEqual(E_INVALIDARG, textLayout->SetColor(-1, 0, Color{}));
             Assert::AreEqual(E_INVALIDARG, textLayout->SetColor(0, -1, Color{}));
+
+            Assert::AreEqual(E_INVALIDARG, textLayout->GetInlineObject(-1, &inlineObj));
+            Assert::AreEqual(E_INVALIDARG, textLayout->SetInlineObject(-1, 0, inlineObj.Get()));
+            Assert::AreEqual(E_INVALIDARG, textLayout->SetInlineObject(0, -1, inlineObj.Get()));
+
+            Assert::AreEqual(E_INVALIDARG, textLayout->GetTypography(-1, &typography));
+            Assert::AreEqual(E_INVALIDARG, textLayout->SetTypography(-1, 0, typography.Get()));
+            Assert::AreEqual(E_INVALIDARG, textLayout->SetTypography(0, -1, typography.Get()));
         }
 
         //
@@ -483,10 +533,10 @@ namespace canvas
             auto textLayout = f.CreateSimpleTextLayout();               \
                                                                         \
             f.Adapter->MockTextLayout->##mockName##.SetExpectedCalls(1, \
-                [&]()                                                   \
-            {                                                           \
-                return dwriteValue;                                     \
-            });                                                         \
+                [&]                                                     \
+                {                                                       \
+                    return dwriteValue;                                 \
+                });                                                     \
                                                                         \
             decltype(canvasValue) value;                                \
             Assert::AreEqual(S_OK, textLayout->get_##name##(&value));   \
@@ -678,6 +728,82 @@ namespace canvas
             Assert::AreEqual(456.0f, fl);
         }
 
+#if WINVER > _WIN32_WINNT_WINBLUE
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_LineSpacingMode)
+        {
+            struct TestCase
+            {
+                CanvasLineSpacingMode OriginalLineSpacingMode;
+                float OriginalLineSpacing;
+
+                DWRITE_LINE_SPACING_METHOD UnwrappedLineSpacingMethod;
+                float UnwrappedLineSpacing;
+
+                CanvasLineSpacingMode WrappedLineSpacingMode;
+                float WrappedLineSpacing;
+            } testCases[]
+            {
+                { CanvasLineSpacingMode::Default, 5.0f, DWRITE_LINE_SPACING_METHOD_UNIFORM, 5.0f, CanvasLineSpacingMode::Default, 5.0f },
+                { CanvasLineSpacingMode::Default, -1.0f, DWRITE_LINE_SPACING_METHOD_DEFAULT, 1.0f, CanvasLineSpacingMode::Default, -1.0f },
+
+                { CanvasLineSpacingMode::Uniform, 5.0f, DWRITE_LINE_SPACING_METHOD_UNIFORM, 5.0f, CanvasLineSpacingMode::Default, 5.0f },
+                { CanvasLineSpacingMode::Uniform, -11.0f, DWRITE_LINE_SPACING_METHOD_UNIFORM, 11.0f, CanvasLineSpacingMode::Default, 11.0f },
+
+                { CanvasLineSpacingMode::Proportional, 5.0f, DWRITE_LINE_SPACING_METHOD_PROPORTIONAL, 5.0f, CanvasLineSpacingMode::Proportional, 5.0f },
+                { CanvasLineSpacingMode::Proportional, -22.0f, DWRITE_LINE_SPACING_METHOD_PROPORTIONAL, 22.0f, CanvasLineSpacingMode::Proportional, 22.0f }
+            };
+
+            for (auto testCase : testCases)
+            {
+                Fixture f;
+                auto textLayout = f.CreateSimpleTextLayout();
+
+                textLayout->put_LineSpacingMode(testCase.OriginalLineSpacingMode);
+                textLayout->put_LineSpacing(testCase.OriginalLineSpacing);
+
+                auto dtl = GetWrappedResource<DWriteTextLayoutType>(textLayout);
+
+                // Make sure the resulting DWrite text layout has the correct properties.
+                DWRITE_LINE_SPACING_METHOD dwriteMethod;
+                float dwriteSpacing, unusedBaseline;
+                ThrowIfFailed(static_cast<IDWriteTextLayout2*>(dtl.Get())->GetLineSpacing(&dwriteMethod, &dwriteSpacing, &unusedBaseline));
+                Assert::AreEqual(testCase.UnwrappedLineSpacing, dwriteSpacing);
+                Assert::AreEqual(testCase.UnwrappedLineSpacingMethod, dwriteMethod);
+
+                textLayout.Reset();
+
+                textLayout = Make<CanvasTextLayout>(f.Device.Get(), dtl.Get());
+
+                float wrappedSpacingValue;
+                ThrowIfFailed(textLayout->get_LineSpacing(&wrappedSpacingValue));
+                Assert::AreEqual(testCase.WrappedLineSpacing, wrappedSpacingValue);
+
+                CanvasLineSpacingMode wrappedSpacingMode;
+                ThrowIfFailed(textLayout->get_LineSpacingMode(&wrappedSpacingMode));
+                Assert::AreEqual(testCase.WrappedLineSpacingMode, wrappedSpacingMode);
+            }
+        }
+
+        TEST_METHOD_EX(CanvasTextLayout_LineSpacingMode_RealizationDoesntClobberUniform)
+        {
+            Fixture f;
+            auto ctl = f.CreateSimpleTextLayout();
+
+            ThrowIfFailed(ctl->put_LineSpacing(5.0f));
+            ThrowIfFailed(ctl->put_LineSpacingMode(CanvasLineSpacingMode::Uniform));
+
+            // Force realization
+            auto dtl = GetWrappedResource<IDWriteTextLayout2>(ctl);
+
+            // Ensure still Uniform
+            CanvasLineSpacingMode spacingMode;
+            ThrowIfFailed(ctl->get_LineSpacingMode(&spacingMode));
+            Assert::AreEqual(CanvasLineSpacingMode::Uniform, spacingMode);
+        }
+
+#endif
+
         template<class SET_LINE_SPACING_METHOD>
         void InitializeSetLineSpacingMethod(SET_LINE_SPACING_METHOD& setLineSpacingMethod, DWRITE_LINE_SPACING_METHOD method, FLOAT spacing, FLOAT baseline)
         {
@@ -842,8 +968,8 @@ namespace canvas
 
             auto textLayout = f.CreateSimpleTextLayout();
             
-            f.Adapter->MockTextLayout->GetMaxWidthMethod.SetExpectedCalls(1, [&]() { return 123.0f; });
-            f.Adapter->MockTextLayout->GetMaxHeightMethod.SetExpectedCalls(1, [&]() { return 456.0f; });
+            f.Adapter->MockTextLayout->GetMaxWidthMethod.SetExpectedCalls(1, [&] { return 123.0f; });
+            f.Adapter->MockTextLayout->GetMaxHeightMethod.SetExpectedCalls(1, [&] { return 456.0f; });
 
             Size size;
             Assert::AreEqual(S_OK, textLayout->get_RequestedSize(&size));
@@ -871,10 +997,10 @@ namespace canvas
 
             f.Adapter->MockTextLayout->DetermineMinWidthMethod.SetExpectedCalls(1,
                 [&](FLOAT* out)
-            {
-                *out = 123.0f;
-                return S_OK;
-            });
+                {
+                    *out = 123.0f;
+                    return S_OK;
+                });
 
             float value;
             Assert::AreEqual(S_OK, textLayout->GetMinimumLineLength(&value));
@@ -1207,10 +1333,10 @@ namespace canvas
             Fixture f;
 
             f.Adapter->MockTextLayout->GetMaxWidthMethod.SetExpectedCalls(1,
-                [&](){ return 10.0f;  });
+                [&] { return 10.0f;  });
 
             f.Adapter->MockTextLayout->GetMaxHeightMethod.SetExpectedCalls(1,
-                [&](){ return 20.0f;  });
+                [&] { return 20.0f;  });
 
             f.Adapter->MockTextLayout->GetOverhangMetricsMethod.SetExpectedCalls(1,
                 [&](DWRITE_OVERHANG_METRICS* out)
@@ -1244,14 +1370,14 @@ namespace canvas
 
                 f.Adapter->MockTextLayout->HitTestPointMethod.SetExpectedCalls(1,
                     [&](FLOAT x, FLOAT y, BOOL* isTrailingHit, BOOL* isInside, DWRITE_HIT_TEST_METRICS* hitTestMetrics)
-                {
-                    Assert::AreEqual(1.0f, x);
-                    Assert::AreEqual(2.0f, y);
-                    *isTrailingHit = FALSE;
-                    *isInside = TRUE;
-                    *hitTestMetrics = DWRITE_HIT_TEST_METRICS{};
-                    return S_OK;
-                });
+                    {
+                        Assert::AreEqual(1.0f, x);
+                        Assert::AreEqual(2.0f, y);
+                        *isTrailingHit = FALSE;
+                        *isInside = TRUE;
+                        *hitTestMetrics = DWRITE_HIT_TEST_METRICS{};
+                        return S_OK;
+                    });
 
                 auto textLayout = f.CreateSimpleTextLayout();
 
@@ -1367,7 +1493,7 @@ namespace canvas
                         Assert::IsTrue(!!isTrailingHit);
                         *pointX = 2.0f;
                         *pointY = 3.0f;
-                        if(i==1)
+                        if (i==1)
                             WriteHitTestDescription(hitTestMetrics);
                         return S_OK;
                     });
@@ -1604,7 +1730,7 @@ namespace canvas
         {
             Fixture f;
 
-            auto testBitmap = CreateStubCanvasBitmap(dpi);
+            auto testBitmap = CreateStubCanvasBitmap(dpi, f.Device.Get());
             auto testEffect = Make<TestEffect>(CLSID_D2D1GaussianBlur, 0, 1, true);
             ThrowIfFailed(testEffect->put_Source(testBitmap.Get()));
 
@@ -1625,6 +1751,1136 @@ namespace canvas
             Assert::AreEqual<size_t>(2, f.MockEffects.size());
             CheckEffectTypeAndInput(f.MockEffects[0].Get(), CLSID_D2D1GaussianBlur, f.MockEffects[1].Get());
             CheckEffectTypeAndInput(f.MockEffects[1].Get(), CLSID_D2D1DpiCompensation, testBitmap.Get(), f.DeviceContext.Get(), dpi);
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_TrimmingSign_DefaultIsNone)
+        {
+            Fixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            CanvasTrimmingSign sign;
+            ThrowIfFailed(textLayout->get_TrimmingSign(&sign));
+
+            Assert::AreEqual(CanvasTrimmingSign::None, sign);
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_TrimmingSign_Property)
+        {
+            Fixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            ThrowIfFailed(textLayout->put_TrimmingSign(CanvasTrimmingSign::Ellipsis));
+
+            CanvasTrimmingSign sign;
+            ThrowIfFailed(textLayout->get_TrimmingSign(&sign));
+            Assert::AreEqual(CanvasTrimmingSign::Ellipsis, sign);
+
+            ThrowIfFailed(textLayout->put_TrimmingSign(CanvasTrimmingSign::None));
+            ThrowIfFailed(textLayout->get_TrimmingSign(&sign));
+            Assert::AreEqual(CanvasTrimmingSign::None, sign);
+        }
+
+        bool HasTrimmingSign(ComPtr<IDWriteTextLayout> const& dtl)
+        {
+            DWRITE_TRIMMING trimming;
+            ComPtr<IDWriteInlineObject> trimmingSign;
+            ThrowIfFailed(dtl->GetTrimming(&trimming, &trimmingSign));
+
+            return trimmingSign;
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_TrimmingSign_AffectsWrappedResource)
+        {
+            Fixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            ThrowIfFailed(textLayout->put_TrimmingSign(CanvasTrimmingSign::Ellipsis));
+            auto dtl1 = GetWrappedResource<IDWriteTextLayout2>(textLayout);
+            Assert::IsTrue(HasTrimmingSign(dtl1));
+
+            ThrowIfFailed(textLayout->put_TrimmingSign(CanvasTrimmingSign::None));
+            auto dtl2 = GetWrappedResource<IDWriteTextLayout2>(textLayout);
+            Assert::IsFalse(HasTrimmingSign(dtl2));
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_TrimmingSign_InteroppedCustomTrimmingSign_ResetsPropertyToNone)
+        {
+            for (auto sign : sc_trimmingSigns)
+            {
+                Fixture f;
+                auto textLayout = f.CreateSimpleTextLayout();
+
+                ThrowIfFailed(textLayout->put_TrimmingSign(sign));
+
+                auto dtl = GetWrappedResource<IDWriteTextLayout2>(textLayout);
+                DWRITE_TRIMMING trimming{};
+
+                auto factory = f.Adapter->CreateDWriteFactory(DWRITE_FACTORY_TYPE_SHARED);
+                ComPtr<IDWriteInlineObject> customTrimmingSign;
+                ThrowIfFailed(factory->CreateEllipsisTrimmingSign(dtl.Get(), &customTrimmingSign));
+                dtl->SetTrimming(&trimming, customTrimmingSign.Get());
+
+                CanvasTrimmingSign actual;
+                ThrowIfFailed(textLayout->get_TrimmingSign(&actual));
+                Assert::AreEqual(CanvasTrimmingSign::None, actual);
+            }
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_TrimmingSign_InheritedFromFormat)
+        {
+            for (auto sign : sc_trimmingSigns)
+            {
+                Fixture f;
+
+                auto textFormat = Make<CanvasTextFormat>();
+                ThrowIfFailed(textFormat->put_TrimmingSign(sign));
+
+                auto textLayout = CanvasTextLayout::CreateNew(f.Device.Get(), WinString(L"A string"), textFormat.Get(), 0.0f, 0.0f);
+
+                CanvasTrimmingSign actual;
+                ThrowIfFailed(textLayout->get_TrimmingSign(&actual));
+                Assert::AreEqual(sign, actual);
+            }
+        }
+
+
+        class TrimmingSignFixture : public Fixture
+        {
+            DWRITE_TRIMMING m_trimming;
+            ComPtr<IDWriteInlineObject> m_trimmingSign;
+
+        public:
+            TrimmingSignFixture()
+            {
+                Adapter->MockTextLayout->SetReadingDirectionMethod.AllowAnyCall();
+                Adapter->MockTextLayout->SetFlowDirectionMethod.AllowAnyCall();
+                Adapter->MockTextLayout->SetTextAlignmentMethod.AllowAnyCall();
+                Adapter->MockTextLayout->SetIncrementalTabStopMethod.AllowAnyCall();
+                Adapter->MockTextLayout->SetLastLineWrappingMethod.AllowAnyCall();
+                Adapter->MockTextLayout->SetLineSpacingMethod.AllowAnyCall();
+                Adapter->MockTextLayout->SetOpticalAlignmentMethod.AllowAnyCall();
+                Adapter->MockTextLayout->SetTrimmingMethod.AllowAnyCall(
+                    [=](DWRITE_TRIMMING const* trimming, IDWriteInlineObject* sign)
+                    {
+                        m_trimming = *trimming;
+                        m_trimmingSign = sign;
+                        return S_OK;
+                    });
+
+                Adapter->MockTextLayout->GetTrimmingMethod.AllowAnyCall(
+                    [=](DWRITE_TRIMMING* trimming, IDWriteInlineObject** sign)
+                    {
+                        *trimming = m_trimming;
+                        m_trimmingSign.CopyTo(sign);
+                        return S_OK;
+                    });
+
+                Adapter->MockTextLayout->SetParagraphAlignmentMethod.AllowAnyCall();
+                Adapter->MockTextLayout->SetVerticalGlyphOrientationMethod.AllowAnyCall();
+                Adapter->MockTextLayout->SetWordWrappingMethod.AllowAnyCall();
+            }
+        };
+
+        ComPtr<IDWriteInlineObject> GetTrimmingSign(ComPtr<IDWriteTextLayout> const& textLayout)
+        {
+            DWRITE_TRIMMING unused;
+
+            ComPtr<IDWriteInlineObject> trimmingSign;
+            ThrowIfFailed(textLayout->GetTrimming(&unused, &trimmingSign));
+
+            return trimmingSign;
+        }
+
+        template<typename SetterType>
+        void CanvasTextLayout_TrimmingSign_SurvivesModifyingTextLayoutState_TestCase(
+            HRESULT (__stdcall CanvasTextLayout::*setFn)(SetterType value),
+            SetterType setTo,
+            bool setterRequiresRecreatingEllipsisTrimmingSign = true)
+        {
+            for (auto expected : sc_trimmingSigns)
+            {
+                TrimmingSignFixture f;
+                auto textLayout = f.CreateSimpleTextLayout();
+
+                ThrowIfFailed(textLayout->put_TrimmingSign(expected));
+                auto sign1 = GetTrimmingSign(textLayout->GetResource());
+
+                ((*textLayout.Get()).*setFn)(setTo);
+
+                CanvasTrimmingSign actual;
+                ThrowIfFailed(textLayout->get_TrimmingSign(&actual));
+                auto sign2 = GetTrimmingSign(textLayout->GetResource());
+
+                Assert::AreEqual(expected, actual);
+
+                //
+                // For ellipsis, the trimming sign object should still exist,
+                // but has been changed.
+                // It isn't enough to just check whether we created a new
+                // text layout. There's cases where we need
+                // to create a new trimming sign object, even when the
+                // underlying text Layout resource stays the same.
+                //
+                if (expected == CanvasTrimmingSign::Ellipsis)
+                {
+                    Assert::IsNotNull(sign1.Get());
+                    Assert::IsNotNull(sign2.Get());
+                    if (setterRequiresRecreatingEllipsisTrimmingSign)
+                    {
+                        Assert::AreNotEqual(sign1.Get(), sign2.Get());
+                    }
+                    else
+                    {
+                        Assert::AreEqual(sign1.Get(), sign2.Get());
+                    }
+                }
+            }
+        }
+
+        TEST_METHOD_EX(CanvasTextLayout_TrimmingSign_SurvivesModifyingTextLayoutState)
+        {
+            CanvasTextLayout_TrimmingSign_SurvivesModifyingTextLayoutState_TestCase(
+                &CanvasTextLayout::put_Direction,
+                CanvasTextDirection::RightToLeftThenBottomToTop);
+
+            CanvasTextLayout_TrimmingSign_SurvivesModifyingTextLayoutState_TestCase(
+                &CanvasTextLayout::put_HorizontalAlignment,
+                CanvasHorizontalAlignment::Center);
+
+            CanvasTextLayout_TrimmingSign_SurvivesModifyingTextLayoutState_TestCase(
+                &CanvasTextLayout::put_IncrementalTabStop,
+                3.9f);
+
+            CanvasTextLayout_TrimmingSign_SurvivesModifyingTextLayoutState_TestCase(
+                &CanvasTextLayout::put_LastLineWrapping,
+                static_cast<boolean>(false));
+
+            CanvasTextLayout_TrimmingSign_SurvivesModifyingTextLayoutState_TestCase(
+                &CanvasTextLayout::put_LineSpacing,
+                201.0f);
+
+            CanvasTextLayout_TrimmingSign_SurvivesModifyingTextLayoutState_TestCase(
+                &CanvasTextLayout::put_LineSpacingBaseline,
+                202.0f);
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+            CanvasTextLayout_TrimmingSign_SurvivesModifyingTextLayoutState_TestCase(
+                &CanvasTextLayout::put_LineSpacingMode,
+                CanvasLineSpacingMode::Proportional);
+#endif
+
+            CanvasTextLayout_TrimmingSign_SurvivesModifyingTextLayoutState_TestCase(
+                &CanvasTextLayout::put_OpticalAlignment,
+                CanvasOpticalAlignment::NoSideBearings);
+
+            CanvasTextLayout_TrimmingSign_SurvivesModifyingTextLayoutState_TestCase(
+                &CanvasTextLayout::put_Options,
+                CanvasDrawTextOptions::EnableColorFont,
+                false);
+
+            CanvasTextLayout_TrimmingSign_SurvivesModifyingTextLayoutState_TestCase(
+                &CanvasTextLayout::put_TrimmingDelimiter,
+                static_cast<HSTRING>(WinString(L"K")));
+            
+            CanvasTextLayout_TrimmingSign_SurvivesModifyingTextLayoutState_TestCase(
+                &CanvasTextLayout::put_TrimmingDelimiterCount,
+                2);
+
+            CanvasTextLayout_TrimmingSign_SurvivesModifyingTextLayoutState_TestCase(
+                &CanvasTextLayout::put_TrimmingGranularity,
+                CanvasTextTrimmingGranularity::Character);
+
+            CanvasTextLayout_TrimmingSign_SurvivesModifyingTextLayoutState_TestCase(
+                &CanvasTextLayout::put_VerticalAlignment,
+                CanvasVerticalAlignment::Bottom);
+
+            CanvasTextLayout_TrimmingSign_SurvivesModifyingTextLayoutState_TestCase(
+                &CanvasTextLayout::put_VerticalGlyphOrientation,
+                CanvasVerticalGlyphOrientation::Stacked);
+
+            CanvasTextLayout_TrimmingSign_SurvivesModifyingTextLayoutState_TestCase(
+                &CanvasTextLayout::put_WordWrapping,
+                CanvasWordWrapping::EmergencyBreak);
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_TrimmingSign_InteropNullsOutSign_ThenCallSetterRequiringNewSign)
+        {
+            TrimmingSignFixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            ThrowIfFailed(textLayout->put_TrimmingSign(CanvasTrimmingSign::Ellipsis));
+            auto dtl = GetWrappedResource<IDWriteTextLayout2>(textLayout);
+            Assert::IsTrue(HasTrimmingSign(dtl));
+
+            DWRITE_TRIMMING trimming = {};
+            ThrowIfFailed(dtl->SetTrimming(&trimming, nullptr));
+
+            ThrowIfFailed(textLayout->put_Direction(CanvasTextDirection::RightToLeftThenBottomToTop));
+
+            CanvasTrimmingSign sign;
+            ThrowIfFailed(textLayout->get_TrimmingSign(&sign));
+            Assert::AreEqual(CanvasTrimmingSign::None, sign);
+            Assert::IsFalse(HasTrimmingSign(dtl));
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_put_CustomTrimmingSign_NullIsOk)
+        {
+            TrimmingSignFixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            Assert::AreEqual(S_OK, textLayout->put_CustomTrimmingSign(nullptr));
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_CustomTrimmingSign_Property)
+        {
+            TrimmingSignFixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            auto customTrimmingSign = Make<CustomInlineObject>();
+
+            Assert::AreEqual(S_OK, textLayout->put_CustomTrimmingSign(customTrimmingSign.Get()));
+
+            ComPtr<ICanvasTextInlineObject> actual;
+            Assert::AreEqual(S_OK, textLayout->get_CustomTrimmingSign(&actual));
+
+            Assert::IsTrue(IsSameInstance(customTrimmingSign.Get(), actual.Get()));
+        }
+
+        struct NonStubbedFixture
+        {
+            ComPtr<ICanvasTextFormat> Format;
+            ComPtr<CanvasDevice> Device;
+
+            NonStubbedFixture()
+            {
+                Format = Make<CanvasTextFormat>();
+                Device = CanvasDevice::CreateNew(false);
+            }
+
+            ComPtr<CanvasTextLayout> CreateSimpleTextLayout()
+            {
+                return CanvasTextLayout::CreateNew(Device.Get(), WinString(L"A string"), Format.Get(), 0.0f, 0.0f);
+            }
+
+            void DrawTextLayoutToSomewhere(ComPtr<CanvasTextLayout> const& textLayout)
+            {
+                auto renderTarget = CanvasRenderTarget::CreateNew(
+                    Device.Get(),
+                    1.0f,
+                    1.0f,
+                    DEFAULT_DPI,
+                    PIXEL_FORMAT(B8G8R8A8UIntNormalized),
+                    CanvasAlphaMode::Premultiplied);
+
+                ComPtr<ICanvasDrawingSession> drawingSession;
+                ThrowIfFailed(renderTarget->CreateDrawingSession(&drawingSession));
+
+                ThrowIfFailed(drawingSession->DrawTextLayoutAtCoordsWithColor(textLayout.Get(), 0, 0, Color{}));
+
+                ThrowIfFailed(static_cast<CanvasDrawingSession*>(drawingSession.Get())->Close());
+            }
+        };
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_CustomTrimmingSign_SetsDWriteResource)
+        {
+            NonStubbedFixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            auto customTrimmingSign = Make<CustomInlineObject>();
+
+            Assert::AreEqual(S_OK, textLayout->put_CustomTrimmingSign(customTrimmingSign.Get()));
+
+            auto dtl = GetWrappedResource<IDWriteTextLayout2>(textLayout);
+
+            DWRITE_TRIMMING trimming;
+            ComPtr<IDWriteInlineObject> dwriteInlineObject;
+            ThrowIfFailed(dtl->GetTrimming(&trimming, &dwriteInlineObject));
+
+            customTrimmingSign->DrawMethod.SetExpectedCalls(1);
+            auto mockTextRenderer = Make<MockDWriteTextRenderer>();
+            dwriteInlineObject->Draw(nullptr, mockTextRenderer.Get(), 0, 0, FALSE, FALSE, nullptr);
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_CustomTrimmingSign_SetTrimmingSignOnDWriteResource_get_CustomTrimmingSignThrows)
+        {
+            TrimmingSignFixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            auto dtl = GetWrappedResource<IDWriteTextLayout2>(textLayout);
+
+            auto dwriteInlineObject = Make<MockDWriteInlineObject>();
+
+            DWRITE_TRIMMING trimming{};
+            ThrowIfFailed(dtl->SetTrimming(&trimming, dwriteInlineObject.Get()));
+
+            ComPtr<ICanvasTextInlineObject> value;
+            Assert::AreEqual(E_NOINTERFACE, textLayout->get_CustomTrimmingSign(&value));
+
+            ValidateStoredErrorState(E_NOINTERFACE, Strings::ExternalInlineObject);
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_SetInlineObject_NullIsOk)
+        {
+            NonStubbedFixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            Assert::AreEqual(S_OK, textLayout->SetInlineObject(0, 0, nullptr));
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_GetInlineObject_DefaultIsNull)
+        {
+            NonStubbedFixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            static const int numCharactersInLayout = 8;
+
+            for (int i = 0; i < numCharactersInLayout; ++i)
+            {
+                ComPtr<ICanvasTextInlineObject> inlineObject;
+                Assert::AreEqual(S_OK, textLayout->GetInlineObject(i, &inlineObject));
+                Assert::IsNull(inlineObject.Get());
+            }
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_InlineObject_SetAndGetOnRange)
+        {
+            NonStubbedFixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            static const int startRange = 2;
+            static const int endRange = 6;
+            static const int numCharactersInLayout = 8;
+
+            auto inlineObject = Make<CustomInlineObject>();
+
+            Assert::AreEqual(S_OK, textLayout->SetInlineObject(startRange, endRange - startRange, inlineObject.Get()));
+
+            for (int i = 0; i < numCharactersInLayout; ++i)
+            {
+                ComPtr<ICanvasTextInlineObject> actual;
+                Assert::AreEqual(S_OK, textLayout->GetInlineObject(i, &actual));
+
+                if (i >= startRange && i < endRange)
+                    Assert::IsTrue(IsSameInstance(inlineObject.Get(), actual.Get()));
+                else
+                    Assert::IsNull(actual.Get());
+            }
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_MultipleInlineObjects)
+        {
+            //
+            // Verifies that inline object of a character doesn't
+            // somehow trample over the inline objects set to other characters.
+            //
+
+            NonStubbedFixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            ComPtr<CustomInlineObject> inlineObjects[8];
+
+            for (int i = 0; i < 8; ++i)
+            {
+                inlineObjects[i] = Make<CustomInlineObject>();
+                Assert::AreEqual(S_OK, textLayout->SetInlineObject(i, 1, inlineObjects[i].Get()));
+            }
+
+            for (int i = 0; i < 8; ++i)
+            {
+                ComPtr<ICanvasTextInlineObject> actual;
+                Assert::AreEqual(S_OK, textLayout->GetInlineObject(i, &actual));
+
+                Assert::IsTrue(IsSameInstance(inlineObjects[i].Get(), actual.Get()));
+            }
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_InlineObject_ImplementedViaInterop_GetInlineObject_Throws)
+        {
+            NonStubbedFixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            auto dtl = GetWrappedResource<IDWriteTextLayout2>(textLayout);
+
+            auto dwriteInlineObject = Make<MockDWriteInlineObject>();
+
+            DWRITE_TEXT_RANGE textRange{0, 1};
+            ThrowIfFailed(dtl->SetInlineObject(dwriteInlineObject.Get(), textRange));
+
+            ComPtr<ICanvasTextInlineObject> value;
+            Assert::AreEqual(E_NOINTERFACE, textLayout->GetInlineObject(0, &value));
+
+            ValidateStoredErrorState(E_NOINTERFACE, Strings::ExternalInlineObject);
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_InlineObject_DrawGlyphRunReturnsValidRenderer)
+        {
+            NonStubbedFixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            auto inlineObject = Make<CustomInlineObject>();
+            Assert::AreEqual(S_OK, textLayout->SetInlineObject(0, 1, inlineObject.Get()));
+
+            inlineObject->DrawMethod.SetExpectedCalls(1,
+                [&](
+                ICanvasTextRenderer* textRenderer,
+                Vector2 baselineOrigin,
+                boolean isSideways,
+                boolean isRightToLeft,
+                IInspectable* brush)
+            {
+                // Sanity check the returned renderer.
+                Assert::IsNotNull(textRenderer);
+
+                float dpi;
+                ThrowIfFailed(textRenderer->get_Dpi(&dpi));
+                Assert::AreEqual(DEFAULT_DPI, dpi);
+
+                Matrix3x2 transform;
+                ThrowIfFailed(textRenderer->get_Transform(&transform));
+                Assert::AreEqual(Matrix3x2{ 1, 0, 0, 1, 0, 0 }, transform);
+
+                return S_OK;
+            });
+
+            f.DrawTextLayoutToSomewhere(textLayout);
+        }
+
+        struct BadRendererReferenceFixture : public NonStubbedFixture
+        {
+            ComPtr<ICanvasTextRenderer> BadReference;
+
+            BadRendererReferenceFixture()
+            {
+                auto textLayout = CreateSimpleTextLayout();
+
+                auto inlineObject = Make<CustomInlineObject>();
+                Assert::AreEqual(S_OK, textLayout->SetInlineObject(0, 1, inlineObject.Get()));
+
+                inlineObject->DrawMethod.SetExpectedCalls(1,
+                    [&](
+                    ICanvasTextRenderer* textRenderer,
+                    Vector2 baselineOrigin,
+                    boolean isSideways,
+                    boolean isRightToLeft,
+                    IInspectable* brush)
+                    {
+                        BadReference = textRenderer;
+
+                        return S_OK;
+                    });
+
+                DrawTextLayoutToSomewhere(textLayout);
+
+                Assert::IsNotNull(BadReference.Get());
+            }
+
+        };
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_InlineObject_DrawImplementation_ShouldntHangOnToRenderer)
+        {
+            BadRendererReferenceFixture f;
+
+            Assert::AreEqual(E_INVALIDARG, f.BadReference->DrawGlyphRun(Vector2{}, nullptr, 0, 0, nullptr, false, 0, false, CanvasTextMeasuringMode::Natural, nullptr, nullptr, 0, nullptr, 0, CanvasGlyphOrientation::Upright));
+            ValidateStoredErrorState(E_INVALIDARG, Strings::TextRendererNotValid);
+
+            Assert::AreEqual(E_INVALIDARG, f.BadReference->DrawStrikethrough(Vector2{}, 0, 0, 0, CanvasTextDirection::LeftToRightThenTopToBottom, nullptr, CanvasTextMeasuringMode::Natural, nullptr, CanvasGlyphOrientation::Upright));
+            ValidateStoredErrorState(E_INVALIDARG, Strings::TextRendererNotValid);
+
+            Assert::AreEqual(E_INVALIDARG, f.BadReference->DrawUnderline(Vector2{}, 0, 0, 0, 0, CanvasTextDirection::LeftToRightThenTopToBottom, nullptr, CanvasTextMeasuringMode::Natural, nullptr, CanvasGlyphOrientation::Upright));
+            ValidateStoredErrorState(E_INVALIDARG, Strings::TextRendererNotValid);
+
+            Assert::AreEqual(E_INVALIDARG, f.BadReference->DrawInlineObject(Vector2{}, nullptr, false, false, nullptr, CanvasGlyphOrientation::Upright));
+            ValidateStoredErrorState(E_INVALIDARG, Strings::TextRendererNotValid);
+
+            Assert::AreEqual(E_INVALIDARG, f.BadReference->get_Dpi(nullptr));
+            ValidateStoredErrorState(E_INVALIDARG, Strings::TextRendererNotValid);
+
+            Assert::AreEqual(E_INVALIDARG, f.BadReference->get_PixelSnappingDisabled(nullptr));
+            ValidateStoredErrorState(E_INVALIDARG, Strings::TextRendererNotValid);
+
+            Assert::AreEqual(E_INVALIDARG, f.BadReference->get_Transform(nullptr));
+            ValidateStoredErrorState(E_INVALIDARG, Strings::TextRendererNotValid);
+        }
+
+        struct GetLineMetricsFixture : public Fixture
+        {
+            DWriteMetricsType GetDWriteLineMetrics(int seed)
+            {
+                uint32_t inc = seed * 7;
+
+                DWriteMetricsType metrics{};
+                metrics.length = 1u + inc;
+                metrics.trailingWhitespaceLength = 2u + inc;
+                metrics.newlineLength = 3u + inc;
+                metrics.height = 4.0f + inc;
+                metrics.baseline = 5.0f + inc;
+                metrics.isTrimmed = seed % 2 == 0 ? TRUE : FALSE;
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+                metrics.leadingBefore = 6.0f + inc;
+                metrics.leadingAfter = 7.0f + inc;
+#endif              
+                return metrics;
+            }
+
+            CanvasLineMetrics GetLineMetrics(int seed)
+            {
+                int inc = seed * 7;
+
+                CanvasLineMetrics metrics{};
+                metrics.CharacterCount = 1 + inc;
+                metrics.TrailingWhitespaceCount = 2 + inc;
+                metrics.TerminalNewlineCount = 3 + inc;
+                metrics.Height = 4.0f + inc;
+                metrics.Baseline = 5.0f + inc;
+                metrics.IsTrimmed = seed % 2 == 0;
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+                metrics.LeadingWhitespaceBefore = 6.0f + inc;
+                metrics.LeadingWhitespaceAfter = 7.0f + inc;
+#endif                    
+                return metrics;
+            }
+
+            void ExpectGetLineMetrics(int callCount, std::function<HRESULT(DWriteMetricsType*, uint32_t, uint32_t*)> mock)
+            {
+#if WINVER > _WIN32_WINNT_WINBLUE
+                auto& lineMetricsMethod = Adapter->MockTextLayout->GetLineMetricsMethod1;
+#else
+                auto& lineMetricsMethod = Adapter->MockTextLayout->GetLineMetricsMethod;
+#endif
+                lineMetricsMethod.SetExpectedCalls(callCount, mock);
+            }
+        };
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_LineMetrics_CallsThrough)
+        {
+            GetLineMetricsFixture f;
+
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            uint32_t callCount = 0;
+
+            f.ExpectGetLineMetrics(2,
+                [&](DWriteMetricsType* lineMetrics, UINT32 maxLineCount, UINT32* actualLineCount)
+                {
+                    callCount++;
+                    if (callCount == 1)
+                    {
+                        Assert::IsNull(lineMetrics);
+                        Assert::AreEqual(0u, maxLineCount);
+                        *actualLineCount = 3;
+                        return E_NOT_SUFFICIENT_BUFFER;
+                    }
+                    else
+                    {
+                        for (uint32_t i = 0; i < 3; ++i)
+                        {
+                            lineMetrics[i] = f.GetDWriteLineMetrics(i);
+                        }
+                        Assert::AreEqual(3u, maxLineCount);
+                        return S_OK;
+                    }
+                });
+
+            uint32_t valueCount;
+            CanvasLineMetrics* valueElements;
+            Assert::AreEqual(S_OK, textLayout->get_LineMetrics(&valueCount, &valueElements));
+            Assert::AreEqual(3u, valueCount);
+            for (uint32_t i = 0; i < 3; ++i)
+            {
+                CanvasLineMetrics expected = f.GetLineMetrics(i);
+                Assert::AreEqual(0, memcmp(&expected, &valueElements[i], sizeof(expected)));
+            }
+        }
+        
+        struct GetClusterMetricsFixture : public Fixture
+        {
+            DWRITE_CLUSTER_METRICS GetDWriteClusterMetrics(int seed)
+            {
+                uint16_t inc = static_cast<uint16_t>(seed) * 2;
+
+                DWRITE_CLUSTER_METRICS metrics{};
+                metrics.width = 1.0f + inc;
+                metrics.length = 2ui16 + inc;
+                metrics.canWrapLineAfter = (seed + 1) % 2 == 0;
+                metrics.isWhitespace = seed % 2 == 0;
+                metrics.isNewline = (seed + 1) % 2 == 0;
+                metrics.isSoftHyphen = seed % 2 == 0;
+                metrics.isRightToLeft = (seed + 1) % 2 == 0;
+
+                return metrics;
+            }
+
+            CanvasClusterMetrics GetClusterMetrics(int seed)
+            {
+                int inc = seed * 2;
+
+                CanvasClusterMetrics metrics{};
+                metrics.CharacterCount = 2 + inc;
+                metrics.Width = 1.0f + inc;
+
+                if ((seed + 1) % 2 == 0)
+                    metrics.Properties |= CanvasClusterProperties::CanWrapLineAfter;
+
+                if (seed % 2 == 0)
+                    metrics.Properties |= CanvasClusterProperties::Whitespace;
+
+                if ((seed + 1) % 2 == 0)
+                    metrics.Properties |= CanvasClusterProperties::Newline;
+
+                if (seed % 2 == 0)
+                    metrics.Properties |= CanvasClusterProperties::SoftHyphen;
+
+                if ((seed + 1) % 2 == 0)
+                    metrics.Properties |= CanvasClusterProperties::RightToLeft;
+
+                return metrics;
+            }
+        };
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_ClusterMetrics_CallsThrough)
+        {
+            GetClusterMetricsFixture f;
+
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            uint32_t callCount = 0;
+
+            f.Adapter->MockTextLayout->GetClusterMetricsMethod.SetExpectedCalls(2,
+                [&](DWRITE_CLUSTER_METRICS* clusterMetrics, UINT32 maxClusterCount, UINT32* actualClusterCount)
+                {
+                    callCount++;
+                    if (callCount == 1)
+                    {
+                        Assert::IsNull(clusterMetrics);
+                        Assert::AreEqual(0u, maxClusterCount);
+                        *actualClusterCount = 3;
+                        return E_NOT_SUFFICIENT_BUFFER;
+                    }
+                    else
+                    {
+                        for (uint32_t i = 0; i < 3; ++i)
+                        {
+                            clusterMetrics[i] = f.GetDWriteClusterMetrics(i);
+                        }
+                        Assert::AreEqual(3u, maxClusterCount);
+                        return S_OK;
+                    }
+                });
+
+            uint32_t valueCount;
+            CanvasClusterMetrics* valueElements;
+            Assert::AreEqual(S_OK, textLayout->get_ClusterMetrics(&valueCount, &valueElements));
+            Assert::AreEqual(3u, valueCount);
+            for (uint32_t i = 0; i < 3; ++i)
+            {
+                CanvasClusterMetrics expected = f.GetClusterMetrics(i);
+                Assert::AreEqual(0, memcmp(&expected, &valueElements[i], sizeof(expected)));
+            }
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_GetCustomBrush_DefaultIsNull)
+        {
+            NonStubbedFixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            ComPtr<IInspectable> customBrush;
+            Assert::AreEqual(S_OK, textLayout->GetCustomBrush(0, &customBrush));
+            Assert::IsNull(customBrush.Get());
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_SetCustomBrush_NullIsOk)
+        {
+            NonStubbedFixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+            
+            Assert::AreEqual(S_OK, textLayout->SetCustomBrush(0, 0, nullptr));
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_SetCustomBrush_CallsThrough)
+        {
+            Fixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            auto expectedDrawingEffect = As<IInspectable>(Make<CanvasStrokeStyle>());
+
+            f.Adapter->MockTextLayout->SetDrawingEffectMethod.SetExpectedCalls(1, 
+                [&](IUnknown* drawingEffect, DWRITE_TEXT_RANGE textRange)
+                { 
+                    Assert::IsTrue(IsSameInstance(expectedDrawingEffect.Get(), drawingEffect));
+                    Assert::AreEqual(2u, textRange.startPosition);
+                    Assert::AreEqual(3u, textRange.length);
+                    return S_OK;
+                });
+
+            Assert::AreEqual(S_OK, textLayout->SetCustomBrush(2, 3, expectedDrawingEffect.Get()));
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_GetCustomBrush_CallsThrough)
+        {
+            Fixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            auto expectedDrawingEffect = As<IInspectable>(Make<CanvasStrokeStyle>());
+
+            f.Adapter->MockTextLayout->GetDrawingEffectMethod.SetExpectedCalls(1, 
+                [&](UINT32 characterIndex, IUnknown** drawingEffect, DWRITE_TEXT_RANGE* unused)
+                { 
+                    Assert::AreEqual(2u, characterIndex);
+                    expectedDrawingEffect.CopyTo(drawingEffect);
+                    Assert::IsNull(unused);
+
+                    return S_OK;
+                });
+
+            ComPtr<IInspectable> actualDrawingEffect;
+            Assert::AreEqual(S_OK, textLayout->GetCustomBrush(2, &actualDrawingEffect));
+            Assert::IsTrue(IsSameInstance(expectedDrawingEffect.Get(), actualDrawingEffect.Get()));
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_SetCustomBrush_UnwrapsBrushes)
+        {
+            NonStubbedFixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            auto wrappedBrush = As<IInspectable>(CanvasSolidColorBrush::CreateNew(f.Device.Get(), Color{}));
+
+            Assert::AreEqual(S_OK, textLayout->SetCustomBrush(0, 1, wrappedBrush.Get()));
+
+            // 
+            // Verify the unwrapped brush was set on the text layout.
+            //
+            auto dtl = GetWrappedResource<IDWriteTextLayout>(textLayout);
+            auto d2dBrush = GetWrappedResource<ID2D1SolidColorBrush>(wrappedBrush);
+
+            ComPtr<IUnknown> actualDrawingEffect;
+            ThrowIfFailed(dtl->GetDrawingEffect(0, &actualDrawingEffect, nullptr));
+            Assert::IsTrue(IsSameInstance(d2dBrush.Get(), actualDrawingEffect.Get()));
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_GetBrush_WhenCustomBrushSetToBrush_ReturnsSame)
+        {
+            NonStubbedFixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            auto brush = As<IInspectable>(CanvasSolidColorBrush::CreateNew(f.Device.Get(), Color{}));
+
+            Assert::AreEqual(S_OK, textLayout->SetCustomBrush(0, 1, brush.Get()));
+
+            ComPtr<ICanvasBrush> actualBrush;
+            Assert::AreEqual(S_OK, textLayout->GetBrush(0, &actualBrush));
+            Assert::IsTrue(IsSameInstance(brush.Get(), actualBrush.Get()));
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_GetBrush_WhenCustomBrushSetToWrappedBrush_ReturnsWrapper)
+        {
+            NonStubbedFixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+            auto dtl = GetWrappedResource<IDWriteTextLayout>(textLayout);
+
+            auto wrappedBrush = As<IInspectable>(CanvasSolidColorBrush::CreateNew(f.Device.Get(), Color{}));
+            auto d2dBrush = GetWrappedResource<ID2D1SolidColorBrush>(wrappedBrush);
+
+            ThrowIfFailed(dtl->SetDrawingEffect(d2dBrush.Get(), DWRITE_TEXT_RANGE{ 0, 1 }));
+
+            ComPtr<ICanvasBrush> actualBrush;
+            Assert::AreEqual(S_OK, textLayout->GetBrush(0, &actualBrush));
+            Assert::IsTrue(IsSameInstance(wrappedBrush.Get(), actualBrush.Get()));
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_GetBrush_WhenCustomBrushSetToNonCanvasBrush_ReturnsError)
+        {
+            NonStubbedFixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            auto arbitraryBrush = As<IInspectable>(Make<CanvasStrokeStyle>());
+
+            Assert::AreEqual(S_OK, textLayout->SetCustomBrush(0, 1, arbitraryBrush.Get()));
+
+            ComPtr<ICanvasBrush> actualBrush;
+            Assert::AreEqual(E_NOINTERFACE, textLayout->GetBrush(0, &actualBrush));
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_GetCustomBrush_AfterSetBrush_ReturnsSame)
+        {
+            NonStubbedFixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+            auto dtl = GetWrappedResource<IDWriteTextLayout>(textLayout);
+
+            auto someBrush = CanvasSolidColorBrush::CreateNew(f.Device.Get(), Color{});
+
+            Assert::AreEqual(S_OK, textLayout->SetBrush(0, 1, someBrush.Get()));
+
+            ComPtr<IInspectable> actualBrush;
+            Assert::AreEqual(S_OK, textLayout->GetCustomBrush(0, &actualBrush));
+            Assert::IsTrue(IsSameInstance(someBrush.Get(), actualBrush.Get()));
+        }
+
+        struct SetBrushOverwriteFixture : public NonStubbedFixture
+        {
+            ComPtr<ICanvasTextLayout> TextLayout;
+            ComPtr<IDWriteTextLayout> DwriteTextLayout;
+
+            ComPtr<ICanvasBrush> SolidColorBrush;
+            ComPtr<ID2D1SolidColorBrush> D2DSolidColorBrush;
+
+            ComPtr<IInspectable> CustomBrush;
+
+            Color CyanColor;
+
+            enum Setter { SetColor, SetBrush, SetCustomBrush };
+
+            SetBrushOverwriteFixture()
+            {
+                TextLayout = CreateSimpleTextLayout();
+                DwriteTextLayout = GetWrappedResource<IDWriteTextLayout>(TextLayout);
+
+                Color magenta { 255, 0, 255 };
+                SolidColorBrush = CanvasSolidColorBrush::CreateNew(Device.Get(), magenta);
+                D2DSolidColorBrush = GetWrappedResource<ID2D1SolidColorBrush>(SolidColorBrush);
+
+                auto strokeStyle = Make<CanvasStrokeStyle>();
+                CustomBrush = As<IInspectable>(strokeStyle.Get());
+
+                CyanColor = { 255, 255, 0 };
+            }
+
+            void DoTestCase(Setter s1, Setter s2)
+            {
+                Set(s1);
+                Set(s2);
+                Verify(s2);
+
+                Set(s1);
+                Verify(s1);
+            }
+
+        private:
+
+            void Set(Setter s)
+            {
+                switch (s)
+                {
+                    case SetColor: ThrowIfFailed(TextLayout->SetColor(2, 1, CyanColor)); break;
+                    case SetBrush: ThrowIfFailed(TextLayout->SetBrush(2, 1, SolidColorBrush.Get())); break;
+                    case SetCustomBrush: ThrowIfFailed(TextLayout->SetCustomBrush(2, 1, CustomBrush.Get())); break;
+                    default:
+                        assert(false);
+                }
+            }
+
+            void Verify(Setter s)
+            {
+                switch (s)
+                {
+                    case SetColor:
+                    {
+                        auto drawingEffect = GetDrawingEffect();
+                        auto drawingEffectBrush = As<ID2D1SolidColorBrush>(drawingEffect.Get());
+
+                        D2D1_COLOR_F d2dColor = drawingEffectBrush->GetColor();
+                        Assert::AreEqual(ToD2DColor(CyanColor), d2dColor);
+                        break;
+                    }
+                    case SetBrush:
+                    {
+                        auto drawingEffect = GetDrawingEffect();
+                        Assert::IsTrue(IsSameInstance(D2DSolidColorBrush.Get(), drawingEffect.Get()));
+                        break;
+                    }
+                    case SetCustomBrush:
+                    {
+                        auto drawingEffect = GetDrawingEffect();
+                        Assert::IsTrue(IsSameInstance(CustomBrush.Get(), drawingEffect.Get()));
+                        break;
+                    }
+                    default:
+                        assert(false);
+                }
+            }
+
+            ComPtr<IUnknown> GetDrawingEffect()
+            {
+                ComPtr<IUnknown> drawingEffect;
+                ThrowIfFailed(DwriteTextLayout->GetDrawingEffect(2, &drawingEffect));
+                return drawingEffect;
+            }
+        };
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_SetBrush_SetCustomBrush_OverwriteBehavior)
+        {
+            // 
+            // This verifies that the three of {SetColor, SetBrush, SetCustomBrush} 
+            // overwrite one another as expected when used with the same text layout.
+            //
+
+            SetBrushOverwriteFixture f;
+
+            f.DoTestCase(SetBrushOverwriteFixture::SetColor, SetBrushOverwriteFixture::SetBrush);
+
+            f.DoTestCase(SetBrushOverwriteFixture::SetBrush, SetBrushOverwriteFixture::SetCustomBrush);
+
+            f.DoTestCase(SetBrushOverwriteFixture::SetCustomBrush, SetBrushOverwriteFixture::SetColor);
+        }
+
+        TEST_METHOD(CanvasTextLayout_TrimmingDelimiterValidation)
+        {
+            NonStubbedFixture f;
+
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            TrimmingDelimiterValidationTest(textLayout);
+        }
+
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_get_LayoutBoundsIncludingTrailingWhitespace)
+        {
+            Fixture f;
+
+            f.Adapter->MockTextLayout->GetMetricsMethod.SetExpectedCalls(1,
+                [&](DWRITE_TEXT_METRICS1* out)
+                {
+                    DWRITE_TEXT_METRICS1 metrics{};
+                    metrics.left = 1;
+                    metrics.top = 2;
+                    metrics.widthIncludingTrailingWhitespace = 3;
+                    metrics.heightIncludingTrailingWhitespace = 4;
+                    *out = metrics;
+                    return S_OK;
+                });
+
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            Rect bounds;
+            Assert::AreEqual(S_OK, textLayout->get_LayoutBoundsIncludingTrailingWhitespace(&bounds));
+            Assert::AreEqual(Rect{ 1, 2, 3, 4 }, bounds);
+        }
+
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_get_MaximumBidiReorderingDepth)
+        {
+            Fixture f;
+
+            f.Adapter->MockTextLayout->GetMetricsMethod.SetExpectedCalls(1,
+                [&](DWRITE_TEXT_METRICS1* out)
+                {
+                    DWRITE_TEXT_METRICS1 metrics{};
+                    metrics.maxBidiReorderingDepth = 1234u;
+                    *out = metrics;
+                    return S_OK;
+                });
+
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            int value;
+            Assert::AreEqual(S_OK, textLayout->get_MaximumBidiReorderingDepth(&value));
+            Assert::AreEqual(1234, value);
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_SetTypography)
+        {
+            Fixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            auto typography = f.CreateTypography();
+            auto expectedDWriteTypography = GetWrappedResource<IDWriteTypography>(typography);
+
+            f.Adapter->MockTextLayout->SetTypographyMethod.SetExpectedCalls(1,
+                [&](IDWriteTypography* dwriteTypography, DWRITE_TEXT_RANGE range)
+                {
+                    Assert::AreEqual(1u, range.startPosition);
+                    Assert::AreEqual(2u, range.length);
+
+                    Assert::IsTrue(IsSameInstance(expectedDWriteTypography.Get(), dwriteTypography));
+                    return S_OK;
+                });
+
+            Assert::AreEqual(S_OK, textLayout->SetTypography(1, 2, typography.Get()));
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_SetTypography_NullTypographyIsOk)
+        {
+            Fixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            f.Adapter->MockTextLayout->SetTypographyMethod.SetExpectedCalls(1,
+                [&](IDWriteTypography* dwriteTypography, DWRITE_TEXT_RANGE)
+                {
+                    Assert::IsNull(dwriteTypography);
+                    return S_OK;
+                });
+
+            Assert::AreEqual(S_OK, textLayout->SetTypography(0, 0, nullptr));
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_GetTypography)
+        {
+            Fixture f;
+            auto textLayout = f.CreateSimpleTextLayout();
+
+            auto expectedTypography = f.CreateTypography();
+            auto expectedDWriteTypography = GetWrappedResource<IDWriteTypography>(expectedTypography);
+
+            f.Adapter->MockTextLayout->GetTypographyMethod.SetExpectedCalls(1,
+                [&](UINT32 index, IDWriteTypography** dwriteTypography, DWRITE_TEXT_RANGE*)
+                {
+                    Assert::AreEqual(123u, index);
+                    return expectedDWriteTypography.CopyTo(dwriteTypography);
+                });
+
+            ComPtr<ICanvasTypography> typography;
+            Assert::AreEqual(S_OK, textLayout->GetTypography(123u, &typography));
+
+            Assert::IsTrue(IsSameInstance(expectedTypography.Get(), typography.Get()));
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_GetGlyphOrientationTransform_InvalidArg)
+        {
+            auto factory = Make<CanvasTextLayoutFactory>();
+
+            Assert::AreEqual(
+                E_INVALIDARG, 
+                factory->GetGlyphOrientationTransform(CanvasGlyphOrientation::Upright, true, Vector2{ 0, 0 }, nullptr));
+        }
+
+        TEST_METHOD_EX(CanvasTextLayoutTests_GetGlyphOrientationTransform_PassesThrough)
+        {
+            auto factory = Make<CanvasTextLayoutFactory>();
+
+            ComPtr<MockDWriteTextAnalyzer> dwriteTextAnalyzer = Make<MockDWriteTextAnalyzer>();
+
+            auto adapter = std::make_shared<StubCanvasTextLayoutAdapter>();
+            CustomFontManagerAdapter::SetInstance(adapter);
+
+            adapter->GetMockDWriteFactory()->CreateTextAnalyzerMethod.AllowAnyCall(
+                [&](IDWriteTextAnalyzer** out)
+                {
+                    ThrowIfFailed(dwriteTextAnalyzer.CopyTo(out));
+                    return S_OK;
+                });
+
+            dwriteTextAnalyzer->GetGlyphOrientationTransformMethod.SetExpectedCalls(1,
+                [&](DWRITE_GLYPH_ORIENTATION_ANGLE orientationAngle,
+                    BOOL isSideways,
+                    float x,
+                    float y,
+                    DWRITE_MATRIX* out)
+                {
+                    Assert::AreEqual(DWRITE_GLYPH_ORIENTATION_ANGLE_90_DEGREES, orientationAngle);
+                    Assert::IsTrue(!!isSideways);
+                    Assert::AreEqual(12.0f, x);
+                    Assert::AreEqual(34.0f, y);
+                    *out = DWRITE_MATRIX{ 1, 2, 3, 4, 5, 6 };
+
+                    return S_OK;
+                });
+
+            Matrix3x2 transform;
+            Assert::AreEqual(
+                S_OK,
+                factory->GetGlyphOrientationTransform(CanvasGlyphOrientation::Clockwise90Degrees, true, Vector2{ 12, 34 }, &transform));
+            Assert::AreEqual(Matrix3x2{ 1, 2, 3, 4, 5, 6 }, transform);
         }
     };
 }

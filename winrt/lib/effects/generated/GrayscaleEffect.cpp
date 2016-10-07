@@ -11,17 +11,20 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    GrayscaleEffect::GrayscaleEffect()
-        : CanvasEffect(CLSID_D2D1Grayscale, 0, 1, true)
+    GrayscaleEffect::GrayscaleEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 0, 1, true, device, effect, static_cast<IGrayscaleEffect*>(this))
     {
-        // Set default values
+        if (!effect)
+        {
+            // Set default values
+        }
     }
 
     IMPLEMENT_EFFECT_SOURCE_PROPERTY(GrayscaleEffect,
         Source,
         0)
 
-    ActivatableClass(GrayscaleEffect);
+    ActivatableClassWithFactory(GrayscaleEffect, SimpleAgileActivationFactory<GrayscaleEffect>);
 }}}}}
 
 #endif // _WIN32_WINNT_WIN10

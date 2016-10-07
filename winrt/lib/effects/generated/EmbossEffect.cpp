@@ -11,12 +11,15 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    EmbossEffect::EmbossEffect()
-        : CanvasEffect(CLSID_D2D1Emboss, 2, 1, true)
+    EmbossEffect::EmbossEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 2, 1, true, device, effect, static_cast<IEmbossEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<float>(D2D1_EMBOSS_PROP_HEIGHT, 1.0f);
-        SetBoxedProperty<float>(D2D1_EMBOSS_PROP_DIRECTION, 0.0f);
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<float>(D2D1_EMBOSS_PROP_HEIGHT, 1.0f);
+            SetBoxedProperty<float>(D2D1_EMBOSS_PROP_DIRECTION, 0.0f);
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY_WITH_VALIDATION(EmbossEffect,
@@ -40,7 +43,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         { L"Amount", D2D1_EMBOSS_PROP_HEIGHT,    GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT             },
         { L"Angle",  D2D1_EMBOSS_PROP_DIRECTION, GRAPHICS_EFFECT_PROPERTY_MAPPING_RADIANS_TO_DEGREES })
 
-    ActivatableClass(EmbossEffect);
+    ActivatableClassWithFactory(EmbossEffect, SimpleAgileActivationFactory<EmbossEffect>);
 }}}}}
 
 #endif // _WIN32_WINNT_WIN10

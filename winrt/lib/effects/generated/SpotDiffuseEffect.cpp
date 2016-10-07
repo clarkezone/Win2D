@@ -9,19 +9,22 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    SpotDiffuseEffect::SpotDiffuseEffect()
-        : CanvasEffect(CLSID_D2D1SpotDiffuse, 9, 1, true)
+    SpotDiffuseEffect::SpotDiffuseEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 9, 1, true, device, effect, static_cast<ISpotDiffuseEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<float[3]>(D2D1_SPOTDIFFUSE_PROP_LIGHT_POSITION, Numerics::Vector3{ 0.0f, 0.0f, 0.0f });
-        SetBoxedProperty<float[3]>(D2D1_SPOTDIFFUSE_PROP_POINTS_AT, Numerics::Vector3{ 0.0f, 0.0f, 0.0f });
-        SetBoxedProperty<float>(D2D1_SPOTDIFFUSE_PROP_FOCUS, 1.0f);
-        SetBoxedProperty<float>(D2D1_SPOTDIFFUSE_PROP_LIMITING_CONE_ANGLE, 90.0f);
-        SetBoxedProperty<float>(D2D1_SPOTDIFFUSE_PROP_DIFFUSE_CONSTANT, 1.0f);
-        SetBoxedProperty<float>(D2D1_SPOTDIFFUSE_PROP_SURFACE_SCALE, 1.0f);
-        SetBoxedProperty<float[3]>(D2D1_SPOTDIFFUSE_PROP_COLOR, Color{ 255, 255, 255, 255 });
-        SetBoxedProperty<float[2]>(D2D1_SPOTDIFFUSE_PROP_KERNEL_UNIT_LENGTH, Numerics::Vector2{ 1.0f, 1.0f });
-        SetBoxedProperty<uint32_t>(D2D1_SPOTDIFFUSE_PROP_SCALE_MODE, D2D1_SPOTDIFFUSE_SCALE_MODE_LINEAR);
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<float[3]>(D2D1_SPOTDIFFUSE_PROP_LIGHT_POSITION, Numerics::Vector3{ 0.0f, 0.0f, 0.0f });
+            SetBoxedProperty<float[3]>(D2D1_SPOTDIFFUSE_PROP_POINTS_AT, Numerics::Vector3{ 0.0f, 0.0f, 0.0f });
+            SetBoxedProperty<float>(D2D1_SPOTDIFFUSE_PROP_FOCUS, 1.0f);
+            SetBoxedProperty<float>(D2D1_SPOTDIFFUSE_PROP_LIMITING_CONE_ANGLE, 90.0f);
+            SetBoxedProperty<float>(D2D1_SPOTDIFFUSE_PROP_DIFFUSE_CONSTANT, 1.0f);
+            SetBoxedProperty<float>(D2D1_SPOTDIFFUSE_PROP_SURFACE_SCALE, 1.0f);
+            SetBoxedProperty<float[3]>(D2D1_SPOTDIFFUSE_PROP_COLOR, Color{ 255, 255, 255, 255 });
+            SetBoxedProperty<float[2]>(D2D1_SPOTDIFFUSE_PROP_KERNEL_UNIT_LENGTH, Numerics::Vector2{ 1.0f, 1.0f });
+            SetBoxedProperty<uint32_t>(D2D1_SPOTDIFFUSE_PROP_SCALE_MODE, D2D1_SPOTDIFFUSE_SCALE_MODE_LINEAR);
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY(SpotDiffuseEffect,
@@ -82,6 +85,12 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         CanvasImageInterpolation,
         D2D1_SPOTDIFFUSE_PROP_SCALE_MODE)
 
+    IMPLEMENT_EFFECT_PROPERTY(SpotDiffuseEffect,
+        LightColorHdr,
+        ConvertColorHdrToVector3,
+        Numerics::Vector4,
+        D2D1_SPOTDIFFUSE_PROP_COLOR)
+
     IMPLEMENT_EFFECT_SOURCE_PROPERTY(SpotDiffuseEffect,
         Source,
         0)
@@ -95,7 +104,8 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         { L"HeightMapScale",             D2D1_SPOTDIFFUSE_PROP_SURFACE_SCALE,       GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT             },
         { L"LightColor",                 D2D1_SPOTDIFFUSE_PROP_COLOR,               GRAPHICS_EFFECT_PROPERTY_MAPPING_COLOR_TO_VECTOR3   },
         { L"HeightMapKernelSize",        D2D1_SPOTDIFFUSE_PROP_KERNEL_UNIT_LENGTH,  GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT             },
-        { L"HeightMapInterpolationMode", D2D1_SPOTDIFFUSE_PROP_SCALE_MODE,          GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT             })
+        { L"HeightMapInterpolationMode", D2D1_SPOTDIFFUSE_PROP_SCALE_MODE,          GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT             },
+        { L"LightColorHdr",              D2D1_SPOTDIFFUSE_PROP_COLOR,               GRAPHICS_EFFECT_PROPERTY_MAPPING_UNKNOWN            })
 
-    ActivatableClass(SpotDiffuseEffect);
+    ActivatableClassWithFactory(SpotDiffuseEffect, SimpleAgileActivationFactory<SpotDiffuseEffect>);
 }}}}}

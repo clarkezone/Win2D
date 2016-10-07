@@ -60,7 +60,7 @@ TEST_CLASS(RegisteredEventTests)
         fn.SetExpectedCalls(1);
 
         {
-            RegisteredEvent r([&]() { fn.WasCalled(); });
+            RegisteredEvent r([&] { fn.WasCalled(); });
         }
     }
 
@@ -70,7 +70,7 @@ TEST_CLASS(RegisteredEventTests)
         fn.SetExpectedCalls(1);
 
         {
-            RegisteredEvent r([&]() { fn.WasCalled(); });
+            RegisteredEvent r([&] { fn.WasCalled(); });
             r.Release();
             fn.SetExpectedCalls(0);
         }
@@ -82,7 +82,7 @@ TEST_CLASS(RegisteredEventTests)
         fn.SetExpectedCalls(0);
 
         {
-            RegisteredEvent r([&]() { fn.WasCalled(); });
+            RegisteredEvent r([&] { fn.WasCalled(); });
             r.Detach();
             r.Release();
         }
@@ -111,6 +111,31 @@ TEST_CLASS(RegisteredEventTests)
         fn.SetExpectedCalls(0);
 
         r.Release();        
+        s->Raise();
+    }
+
+    TEST_METHOD_EX(RegisteredEvent_AssignmentRemovesPreviousHandler)
+    {
+        Counter fn;
+
+        auto s = Make<TestEventSource>();
+
+        auto callback = Callback<IEventHandler<IInspectable*>>(
+            [&](IInspectable*, IInspectable*) { fn.WasCalled(); return S_OK; });
+
+        auto r = RegisteredEvent(
+            s.Get(),
+            &TestEventSource::add_Event,
+            &TestEventSource::remove_Event,
+            callback.Get());
+
+
+        fn.SetExpectedCalls(1);
+        s->Raise();
+
+        fn.SetExpectedCalls(0);
+
+        r = RegisteredEvent();
         s->Raise();
     }
 };

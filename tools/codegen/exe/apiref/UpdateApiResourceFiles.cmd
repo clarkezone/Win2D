@@ -44,18 +44,19 @@ IF NOT "%1"=="" (
    SET GIT_TREE_LOCATION=%1
 )
 
-SET COPYRIGHT_BANNER_FILENAME=%GIT_TREE_LOCATION%\tools\copyright\copyright.txt
+SET COPYRIGHT_BANNER_FILENAME=%GIT_TREE_LOCATION%\tools\checkcode\copyright.txt
 
 
 :: Copy the Direct2D API description files.
 
-SET SOURCE_DIR=%SDXROOT%\windows\wgi\codegen\publish\
+SET SOURCE_DIR=%SDXROOT%\onecoreuap\windows\wgi\codegen\publish\
 SET DEST_DIR=%GIT_TREE_LOCATION%\tools\codegen\exe\apiref\
 
 SET FILE_LIST=^
     D2DTypes.xml ^
     D2DTypes2.xml ^
     D2DTypes3.xml ^
+    D2DTypes4.xml ^
     D2DEffectAuthor.xml
 
 CALL :UPDATE_FILES
@@ -63,12 +64,13 @@ CALL :UPDATE_FILES
 
 :: Copy the DirectImage effect description files.
 
-SET SOURCE_DIR=%SDXROOT%\windows\wgi\dimage\Effects\
+SET SOURCE_DIR=%SDXROOT%\onecoreuap\windows\wgi\dimage\Effects\
 SET DEST_DIR=%GIT_TREE_LOCATION%\tools\codegen\exe\apiref\effects\
 
 SET FILE_LIST=^
     2DAffineTransform.xml ^
     3DTransform.xml ^
+    AlphaMask.xml ^
     Arithmetic.xml ^
     Atlas.xml ^
     Blend.xml ^
@@ -80,6 +82,7 @@ SET FILE_LIST=^
     Composite.xml ^
     Contrast.xml ^
     Convolve.xml ^
+    CrossFade.xml ^
     DiffuseDistant.xml ^
     DiffusePoint.xml ^
     DiffuseSpot.xml ^
@@ -95,13 +98,14 @@ SET FILE_LIST=^
     GaussianBlur.xml ^
     Grayscale.xml ^
     HighlightsShadows.xml ^
-    Histogram.xml ^
     HueRotation.xml ^
     HueToRgb.xml ^
     Invert.xml ^
     LinearTransfer.xml ^
+    LookupTable3D.xml ^
     LuminanceToAlpha.xml ^
     Morphology.xml ^
+    Opacity.xml ^
     OpacityMetadata.xml ^
     Posterize.xml ^
     Premultiply.xml ^
@@ -118,9 +122,20 @@ SET FILE_LIST=^
     TableTransfer.xml ^
     TemperatureTint.xml ^
     Tile.xml ^
+    Tint.xml ^
     Turbulence.xml ^
     UnPremultiply.xml ^
     Vignette.xml
+
+CALL :UPDATE_FILES
+
+
+:: Copy the DirectImage ColorManagement effect description.
+
+SET SOURCE_DIR=%SDXROOT%\onecoreuap\windows\wgi\dimage\ColorManagement\
+
+SET FILE_LIST=^
+    ColorManagementEffect.xml
 
 CALL :UPDATE_FILES
 

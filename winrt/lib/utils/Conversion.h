@@ -89,6 +89,26 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         static_assert(offsetof(D2D1_MATRIX_4X4_F, _44) == offsetof(Numerics::Matrix4x4, M44), "Matrix4x4 layout must match D2D1_MATRIX_4X4_F");
     };
 
+    template<> struct ValidateReinterpretAs<DWRITE_MATRIX*, Numerics::Matrix3x2*> : std::true_type
+    {
+        static_assert(offsetof(DWRITE_MATRIX, m11) == offsetof(Numerics::Matrix3x2, M11), "Matrix3x2 layout must match DWRITE_MATRIX");
+        static_assert(offsetof(DWRITE_MATRIX, m12) == offsetof(Numerics::Matrix3x2, M12), "Matrix3x2 layout must match DWRITE_MATRIX");
+        static_assert(offsetof(DWRITE_MATRIX, m21) == offsetof(Numerics::Matrix3x2, M21), "Matrix3x2 layout must match DWRITE_MATRIX");
+        static_assert(offsetof(DWRITE_MATRIX, m22) == offsetof(Numerics::Matrix3x2, M22), "Matrix3x2 layout must match DWRITE_MATRIX");
+        static_assert(offsetof(DWRITE_MATRIX, dx) == offsetof(Numerics::Matrix3x2, M31), "Matrix3x2 layout must match DWRITE_MATRIX");
+        static_assert(offsetof(DWRITE_MATRIX, dy) == offsetof(Numerics::Matrix3x2, M32), "Matrix3x2 layout must match DWRITE_MATRIX");
+    };
+
+    template<> struct ValidateReinterpretAs<DWRITE_MATRIX*, D2D1_MATRIX_3X2_F*> : std::true_type
+    {
+        static_assert(offsetof(DWRITE_MATRIX, m11) == offsetof(D2D1_MATRIX_3X2_F, _11), "D2D1_MATRIX_3X2_F layout must match DWRITE_MATRIX");
+        static_assert(offsetof(DWRITE_MATRIX, m12) == offsetof(D2D1_MATRIX_3X2_F, _12), "D2D1_MATRIX_3X2_F layout must match DWRITE_MATRIX");
+        static_assert(offsetof(DWRITE_MATRIX, m21) == offsetof(D2D1_MATRIX_3X2_F, _21), "D2D1_MATRIX_3X2_F layout must match DWRITE_MATRIX");
+        static_assert(offsetof(DWRITE_MATRIX, m22) == offsetof(D2D1_MATRIX_3X2_F, _22), "D2D1_MATRIX_3X2_F layout must match DWRITE_MATRIX");
+        static_assert(offsetof(DWRITE_MATRIX, dx) == offsetof(D2D1_MATRIX_3X2_F, _31), "D2D1_MATRIX_3X2_F layout must match DWRITE_MATRIX");
+        static_assert(offsetof(DWRITE_MATRIX, dy) == offsetof(D2D1_MATRIX_3X2_F, _32), "D2D1_MATRIX_3X2_F layout must match DWRITE_MATRIX");
+    };
+
     template<> struct ValidateReinterpretAs<Numerics::Vector4*, D2D1_COLOR_F*> : std::true_type
     {
         static_assert(offsetof(D2D1_COLOR_F, r) == offsetof(Numerics::Vector4, X), "Vector4 layout must match D2D1_COLOR_F");
@@ -146,6 +166,12 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         static_assert(static_cast<uint32_t>(4U) == static_cast<uint32_t>(CanvasDrawTextOptions::EnableColorFont), "CanvasDrawTextOptions must match D2D1_DRAW_TEXT_OPTIONS");
     };
 
+    template<> struct ValidateReinterpretAs<DWRITE_UNICODE_RANGE*, CanvasUnicodeRange*> : std::true_type
+    {
+        static_assert(offsetof(DWRITE_UNICODE_RANGE, first) == offsetof(CanvasUnicodeRange, First), "CanvasUnicodeRange layout must match DWRITE_UNICODE_RANGE");
+        static_assert(offsetof(DWRITE_UNICODE_RANGE, last) == offsetof(CanvasUnicodeRange, Last), "CanvasUnicodeRange layout must match DWRITE_UNICODE_RANGE");
+    };
+
     inline float ToNormalizedFloat(uint8_t v)
     {
         return static_cast<float>(v) / 255.0f;
@@ -175,6 +201,11 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             ToNormalizedFloat(color.G),
             ToNormalizedFloat(color.B),
             ToNormalizedFloat(color.A));
+    }
+
+    inline D2D1_COLOR_F ToD2DColor(Numerics::Vector4 const& colorHdr)
+    {
+        return *ReinterpretAs<D2D1_COLOR_F const*>(&colorHdr);
     }
 
     inline Numerics::Vector4 ToVector4(ABI::Windows::UI::Color const& color)
@@ -320,6 +351,23 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         }
     }
 
+#if WINVER > _WIN32_WINNT_WINBLUE
+
+    inline CanvasAlphaMode ToCanvasAlphaMode(ABI::Windows::Graphics::Imaging::BitmapAlphaMode alphaMode)
+    {
+        using namespace ABI::Windows::Graphics::Imaging;
+        
+        switch (alphaMode)
+        {
+            case BitmapAlphaMode_Premultiplied: return CanvasAlphaMode::Premultiplied;
+            case BitmapAlphaMode_Straight: return CanvasAlphaMode::Straight;
+            case BitmapAlphaMode_Ignore: return CanvasAlphaMode::Ignore;
+            default: assert(false); return CanvasAlphaMode::Premultiplied;
+        }
+    }
+
+#endif
+    
     inline CanvasAlphaMode FromD2DColorInterpolation(D2D1_COLOR_INTERPOLATION_MODE colorInterpolation)
     {
         switch (colorInterpolation)
@@ -404,6 +452,28 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         }
     }
 
+    inline D2D1_FILTER ToD2DFilter(CanvasImageInterpolation interpolation)
+    {
+        switch (interpolation)
+        {
+            case CanvasImageInterpolation::NearestNeighbor: return D2D1_FILTER_MIN_MAG_MIP_POINT;
+            case CanvasImageInterpolation::Linear: return D2D1_FILTER_MIN_MAG_MIP_LINEAR;
+            case CanvasImageInterpolation::Anisotropic: return D2D1_FILTER_ANISOTROPIC;
+            default: return D2D1_FILTER_FORCE_DWORD;
+        }
+    }
+
+    inline CanvasImageInterpolation FromD2DFilter(D2D1_FILTER filter)
+    {
+        switch (filter)
+        {
+            case D2D1_FILTER_MIN_MAG_MIP_POINT: return CanvasImageInterpolation::NearestNeighbor;
+            case D2D1_FILTER_MIN_MAG_MIP_LINEAR: return CanvasImageInterpolation::Linear;
+            case D2D1_FILTER_ANISOTROPIC: return CanvasImageInterpolation::Anisotropic;
+            default: assert(false); return CanvasImageInterpolation::NearestNeighbor;
+        }
+    }
+
     inline DWRITE_TEXT_RANGE ToDWriteTextRange(int32_t position, int32_t characterCount)
     {
         ThrowIfNegative(position);
@@ -449,5 +519,64 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         }
 
         return result;
+    }
+
+    inline RECT ToRECT(ABI::Windows::Foundation::Rect const& rect, float dpi)
+    {
+        auto left = DipsToPixels(rect.X, dpi, CanvasDpiRounding::Round);
+        auto top = DipsToPixels(rect.Y, dpi, CanvasDpiRounding::Round);
+        auto right = DipsToPixels(rect.X + rect.Width, dpi, CanvasDpiRounding::Round);
+        auto bottom = DipsToPixels(rect.Y + rect.Height, dpi, CanvasDpiRounding::Round);
+
+        if (right == left && rect.Width > 0)
+            right++;
+
+        if (bottom == top && rect.Height > 0)
+            bottom++;
+
+        return RECT{ left, top, right, bottom };
+    }
+
+    inline ABI::Windows::Foundation::Rect ToRect(RECT const& rect, float dpi)
+    {
+        auto x = PixelsToDips(rect.left, dpi);
+        auto y = PixelsToDips(rect.top, dpi);
+        auto width = PixelsToDips(rect.right - rect.left, dpi);
+        auto height = PixelsToDips(rect.bottom - rect.top, dpi);
+
+        return ABI::Windows::Foundation::Rect{ x, y, width, height };
+    }
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+    inline D2D1_PATCH_EDGE_MODE ToD2DPatchEdgeMode(CanvasGradientMeshPatchEdge edge)
+    {
+        switch (edge)
+        {
+            case CanvasGradientMeshPatchEdge::Aliased: return D2D1_PATCH_EDGE_MODE_ALIASED;
+            case CanvasGradientMeshPatchEdge::Antialiased: return D2D1_PATCH_EDGE_MODE_ANTIALIASED;
+            case CanvasGradientMeshPatchEdge::AliasedAndInflated: return D2D1_PATCH_EDGE_MODE_ALIASED_INFLATED;
+            default: assert(false); return D2D1_PATCH_EDGE_MODE_ALIASED;
+        }
+    }
+
+    inline CanvasGradientMeshPatchEdge FromD2DPatchEdgeMode(D2D1_PATCH_EDGE_MODE edge)
+    {
+        switch (edge)
+        {
+            case D2D1_PATCH_EDGE_MODE_ALIASED: return CanvasGradientMeshPatchEdge::Aliased;
+            case D2D1_PATCH_EDGE_MODE_ANTIALIASED: return CanvasGradientMeshPatchEdge::Antialiased;
+            case D2D1_PATCH_EDGE_MODE_ALIASED_INFLATED: return CanvasGradientMeshPatchEdge::AliasedAndInflated;
+            default: assert(false); return CanvasGradientMeshPatchEdge::Aliased;
+        }
+    }
+
+#endif
+
+    inline unsigned short CheckCastAsUShort(int i)
+    {
+        if (static_cast<unsigned>(i) > USHORT_MAX)
+            ThrowHR(E_INVALIDARG);
+
+        return static_cast<unsigned short>(i);
     }
 }}}}

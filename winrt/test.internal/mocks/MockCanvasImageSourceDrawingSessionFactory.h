@@ -9,16 +9,17 @@ namespace canvas
     class MockCanvasImageSourceDrawingSessionFactory : public ICanvasImageSourceDrawingSessionFactory
     {
     public:
-        CALL_COUNTER_WITH_MOCK(CreateMethod, ComPtr<ICanvasDrawingSession>(ICanvasDevice*, ISurfaceImageSourceNativeWithD2D*, Color const&, RECT const&, float));
+        CALL_COUNTER_WITH_MOCK(CreateMethod, ComPtr<ICanvasDrawingSession>(ICanvasDevice*, ISurfaceImageSourceNativeWithD2D*, Color const&, Rect const&, float));
 
         virtual ComPtr<ICanvasDrawingSession> Create(
             ICanvasDevice* owner,
             ISurfaceImageSourceNativeWithD2D* sisNative,
+            std::shared_ptr<bool> hasActiveDrawingSession,
             Color const& clearColor,
-            RECT const& updateRectangle,
+            Rect const& updateRectangleInDips,
             float dpi) const override
         {
-            return CreateMethod.WasCalled(owner, sisNative, clearColor, updateRectangle, dpi);
+            return CreateMethod.WasCalled(owner, sisNative, clearColor, updateRectangleInDips, dpi);
         }
     };
 }

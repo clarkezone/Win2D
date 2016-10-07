@@ -9,11 +9,14 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    HueRotationEffect::HueRotationEffect()
-        : CanvasEffect(CLSID_D2D1HueRotation, 1, 1, true)
+    HueRotationEffect::HueRotationEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 1, 1, true, device, effect, static_cast<IHueRotationEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<float>(D2D1_HUEROTATION_PROP_ANGLE, 0.0f);
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<float>(D2D1_HUEROTATION_PROP_ANGLE, 0.0f);
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY(HueRotationEffect,
@@ -29,5 +32,5 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
     IMPLEMENT_EFFECT_PROPERTY_MAPPING(HueRotationEffect,
         { L"Angle", D2D1_HUEROTATION_PROP_ANGLE, GRAPHICS_EFFECT_PROPERTY_MAPPING_RADIANS_TO_DEGREES })
 
-    ActivatableClass(HueRotationEffect);
+    ActivatableClassWithFactory(HueRotationEffect, SimpleAgileActivationFactory<HueRotationEffect>);
 }}}}}

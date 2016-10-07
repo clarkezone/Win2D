@@ -9,13 +9,10 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
     using namespace ::Microsoft::WRL;
     using namespace WinRTDirectX;
 
-    template<typename U>
-    inline ComPtr<ICanvasDevice> GetCanvasDevice(U* resourceCreator)
+    inline ComPtr<ICanvasDevice> GetCanvasDevice(ICanvasResourceCreator* resourceCreator)
     {
-        auto realResourceCreator = As<ICanvasResourceCreator>(resourceCreator);
-        
         ComPtr<ICanvasDevice> device;
-        ThrowIfFailed(realResourceCreator->get_Device(&device));
+        ThrowIfFailed(resourceCreator->get_Device(&device));
 
         return device;
     }
@@ -56,5 +53,27 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
         return dpiX;
     }
+
+    inline bool TargetIsCommandList(ID2D1DeviceContext* deviceContext)
+    {
+        ComPtr<ID2D1Image> target;
+        deviceContext->GetTarget(&target);
+
+        return MaybeAs<ID2D1CommandList>(target) != nullptr;
+    }
+
+    inline bool IsRenderTargetBitmap(ID2D1Bitmap1* d2dBitmap)
+    {
+        auto options = d2dBitmap->GetOptions();
+        return (options & D2D1_BITMAP_OPTIONS_TARGET) != 0;
+    }
+
+    ComPtr<ID3D11Texture2D> GetTexture2DForDXGISurface(IDXGISurface2* dxgiSurface);
+
+    unsigned GetBlockSize(DXGI_FORMAT format);
+    unsigned GetBytesPerBlock(DXGI_FORMAT format);
+
+    std::vector<uint8_t> ConvertColorsToBgra(uint32_t colorCount, Windows::UI::Color* colors);
+    std::vector<uint8_t> ConvertColorsToRgba(uint32_t colorCount, Windows::UI::Color* colors);
 
 }}}}

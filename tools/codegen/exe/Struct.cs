@@ -2,11 +2,9 @@
 //
 // Licensed under the MIT License. See LICENSE.txt in the project root for license information.
 
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Xml.Serialization;
-using System.Collections.Generic;
-using System.Text;
-using System.IO;
 
 namespace CodeGen
 {
@@ -85,14 +83,14 @@ namespace CodeGen
 
             m_stylizedName = Formatter.Prefix + Formatter.StylizeNameFromUnderscoreSeparators(xmlData.Name);
             
-            if(overrideData != null)
+            if (overrideData != null)
             {
-                if(overrideData.Guid != null)
+                if (overrideData.Guid != null)
                 {
                     m_guid = overrideData.Guid;
                 }
 
-                if(overrideData.ProjectedNameOverride != null)
+                if (overrideData.ProjectedNameOverride != null)
                 {
                     if (overrideData.ShouldProject)
                         m_stylizedName = Formatter.Prefix + overrideData.ProjectedNameOverride;
@@ -100,7 +98,7 @@ namespace CodeGen
                         m_stylizedName = overrideData.ProjectedNameOverride;
                 }
 
-                if(overrideData.IdlNamespaceQualifier != null)
+                if (overrideData.IdlNamespaceQualifier != null)
                 {
                     m_idlTypeNameQualifier = overrideData.IdlNamespaceQualifier;
                 }
@@ -109,7 +107,7 @@ namespace CodeGen
             m_idlInterfaceName = "I" + m_stylizedName;
 
             m_structFields = new List<StructField>();
-            foreach(XmlBindings.StructField structXmlData in xmlData.Fields)
+            foreach (XmlBindings.StructField structXmlData in xmlData.Fields)
             {
                 m_structFields.Add(new StructField(structXmlData));
             }
@@ -202,7 +200,7 @@ namespace CodeGen
             idlFile.WriteLine("typedef struct " + m_stylizedName);
             idlFile.WriteLine("{");
             idlFile.Indent();
-            foreach(StructField structField in m_structFields)
+            foreach (StructField structField in m_structFields)
             {
                 QualifiableType typeObject = typeDictionary[structField.TypeName];
                 idlFile.WriteLine(typeObject.IdlTypeNameQualifier + typeObject.ProjectedName + " " + structField.PropertyName + ";");

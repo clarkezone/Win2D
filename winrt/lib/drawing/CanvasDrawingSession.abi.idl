@@ -6,21 +6,20 @@ namespace Microsoft.Graphics.Canvas
 {
     runtimeclass CanvasDrawingSession;
 
-    //
-    // CanvasDrawingSession needs to be activatable in order to support interop
-    // (so we can have a ICanvasFactoryNative on the activation factory).  An
-    // empty statics interface provides this.
-    //
-    [version(VERSION), uuid(21729CFC-1D7A-434E-B19B-8B15306B0DA8), exclusiveto(CanvasDrawingSession)]
-    interface ICanvasDrawingSessionStatics : IInspectable
-    {
-    }
-
     [version(VERSION), uuid(F60AFD09-E623-4BE0-B750-578AA920B1DB), exclusiveto(CanvasDrawingSession)]
     interface ICanvasDrawingSession : IInspectable
         requires Windows.Foundation.IClosable, ICanvasResourceCreatorWithDpi
     {
+        [overload("Clear")]
         HRESULT Clear([in] Windows.UI.Color color);
+
+        [overload("Clear"), default_overload]
+        HRESULT ClearHdr([in] NUMERICS.Vector4 color);
+
+        //
+        // Calls ID2D1RenderTarget::Flush() on wrapped device context.
+        //
+        HRESULT Flush();
 
         //
         // Some of these methods have large numbers of overloads.
@@ -84,21 +83,21 @@ namespace Microsoft.Graphics.Canvas
         //
         //   DrawImage(<what>, <where to>, <where from>, <opacity>, <interpolation>, <composite|perspective>)
         //
-        // <what>���������: either ICanvasImage or CanvasBitmap
+        // <what>         : either ICanvasImage or CanvasBitmap
         //
-        // <where to>�����: an offset (Vector2 or x,y) or destination rectangle
+        // <where to>     : an offset (Vector2 or x,y) or destination rectangle
         //
-        // <where from>���: a source rectangle
+        // <where from>   : a source rectangle
         //
-        // <opacity>������: a float specifying opacity (simulated using an
+        // <opacity>      : a float specifying opacity (simulated using an
         //                  effect for non-bitmaps)
         //
         // <interpolation>: CanvasImageInterpolation
         //
-        // <composite>����: a composite mode (may call DrawImage even if <what>
+        // <composite>    : a composite mode (may call DrawImage even if <what>
         //                  is a bitmap)
         //
-        // <perspective>��: the perspective transform - only for overloads where
+        // <perspective>  : the perspective transform - only for overloads where
         //                  <what> is a CanvasBitmap.
         //
         // Note that there is no overload that has both composite and
@@ -1304,6 +1303,38 @@ namespace Microsoft.Graphics.Canvas
             [in] Windows.UI.Color color);
 
         //
+        // DrawInk
+        //
+#if WINVER > _WIN32_WINNT_WINBLUE
+        [overload("DrawInk")]
+        HRESULT DrawInk(
+            [in] Windows.Foundation.Collections.IIterable<Windows.UI.Input.Inking.InkStroke*>* inkStrokes);
+
+        [overload("DrawInk"), default_overload]
+        HRESULT DrawInkWithHighContrast(
+            [in] Windows.Foundation.Collections.IIterable<Windows.UI.Input.Inking.InkStroke*>* inkStrokes,
+            [in] boolean highContrast);
+
+        //
+        // DrawGradientMesh
+        //
+        [overload("DrawGradientMesh")]
+        HRESULT DrawGradientMeshAtOrigin(
+            [in] Microsoft.Graphics.Canvas.Geometry.CanvasGradientMesh* gradientMesh);
+
+        [overload("DrawGradientMesh")]
+        HRESULT DrawGradientMesh(
+            [in] Microsoft.Graphics.Canvas.Geometry.CanvasGradientMesh* gradientMesh,
+            [in] NUMERICS.Vector2 point);
+
+        [overload("DrawGradientMesh")]
+        HRESULT DrawGradientMeshAtCoords(
+            [in] Microsoft.Graphics.Canvas.Geometry.CanvasGradientMesh* gradientMesh,
+            [in] float x,
+            [in] float y);
+#endif
+
+        //
         // State properties
         //
 
@@ -1315,12 +1346,21 @@ namespace Microsoft.Graphics.Canvas
 
         [propget] HRESULT TextAntialiasing([out, retval] Microsoft.Graphics.Canvas.Text.CanvasTextAntialiasing* value);
         [propput] HRESULT TextAntialiasing([in] Microsoft.Graphics.Canvas.Text.CanvasTextAntialiasing value);
+        
+        [propget] HRESULT TextRenderingParameters([out, retval] Microsoft.Graphics.Canvas.Text.CanvasTextRenderingParameters** value);
+        [propput] HRESULT TextRenderingParameters([in] Microsoft.Graphics.Canvas.Text.CanvasTextRenderingParameters* value);
 
         [propget] HRESULT Transform([out, retval] NUMERICS.Matrix3x2* value);
         [propput] HRESULT Transform([in] NUMERICS.Matrix3x2 value);
 
         [propget] HRESULT Units([out, retval] CanvasUnits* value);
         [propput] HRESULT Units([in] CanvasUnits value);
+
+        [propget] HRESULT EffectBufferPrecision([out, retval] Windows.Foundation.IReference<CanvasBufferPrecision>** value);
+        [propput] HRESULT EffectBufferPrecision([in] Windows.Foundation.IReference<CanvasBufferPrecision>* value);
+
+        [propget] HRESULT EffectTileSize([out, retval] BitmapSize* value);
+        [propput] HRESULT EffectTileSize([in] BitmapSize value);
 
         //
         // CreateLayer
@@ -1383,9 +1423,79 @@ namespace Microsoft.Graphics.Canvas
             [in] NUMERICS.Matrix3x2 geometryTransform,
             [in] CanvasLayerOptions options,
             [out, retval] CanvasActiveLayer** layer);
+
+        [overload("DrawGlyphRun")]
+        HRESULT DrawGlyphRun(
+            [in] NUMERICS.Vector2 point,
+            [in] Microsoft.Graphics.Canvas.Text.CanvasFontFace* fontFace,
+            [in] float fontSize,
+            [in] UINT32 glyphCount,
+            [in, size_is(glyphCount)] Microsoft.Graphics.Canvas.Text.CanvasGlyph* glyphs,
+            [in] boolean isSideways,
+            [in] UINT32 bidiLevel,
+            [in] Microsoft.Graphics.Canvas.Brushes.ICanvasBrush* brush);
+
+        [overload("DrawGlyphRun")]
+        HRESULT DrawGlyphRunWithMeasuringMode(
+            [in] NUMERICS.Vector2 point,
+            [in] Microsoft.Graphics.Canvas.Text.CanvasFontFace* fontFace,
+            [in] float fontSize,
+            [in] UINT32 glyphCount,
+            [in, size_is(glyphCount)] Microsoft.Graphics.Canvas.Text.CanvasGlyph* glyphs,
+            [in] boolean isSideways,
+            [in] UINT32 bidiLevel,
+            [in] Microsoft.Graphics.Canvas.Brushes.ICanvasBrush* brush,
+            [in] Microsoft.Graphics.Canvas.Text.CanvasTextMeasuringMode measuringMode);
+
+        [overload("DrawGlyphRun")]
+        HRESULT DrawGlyphRunWithMeasuringModeAndDescription(
+            [in] NUMERICS.Vector2 point,
+            [in] Microsoft.Graphics.Canvas.Text.CanvasFontFace* fontFace,
+            [in] float fontSize,
+            [in] UINT32 glyphCount,
+            [in, size_is(glyphCount)] Microsoft.Graphics.Canvas.Text.CanvasGlyph* glyphs,
+            [in] boolean isSideways,
+            [in] UINT32 bidiLevel,
+            [in] Microsoft.Graphics.Canvas.Brushes.ICanvasBrush* brush,
+            [in] Microsoft.Graphics.Canvas.Text.CanvasTextMeasuringMode measuringMode,
+            [in] HSTRING localeName,
+            [in] HSTRING textString,
+            [in] UINT32 clusterMapIndicesCount,
+            [in, size_is(clusterMapIndicesCount)] int* clusterMapIndices,
+            [in] UINT32 textPosition);
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+
+        //
+        // CreateSpriteBatch
+        //
+
+        [overload("CreateSpriteBatch")]
+        HRESULT CreateSpriteBatch(
+            [out, retval] CanvasSpriteBatch** spriteBatch);
+
+        [overload("CreateSpriteBatch")]
+        HRESULT CreateSpriteBatchWithSortMode(
+            [in] CanvasSpriteSortMode sortMode,
+            [out, retval] CanvasSpriteBatch** spriteBatch);
+
+        [overload("CreateSpriteBatch")]
+        HRESULT CreateSpriteBatchWithSortModeAndInterpolation(
+            [in] CanvasSpriteSortMode sortMode,
+            [in] CanvasImageInterpolation interpolation,
+            [out, retval] CanvasSpriteBatch** spriteBatch);
+
+        [overload("CreateSpriteBatch")]
+        HRESULT CreateSpriteBatchWithSortModeAndInterpolationAndOptions(
+            [in] CanvasSpriteSortMode sortMode,
+            [in] CanvasImageInterpolation interpolation,
+            [in] CanvasSpriteOptions options,
+            [out, retval] CanvasSpriteBatch** spriteBatch);
+        
+#endif
     };
 
-    [version(VERSION), static(ICanvasDrawingSessionStatics, VERSION)]
+    [STANDARD_ATTRIBUTES]
     runtimeclass CanvasDrawingSession
     {
         [default] interface ICanvasDrawingSession;

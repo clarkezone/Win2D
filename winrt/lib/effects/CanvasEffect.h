@@ -13,18 +13,21 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
     using namespace ABI::Microsoft::Graphics::Canvas;
     using namespace ::collections;
 
+
+    // Metadata created by codegen, used to implement IGraphicsEffectD2D1Interop::GetNamedPropertyMapping.
     struct EffectPropertyMapping
     {
         LPCWSTR Name;
         UINT Index;
         GRAPHICS_EFFECT_PROPERTY_MAPPING Mapping;
     };
-
+    
     struct EffectPropertyMappingTable
     {
         EffectPropertyMapping const* Mappings;
         size_t Count;
     };
+
 
     class CanvasEffect
         : public Implements<
@@ -32,39 +35,134 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             IGraphicsEffect,
             IGraphicsEffectSource,
             IGraphicsEffectD2D1Interop,
-            ICanvasImageInternal,
+            ICanvasEffect,
             ICanvasImage,
-            ABI::Windows::Foundation::IClosable>,
-          private LifespanTracker<CanvasEffect>
+            CloakedIid<ICanvasImageInternal>,
+            ChainInterfaces<
+                MixIn<CanvasEffect, ResourceWrapper<ID2D1Effect, CanvasEffect, IGraphicsEffect>>,
+                IClosable,
+                CloakedIid<ICanvasResourceWrapperNative>>>
+        , public ResourceWrapper<ID2D1Effect, CanvasEffect, IGraphicsEffect>
     {
-
-    private:
-        ComPtr<ID2D1Effect> m_resource;
-
-        // Unlike other objects, !m_resource does not necessarily indicate
-        // that the object was closed.
+        // Unlike other objects, a null ID2D1Effect does not necessarily indicate the object was closed.
         bool m_closed; 
+        bool m_insideGetImage;
 
         IID m_effectId;
-
-        std::vector<ComPtr<IPropertyValue>> m_properties;
-        bool m_propertiesChanged;
-
-        ComPtr<Vector<IGraphicsEffectSource*>> m_sources;
+        WinString m_name;
 
         ComPtr<IPropertyValueStatics> m_propertyValueFactory;
 
-        ComPtr<IUnknown> m_previousDeviceIdentity;
-        std::vector<uint64_t> m_previousSourceRealizationIds;
-        uint64_t m_realizationId;
+        // What device are we currently realized on?
+        CachedResourceReference<ID2D1Device, ICanvasDevice> m_realizationDevice;
+
+        // Effect property values (only used when the effect is not realized).
+        std::vector<ComPtr<IPropertyValue>> m_properties;
+
+        boolean m_cacheOutput;
+        D2D1_BUFFER_PRECISION m_bufferPrecision;
+
+        // Workaround Windows bug 6146411 (crash when reading back DESTINATION_COLOR_CONTEXT from a CLSID_D2D1ColorManagement effect).
+        ComPtr<IUnknown> m_workaround6146411;
+
+
+        // State tracking the effect source images. This data is authoritative when
+        // the effect is not realized - otherwise just a cache to speed reverse lookups.
+        //
+        // For realized effects, CachedResourceReference tracks both the ID2D1Image
+        // resource and its IGraphicsEffectSource wrapper. For unrealized effects,
+        // the resource is null and only the wrapper part is used.
+
+        struct SourceReference : public CachedResourceReference<ID2D1Image, IGraphicsEffectSource>
+        {
+            SourceReference()
+            { }
+
+            SourceReference(IGraphicsEffectSource* source)
+            {
+                Set(nullptr, source);
+            }
+
+            ComPtr<ID2D1Effect> DpiCompensator;
+        };
+
+        std::vector<SourceReference> m_sources;
+
+
+        // Optionally expose a view of our effect sources as an IVector<> collection.
+        template<typename T>
+        struct SourcesVectorTraits : public collections::ElementTraits<T>
+        {
+            typedef CanvasEffect* InternalVectorType;
+
+            static unsigned GetSize(CanvasEffect* effect)                       { return EnsureNotClosed(effect)->GetSourceCount(); };
+            static ElementType GetAt(CanvasEffect* effect, unsigned index)      { return EnsureNotClosed(effect)->GetSource(index); }
+            static void SetAt(CanvasEffect* effect, unsigned index, T item)     { EnsureNotClosed(effect)->SetSource(index, item); }
+            static void InsertAt(CanvasEffect* effect, unsigned index, T item)  { EnsureNotClosed(effect)->InsertSource(index, item); }
+            static void RemoveAt(CanvasEffect* effect, unsigned index)          { EnsureNotClosed(effect)->RemoveSource(index); }
+            static void Append(CanvasEffect* effect, T item)                    { EnsureNotClosed(effect)->AppendSource(item); }
+            static void Clear(CanvasEffect* effect)                             { EnsureNotClosed(effect)->ClearSources(); }
+
+        private:
+            static CanvasEffect* EnsureNotClosed(CanvasEffect* effect)
+            {
+                if (!effect)
+                    ThrowHR(RO_E_CLOSED);
+
+                return effect;
+            }
+        };
+
+        typedef Vector<IGraphicsEffectSource*, SourcesVectorTraits> SourcesVector;
+
+        ComPtr<SourcesVector> m_sourcesVector;
+
+
+        // Generated table of effect factory functions, used by interop to create strongly
+        // typed wrapper classes. m_effectMakers is terminated by a null MakeEffectFunction.
+        typedef void(*MakeEffectFunction)(ICanvasDevice* device, ID2D1Effect* d2dEffect, ComPtr<IInspectable>* result);
+
+        static std::pair<IID, MakeEffectFunction> m_effectMakers[];
+
+
+    protected:
+        // Constructor.
+        CanvasEffect(IID const& m_effectId, unsigned int propertiesSize, unsigned int sourcesSize, bool isSourcesSizeFixed, ICanvasDevice* device, ID2D1Effect* effect, IInspectable* outerInspectable);
+
+        virtual ~CanvasEffect();
+
+        virtual EffectPropertyMappingTable GetPropertyMapping()          { return EffectPropertyMappingTable{ nullptr, 0 }; }
+        virtual EffectPropertyMappingTable GetPropertyMappingHandCoded() { return EffectPropertyMappingTable{ nullptr, 0 }; }
+
+        ComPtr<SourcesVector> const& Sources() { return m_sourcesVector; }
         
-        std::vector<ComPtr<ID2D1Effect>> m_dpiCompensators;
+        ICanvasDevice* RealizationDevice() { return m_realizationDevice.GetWrapper(); }
 
-        bool m_insideGetImage;
-
-        WinString m_name;
+        std::mutex m_mutex;
 
     public:
+        // Used by ResourceManager::GetOrCreate.
+        static bool TryCreateEffect(ICanvasDevice* device, IUnknown* resource, float dpi, ComPtr<IInspectable>* result);
+            
+        //
+        // ICanvasImage
+        //
+
+        IFACEMETHOD(GetBounds)(ICanvasResourceCreator* resourceCreator, Rect *bounds) override;
+        IFACEMETHOD(GetBoundsWithTransform)(ICanvasResourceCreator* resourceCreator, Numerics::Matrix3x2 transform, Rect *bounds) override;
+
+        //
+        // ICanvasImageInternal
+        //
+
+        virtual ComPtr<ID2D1Image> GetD2DImage(ICanvasDevice* device, ID2D1DeviceContext* deviceContext, GetImageFlags flags, float targetDpi, float* realizedDpi = nullptr) override;
+
+        //
+        // ICanvasResourceWrapperNative
+        //
+
+        IFACEMETHOD(GetNativeResource)(ICanvasDevice* device, float dpi, REFIID iid, void** resource) override;
+
         //
         // IClosable
         //
@@ -90,43 +188,20 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         IFACEMETHOD(GetNamedPropertyMapping)(LPCWSTR name, UINT* index, GRAPHICS_EFFECT_PROPERTY_MAPPING* mapping) override;
 
         //
-        // Not part of IGraphicsEffectD2D1Interop, but same semantics as if it was a peer to GetSource.
+        // ICanvasEffect
         //
 
-        STDMETHOD(SetSource)(UINT index, IGraphicsEffectSource* source);
+        IFACEMETHOD(get_CacheOutput)(boolean* value) override;
+        IFACEMETHOD(put_CacheOutput)(boolean value) override;
+        IFACEMETHOD(get_BufferPrecision)(IReference<CanvasBufferPrecision>** value) override;
+        IFACEMETHOD(put_BufferPrecision)(IReference<CanvasBufferPrecision>* value) override;
+        IFACEMETHOD(InvalidateSourceRectangle)(ICanvasResourceCreatorWithDpi* resourceCreator, uint32_t sourceIndex, Rect invalidRectangle) override;
+        IFACEMETHOD(GetInvalidRectangles)(ICanvasResourceCreatorWithDpi* resourceCreator, uint32_t* valueCount, Rect** valueElements) override;
+        IFACEMETHOD(GetRequiredSourceRectangle)(ICanvasResourceCreatorWithDpi* resourceCreator, Rect outputRectangle, ICanvasEffect* sourceEffect, uint32_t sourceIndex, Rect sourceBounds, Rect* value) override;
+        IFACEMETHOD(GetRequiredSourceRectangles)(ICanvasResourceCreatorWithDpi* resourceCreator, Rect outputRectangle, uint32_t sourceEffectCount, ICanvasEffect** sourceEffects, uint32_t sourceIndexCount, uint32_t* sourceIndices, uint32_t sourceBoundsCount, Rect* sourceBounds, uint32_t* valueCount, Rect** valueElements) override;
 
-        //
-        // ICanvasImage
-        //
-
-        IFACEMETHOD(GetBounds)(
-            ICanvasDrawingSession *drawingSession,
-            Rect *bounds) override;
-
-        IFACEMETHOD(GetBoundsWithTransform)(
-            ICanvasDrawingSession *drawingSession,
-            Numerics::Matrix3x2 transform,
-            Rect *bounds) override;
-
-        //
-        // ICanvasImageInternal
-        //
-
-        ComPtr<ID2D1Image> GetD2DImage(ID2D1DeviceContext* deviceContext) override;
-        RealizedEffectNode GetRealizedEffectNode(ID2D1DeviceContext* deviceContext, float targetDpi) override;
 
     protected:
-        // for effects with unknown number of sources, sourcesSize has to be zero
-        CanvasEffect(IID m_effectId, unsigned int propertiesSize, unsigned int sourcesSize, bool isSourcesSizeFixed);
-
-        virtual ~CanvasEffect() = default;
-
-        ComPtr<Vector<IGraphicsEffectSource*>> const& Sources() { return m_sources; }
-
-        virtual EffectPropertyMappingTable GetPropertyMapping()          { return EffectPropertyMappingTable{ nullptr, 0 }; }
-        virtual EffectPropertyMappingTable GetPropertyMappingHandCoded() { return EffectPropertyMappingTable{ nullptr, 0 }; }
-
-
         //
         // The main property set/get methods. TBoxed is how we represent the data internally,
         // while TPublic is how it is exposed by strongly typed effect subclasses. For instance
@@ -137,29 +212,27 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         template<typename TBoxed, typename TPublic>
         void SetBoxedProperty(unsigned int index, TPublic const& value)
         {
-            assert(index < m_properties.size());
+            auto boxedValue = PropertyTypeConverter<TBoxed, TPublic>::Box(m_propertyValueFactory.Get(), value);
 
-            m_properties[index] = PropertyTypeConverter<TBoxed, TPublic>::Box(m_propertyValueFactory.Get(), value);
-            m_propertiesChanged = true;
+            SetProperty(index, boxedValue.Get());
         }
 
         template<typename TBoxed, typename TPublic>
         void GetBoxedProperty(unsigned int index, TPublic* value)
         {
-            assert(index < m_properties.size());
-
             CheckInPointer(value);
 
-            PropertyTypeConverter<TBoxed, TPublic>::Unbox(m_properties[index].Get(), value);
+            auto boxedValue = GetProperty(index);
+
+            PropertyTypeConverter<TBoxed, TPublic>::Unbox(boxedValue.Get(), value);
         }
 
         template<typename T>
         void SetArrayProperty(unsigned int index, uint32_t valueCount, T const* value)
         {
-            assert(index < m_properties.size());
+            auto boxedValue = CreateProperty(m_propertyValueFactory.Get(), valueCount, value);
 
-            m_properties[index] = CreateProperty(m_propertyValueFactory.Get(), valueCount, value);
-            m_propertiesChanged = true;
+            SetProperty(index, boxedValue.Get());
         }
 
         template<typename T>
@@ -171,25 +244,60 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         template<typename T>
         void GetArrayProperty(unsigned int index, uint32_t* valueCount, T** value)
         {
-            assert(index < m_properties.size());
-
             CheckInPointer(valueCount);
             CheckAndClearOutPointer(value);
 
-            GetValueOfProperty(m_properties[index].Get(), valueCount, value);
+            auto boxedValue = GetProperty(index);
+
+            GetValueOfProperty(boxedValue.Get(), valueCount, value);
         }
 
 
         // Marker types, used as TBoxed for values that need special conversion.
         struct ConvertRadiansToDegrees { };
         struct ConvertAlphaMode { };
+        struct ConvertColorHdrToVector3 { };
 
+
+        // Methods for manipulating the collection of source images, used by SourcesVector::Traits.
+        unsigned int GetSourceCount();
+        ComPtr<IGraphicsEffectSource> GetSource(unsigned int index);
+        void SetSource(unsigned int index, IGraphicsEffectSource* source);
+        void InsertSource(unsigned int index, IGraphicsEffectSource* source);
+        void RemoveSource(unsigned int index);
+        void AppendSource(IGraphicsEffectSource* source);
+        void ClearSources();
+
+
+        // On-demand creation of the underlying D2D image effect.
+        virtual bool Realize(GetImageFlags flags, float targetDpi, ID2D1DeviceContext* deviceContext);
+        virtual void Unrealize(unsigned int skipSourceIndex = UINT_MAX, bool skipAllSources = false);
 
     private:
-        void SetD2DInputs(ID2D1DeviceContext* deviceContext, float targetDpi, bool wasRecreated);
-        void SetD2DProperties();
+        ComPtr<ID2D1Effect> CreateD2DEffect(ID2D1DeviceContext* deviceContext, IID const& effectId);
+        bool ApplyDpiCompensation(unsigned int index, ComPtr<ID2D1Image>& inputImage, float inputDpi, GetImageFlags flags, float targetDpi, ID2D1DeviceContext* deviceContext);
+        void RefreshInputs(GetImageFlags flags, float targetDpi, ID2D1DeviceContext* deviceContext);
+        
+        bool SetD2DInput(ID2D1Effect* d2dEffect, unsigned int index, IGraphicsEffectSource* source, GetImageFlags flags, float targetDpi = 0, ID2D1DeviceContext* deviceContext = nullptr);
+        ComPtr<IGraphicsEffectSource> GetD2DInput(ID2D1Effect* d2dEffect, unsigned int index);
+
+        void SetProperty(unsigned int index, IPropertyValue* propertyValue);
+        void SetD2DProperty(ID2D1Effect* d2dEffect, unsigned int index, IPropertyValue* propertyValue);
+
+        ComPtr<IPropertyValue> GetProperty(unsigned int index);
+        ComPtr<IPropertyValue> GetD2DProperty(ID2D1Effect* d2dEffect, unsigned int index);
 
         void ThrowIfClosed();
+
+
+        // Used by EffectMakers.cpp to populate the m_effectMakers table.
+        template<typename T>
+        static void MakeEffect(ICanvasDevice* device, ID2D1Effect* d2dEffect, ComPtr<IInspectable>* result)
+        {
+            auto wrapper = Make<T>(device, d2dEffect);
+            CheckMakeResult(wrapper);
+            ThrowIfFailed(wrapper.As(result));
+        }
 
 
         //
@@ -308,6 +416,26 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         };
 
 
+        // HDR color (Vector4) can be boxed as a float3 (for properties that only use rgb).
+        template<>
+        struct PropertyTypeConverter<ConvertColorHdrToVector3, Numerics::Vector4>
+        {
+            typedef PropertyTypeConverter<float[3], Numerics::Vector3> VectorConverter;
+
+            static ComPtr<IPropertyValue> Box(IPropertyValueStatics* factory, Numerics::Vector4 const& value)
+            {
+                return VectorConverter::Box(factory, Numerics::Vector3{ value.X, value.Y, value.Z });
+            }
+
+            static void  Unbox(IPropertyValue* propertyValue, Numerics::Vector4* result)
+            {
+                Numerics::Vector3 value;
+                VectorConverter::Unbox(propertyValue, &value);
+                *result = Numerics::Vector4{ value.X, value.Y, value.Z, 1.0f };
+            }
+        };
+
+
         // Rect is boxed as a float4, after converting WinRT x/y/w/h format to D2D left/top/right/bottom.
         template<>
         struct PropertyTypeConverter<float[4], Rect>
@@ -413,6 +541,33 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
 #undef ARRAY_PROPERTY_TYPE_ACCESSOR
 
 
+        // Interface types are stored as a PropertyType_InspectableArray containing a single IInspectable.
+        // This is because IPropertyValue provides CreateInspectableArray, but not CreateInspectable.
+        static ComPtr<IPropertyValue> CreateProperty(IPropertyValueStatics* factory, IInspectable* value)
+        {
+            ComPtr<IPropertyValue> propertyValue;
+            ThrowIfFailed(factory->CreateInspectableArray(1, &value, &propertyValue));
+            return propertyValue;
+        }
+
+        template<typename T>
+        static void GetValueOfProperty(IPropertyValue* propertyValue, T** result)
+        {
+            static_assert(std::is_base_of<IInspectable, T>::value, "Interface types must be IInspectable");
+            
+            ComArray<ComPtr<IInspectable>> value;
+            ThrowIfFailed(propertyValue->GetInspectableArray(value.GetAddressOfSize(), value.GetAddressOfData()));
+
+            if (value.GetSize() != 1)
+                ThrowHR(E_NOTIMPL);
+
+            if (value[0])
+                ThrowIfFailed(value[0].CopyTo(result));
+            else
+                *result = nullptr;
+        }
+
+
         //
         // Macros used by the generated strongly typed effect subclasses
         // 
@@ -502,7 +657,10 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
                                                                                         \
         IFACEMETHODIMP CLASS::put_##SOURCE_NAME(_In_ IGraphicsEffectSource* source)     \
         {                                                                               \
-            return SetSource(SOURCE_INDEX, source);                                     \
+            return ExceptionBoundary([&]                                                \
+            {                                                                           \
+                SetSource(SOURCE_INDEX, source);                                        \
+            });                                                                         \
         }
 
 

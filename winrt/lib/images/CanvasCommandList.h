@@ -6,33 +6,30 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 {
-    class CanvasCommandListManager;
-
-    struct CanvasCommandListTraits
-    {
-        typedef ID2D1CommandList resource_t;
-        typedef CanvasCommandList wrapper_t;
-        typedef ICanvasCommandList wrapper_interface_t;
-        typedef CanvasCommandListManager manager_t;
-    };
-
-
     class CanvasCommandList : RESOURCE_WRAPPER_RUNTIME_CLASS(
-        CanvasCommandListTraits,
+        ID2D1CommandList,
+        CanvasCommandList,
+        ICanvasCommandList,
         ICanvasImage,
         CloakedIid<ICanvasImageInternal>,
+        CloakedIid<ICanvasResourceWrapperWithDevice>,
         Effects::IGraphicsEffectSource)
     {
         InspectableClass(RuntimeClass_Microsoft_Graphics_Canvas_CanvasCommandList, BaseTrust);
 
         ClosablePtr<ICanvasDevice> m_device;
         bool m_d2dCommandListIsClosed;
+        bool m_hasInteropBeenUsed;
+        std::shared_ptr<bool> m_hasActiveDrawingSession;
 
     public:
+        static ComPtr<CanvasCommandList> CreateNew(
+            ICanvasDevice* device);
+
         CanvasCommandList(
-            std::shared_ptr<CanvasCommandListManager> manager,
             ICanvasDevice* device,
-            ID2D1CommandList* d2dCommandList);
+            ID2D1CommandList* d2dCommandList,
+            bool hasInteropBeenUsed = true);
 
         // ICanvasCommandList
 
@@ -49,38 +46,33 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         // ICanvasImage
 
         IFACEMETHOD(GetBounds)(
-            ICanvasDrawingSession* drawingSession,
+            ICanvasResourceCreator* resourceCreator,
             Rect* bounds) override;
 
         IFACEMETHOD(GetBoundsWithTransform)(
-            ICanvasDrawingSession* drawingSession,
+            ICanvasResourceCreator* resourceCreator,
             Numerics::Matrix3x2 transform,
             Rect* bounds) override;
 
 
         // ICanvasImageInternal
 
-        virtual ComPtr<ID2D1Image> GetD2DImage(ID2D1DeviceContext*) override;
-        virtual RealizedEffectNode GetRealizedEffectNode(ID2D1DeviceContext*, float) override;
-    };
-
-
-    class CanvasCommandListManager : public ResourceManager<CanvasCommandListTraits>
-    {
-    public:
-        ComPtr<CanvasCommandList> CreateNew(
-            ICanvasResourceCreator* resourceCreator);
-
-        ComPtr<CanvasCommandList> CreateWrapper(
+        virtual ComPtr<ID2D1Image> GetD2DImage(
             ICanvasDevice* device,
-            ID2D1CommandList* resource);
+            ID2D1DeviceContext* deviceContext,
+            GetImageFlags flags,
+            float targetDpi,
+            float* realizedDpi) override;
+
+        // ResourceWrapper
+
+        IFACEMETHOD(GetNativeResource)(ICanvasDevice* device, float dpi, REFIID iid, void** outResource) override;
     };
 
 
-    class CanvasCommandListFactory : public ActivationFactory<
-        ICanvasCommandListFactory,
-        CloakedIid<ICanvasDeviceResourceFactoryNative>>,
-        public PerApplicationManager<CanvasCommandListFactory, CanvasCommandListManager>
+    class CanvasCommandListFactory
+        : public AgileActivationFactory<ICanvasCommandListFactory>
+        , private LifespanTracker<CanvasCommandListFactory>
     {
         InspectableClassStatic(RuntimeClass_Microsoft_Graphics_Canvas_CanvasCommandList, BaseTrust);
 
@@ -88,10 +80,5 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         IFACEMETHOD(Create)(
             ICanvasResourceCreator* resourceCreator,
             ICanvasCommandList** commandList) override;
-
-        IFACEMETHOD(GetOrCreate)(
-            ICanvasDevice* device,
-            IUnknown* resource,
-            IInspectable** wrapper) override;
     };
 }}}}

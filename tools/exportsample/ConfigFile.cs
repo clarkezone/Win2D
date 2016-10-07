@@ -15,10 +15,11 @@ namespace exportsample
         public Dictionary<string, string> Properties = new Dictionary<string, string>();
         public List<SampleDirectory> Samples = new List<SampleDirectory>();
         public List<InlineImport> InlineImports = new List<InlineImport>();
-        public Dictionary<string, string> DuplicateDirectories = new Dictionary<string, string>();
+        public Dictionary<string, string> DuplicateFiles = new Dictionary<string, string>();
         public List<string> FileReferenceProperties = new List<string>();
         public List<string> Win2DProjects = new List<string>();
         public List<string> FilesToCopy = new List<string>();
+        public List<string> PropertiesToFlatten = new List<string>();
 
         public Configuration(CommandLineOptions options)
         {
@@ -45,7 +46,7 @@ namespace exportsample
                         break;
 
                     case "DuplicateIntoSample":
-                        DuplicateDirectories.Add(
+                        DuplicateFiles.Add(
                             Path.GetFullPath(Path.Combine(options.Root, element.Attribute("Source").Value)),
                             element.Attribute("Destination").Value);
                         break;
@@ -60,6 +61,10 @@ namespace exportsample
 
                     case "File":
                         FilesToCopy.Add(element.Attribute("Source").Value);
+                        break;
+
+                    case "FlattenCondition":
+                        PropertiesToFlatten.Add(element.Attribute("Property").Value);
                         break;
                 }
             }

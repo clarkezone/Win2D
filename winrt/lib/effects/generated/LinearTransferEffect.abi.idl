@@ -10,7 +10,7 @@ namespace Microsoft.Graphics.Canvas.Effects
 
     [version(VERSION), uuid(43D27AD0-8937-5FDB-876A-4E91CB47540C), exclusiveto(LinearTransferEffect)]
     interface ILinearTransferEffect : IInspectable
-        requires Microsoft.Graphics.Canvas.ICanvasImage
+        requires ICanvasEffect
     {
         [propget]
         HRESULT RedOffset([out, retval] float* value);
@@ -98,10 +98,9 @@ namespace Microsoft.Graphics.Canvas.Effects
 
     };
 
-    [version(VERSION), activatable(VERSION)]
+    [STANDARD_ATTRIBUTES, activatable(VERSION)]
     runtimeclass LinearTransferEffect
     {
         [default] interface ILinearTransferEffect;
-        interface IGRAPHICSEFFECT;
     }
 }

@@ -4,9 +4,11 @@
 
 #include "pch.h"
 
+#include "CanvasLock.h"
+
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 {
-    DefaultDeviceResourceCreationAdapter::DefaultDeviceResourceCreationAdapter()
+    DefaultDeviceAdapter::DefaultDeviceAdapter()
     {
         HSTRING stringActivableClassId = 
             Wrappers::HStringReference(RuntimeClass_Windows_Foundation_PropertyValue).Get();
@@ -18,7 +20,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
     // This implementation of the adapter does the normal thing, and calls into
     // D2D. It is separated out so tests can inject their own implementation.
     //
-    ComPtr<ID2D1Factory2> DefaultDeviceResourceCreationAdapter::CreateD2DFactory(
+    ComPtr<ID2D1Factory2> DefaultDeviceAdapter::CreateD2DFactory(
         CanvasDebugLevel debugLevel)
     {
         D2D1_FACTORY_OPTIONS factoryOptions;
@@ -34,7 +36,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         return createdFactory;
     }
 
-    bool DefaultDeviceResourceCreationAdapter::TryCreateD3DDevice(
+    bool DefaultDeviceAdapter::TryCreateD3DDevice(
         bool useSoftwareRenderer,
         bool useDebugD3DDevice,
         ComPtr<ID3D11Device>* device)
@@ -69,16 +71,27 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         }
     }
 
-    //
-    // We want to find the DXGI device associated with an ID2D1Device.
-    // Unfortunately, there's no direct way to do this.  However, it is possible
-    // to figure it out by creating a bitmap and querying that for the dxgi
-    // surface and then its dxgi device.
-    //
-    // #1428 tracks getting direct support for this added to D2D.
-    //
-    ComPtr<IDXGIDevice3> DefaultDeviceResourceCreationAdapter::GetDxgiDevice(ID2D1Device1* d2dDevice)
+    ComPtr<IDXGIDevice3> DefaultDeviceAdapter::GetDxgiDevice(ID2D1Device1* d2dDevice)
     {
+        //
+        // We want to find the DXGI device associated with an ID2D1Device.
+        //
+        // On Win10, there is direct API support for doing this.
+        //
+        // On Win8, there isn't. However, it's possible to figure it out by 
+        // creating a bitmap and querying that for the dxgi
+        // surface and then its dxgi device.
+        //
+        ComPtr<IDXGIDevice3> dxgiDevice3;
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+        auto d2dDevice2 = As<ID2D1Device2>(d2dDevice);
+
+        ComPtr<IDXGIDevice> dxgiDevice;
+        ThrowIfFailed(d2dDevice2->GetDxgiDevice(&dxgiDevice));
+
+        ThrowIfFailed(dxgiDevice.As(&dxgiDevice3));
+#else
         ComPtr<ID2D1DeviceContext> deviceContext;
         ThrowIfFailed(d2dDevice->CreateDeviceContext(
             D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
@@ -97,14 +110,14 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         ComPtr<IDXGISurface> surface;
         ThrowIfFailed(bitmap->GetSurface(&surface));
 
-        ComPtr<IDXGIDevice3> device;
-        ThrowIfFailed(surface->GetDevice(IID_PPV_ARGS(&device)));
+        ThrowIfFailed(surface->GetDevice(IID_PPV_ARGS(&dxgiDevice3)));
+#endif
 
-        return device;
+        return dxgiDevice3;
     }
 
 
-    ComPtr<ICoreApplication> DefaultDeviceResourceCreationAdapter::GetCoreApplication()
+    ComPtr<ICoreApplication> DefaultDeviceAdapter::GetCoreApplication()
     {
         ComPtr<ICoreApplication> coreApplication;
         ThrowIfFailed(GetActivationFactory(
@@ -114,13 +127,14 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         return coreApplication;
     }
 
-    ComPtr<IPropertyValueStatics> DefaultDeviceResourceCreationAdapter::GetPropertyValueStatics()
+    ComPtr<IPropertyValueStatics> DefaultDeviceAdapter::GetPropertyValueStatics()
     {
         return m_propertyValueStatics;
     }
 
+
     //
-    // CanvasDeviceManager
+    // SharedDeviceState
     //
 
     void ThrowIfInvalid(CanvasDebugLevel debugLevel)
@@ -137,201 +151,85 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         }
     }
 
-    CanvasDeviceManager::CanvasDeviceManager(
-        std::shared_ptr<ICanvasDeviceResourceCreationAdapter> adapter)
-        : m_adapter(adapter)
+    SharedDeviceState::SharedDeviceState()
+        : m_adapter(CanvasDeviceAdapter::GetInstance())
+        , m_isID2D1Factory5Supported(-1)
     {
-        m_debugLevel = LoadDebugLevelProperty();
+        std::fill_n(m_sharedDeviceDebugLevels, _countof(m_sharedDeviceDebugLevels), CanvasDebugLevel::None);
+
+        m_currentDebugLevel = LoadDebugLevelProperty();
     }
 
-    CanvasDeviceManager::~CanvasDeviceManager()
+    SharedDeviceState::~SharedDeviceState()
     {
         // 
         // Commit the debug level property back into the application properties.
         //
-        SaveDebugLevelProperty(m_debugLevel);
+        SaveDebugLevelProperty(m_currentDebugLevel);
     }
 
 
-    ComPtr<CanvasDevice> CanvasDeviceManager::CreateNew(
-        bool forceSoftwareRenderer)
-    {
-        auto debugLevel = GetDebugLevel();
-
-        auto d2dFactory = m_adapter->CreateD2DFactory(debugLevel);
-
-        bool useD3DDebugDevice = debugLevel != CanvasDebugLevel::None;
-
-        return CreateNew(forceSoftwareRenderer, useD3DDebugDevice, d2dFactory.Get());
-    }
-
-
-    ComPtr<CanvasDevice> CanvasDeviceManager::CreateNew(
-        bool forceSoftwareRenderer,
-        bool useD3DDebugDevice,
-        ID2D1Factory2* d2dFactory)
-    {
-        CheckInPointer(d2dFactory);
-
-        auto dxgiDevice = MakeDXGIDevice(
-            forceSoftwareRenderer,
-            useD3DDebugDevice);
-
-        ComPtr<ID2D1Device1> d2dDevice;
-        ThrowIfFailed(d2dFactory->CreateDevice(dxgiDevice.Get(), &d2dDevice));
-        
-        auto device = Make<CanvasDevice>(
-            shared_from_this(), 
-            forceSoftwareRenderer,
-            dxgiDevice.Get(),
-            d2dDevice.Get());
-        CheckMakeResult(device);
-
-        return device;
-    }
-
-    
-    ComPtr<CanvasDevice> CanvasDeviceManager::CreateNew(
-        IDirect3DDevice* direct3DDevice)
-    {
-        CheckInPointer(direct3DDevice);
-
-        auto d2dFactory = m_adapter->CreateD2DFactory(GetDebugLevel());
-
-        return CreateNew(direct3DDevice, d2dFactory.Get());
-    }
-
-
-    ComPtr<CanvasDevice> CanvasDeviceManager::CreateNew(
-        IDirect3DDevice* direct3DDevice,
-        ID2D1Factory2* d2dFactory)
-    {
-        CheckInPointer(direct3DDevice);
-        CheckInPointer(d2dFactory);
-
-        ComPtr<IDirect3DDxgiInterfaceAccess> dxgiInterfaceAccess;
-        ThrowIfFailed(direct3DDevice->QueryInterface(IID_PPV_ARGS(&dxgiInterfaceAccess)));
-
-        ComPtr<IDXGIDevice3> dxgiDevice;
-        ThrowIfFailed(dxgiInterfaceAccess->GetInterface(IID_PPV_ARGS(&dxgiDevice)));
-
-        ComPtr<ID2D1Device1> d2dDevice;
-        ThrowIfFailed(d2dFactory->CreateDevice(dxgiDevice.Get(), &d2dDevice));
-        
-        auto device = Make<CanvasDevice>(
-            shared_from_this(), 
-            false, // Do not force software renderer
-            dxgiDevice.Get(), 
-            d2dDevice.Get());
-        CheckMakeResult(device);
-
-        return device;
-    }
-
-    
-    ComPtr<CanvasDevice> CanvasDeviceManager::CreateWrapper(
-        ID2D1Device1* d2dDevice)
-    {
-        auto dxgiDevice = m_adapter->GetDxgiDevice(d2dDevice);
-
-        auto canvasDevice = Make<CanvasDevice>(
-            shared_from_this(),
-            false, // Do not force software renderer
-            dxgiDevice.Get(),
-            d2dDevice);
-        CheckMakeResult(canvasDevice);
-        
-        return canvasDevice;
-    }
-
-
-    ComPtr<IDXGIDevice3> CanvasDeviceManager::MakeDXGIDevice(
-        bool forceSoftwareRenderer,
-        bool useDebugD3DDevice) const
-    {
-        ComPtr<ID3D11Device> d3dDevice = MakeD3D11Device(forceSoftwareRenderer, useDebugD3DDevice);
-
-        ComPtr<IDXGIDevice3> dxgiDevice;
-        ThrowIfFailed(d3dDevice.As(&dxgiDevice));
-
-        return dxgiDevice;
-    }
-
-
-    ComPtr<ID3D11Device> CanvasDeviceManager::MakeD3D11Device(
-        bool forceSoftwareRenderer,
-        bool useDebugD3DDevice) const
-    {
-        ComPtr<ID3D11Device> d3dDevice;
-
-        if (m_adapter->TryCreateD3DDevice(forceSoftwareRenderer, useDebugD3DDevice, &d3dDevice))
-        {
-            return d3dDevice;
-        }
-
-        if (!forceSoftwareRenderer)
-        {
-            // try again using the software renderer
-            if (m_adapter->TryCreateD3DDevice(true, useDebugD3DDevice, &d3dDevice))
-            {
-                return d3dDevice;
-            }
-        }
-
-        // If we end up here then we failed to create a d3d device
-        ThrowHR(E_FAIL);
-    }
-
-    ComPtr<ICanvasDevice> CanvasDeviceManager::GetSharedDevice(
+    ComPtr<ICanvasDevice> SharedDeviceState::GetSharedDevice(
         bool forceSoftwareRenderer)
     {
         //
         // This code, unlike other non-control APIs, cannot rely on the D2D
-        // API lock. CanvasDeviceManager keeps its own lock for this purpose.
+        // API lock. SharedDeviceState keeps its own lock for this purpose.
         //
-        Lock lock(m_mutex);
+        RecursiveLock lock(m_mutex);
 
         int cacheIndex = forceSoftwareRenderer ? 1 : 0;
         assert(cacheIndex < _countof(m_sharedDevices));
 
-        //
-        // If the returned device is null, it has the side effect of nulling
-        // out m_sharedDevices[cacheIndex].
-        //
         ComPtr<ICanvasDevice> device = LockWeakRef<ICanvasDevice>(m_sharedDevices[cacheIndex]);
+        ComPtr<ICanvasDevice> lostDevice;
 
-        if (m_sharedDevices[cacheIndex])
+        if (device)
         {
-            if (device && FAILED(static_cast<CanvasDevice*>(device.Get())->GetDeviceRemovedErrorCode()))
+            auto canvasDevice = static_cast<CanvasDevice*>(device.Get());
+
+            if (!canvasDevice->HasResource())
             {
-                device->RaiseDeviceLost();
-                m_sharedDevices[cacheIndex].Reset();
+                // The shared device has been closed, so we must create a new one instead.
+                device.Reset();
+            }
+            else if (FAILED(canvasDevice->GetDeviceRemovedErrorCode()))
+            {
+                // We need to raise DeviceLost when we detect a lost device, but we
+                // can't do that while we're holding the lock, so we need to do it
+                // later.
+                lostDevice = device;
+                device.Reset();
+            }
+            else if (m_currentDebugLevel != m_sharedDeviceDebugLevels[cacheIndex])
+            {
+                // Debug level has changed since this shared device was created.
+                ThrowHR(E_FAIL, Strings::SharedDeviceWrongDebugLevel);
             }
         }
 
-        if (!m_sharedDevices[cacheIndex])
+        if (!device)
         {
             //
             // Any new devices we create here will honor the debug 
             // level set at the time.
-            // But existing devices that we return do not need to match
-            // the debug level.
-            // This goes along with the debug level option not having
-            // retro-active behavior, and the fact that we expect apps to set the 
-            // debug level at start-up, before creating any devices.
             //
-            auto newDevice = Create(forceSoftwareRenderer);
-            m_sharedDevices[cacheIndex] = AsWeak(newDevice.Get());
-            return newDevice;
+            device = CanvasDevice::CreateNew(forceSoftwareRenderer);
+            m_sharedDevices[cacheIndex] = AsWeak(device.Get());
+            m_sharedDeviceDebugLevels[cacheIndex] = m_currentDebugLevel;
         }
-        else
-        {
-            assert(device);
-            return device;
-        }
+
+        lock.unlock();
+
+        // Now that the lock has been released we can safely raise DeviceLost
+        if (lostDevice)
+            lostDevice->RaiseDeviceLost();
+
+        assert(device);
+        return device;
     }
 
-    CanvasDeviceManager::PropertyData CanvasDeviceManager::GetDebugLevelPropertyData()
+    SharedDeviceState::PropertyData SharedDeviceState::GetDebugLevelPropertyData()
     {
         auto coreApplication = m_adapter->GetCoreApplication();
 
@@ -352,7 +250,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         return ret;
     }
 
-    void CanvasDeviceManager::StoreValueToPropertyKey(PropertyData key, CanvasDebugLevel debugLevel)
+    void SharedDeviceState::StoreValueToPropertyKey(PropertyData key, CanvasDebugLevel debugLevel)
     {
         uint32_t value = static_cast<uint32_t>(debugLevel);
         ComPtr<IPropertyValue> debugLevelPropertyHolder;
@@ -362,7 +260,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         ThrowIfFailed(key.PropertyMap->Insert(key.KeyName.Get(), debugLevelPropertyHolder.Get(), &inserted));
     }
 
-    CanvasDebugLevel CanvasDeviceManager::LoadDebugLevelProperty()
+    CanvasDebugLevel SharedDeviceState::LoadDebugLevelProperty()
     {
         auto propertyData = GetDebugLevelPropertyData();
 
@@ -385,42 +283,50 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         }
     }
 
-    void CanvasDeviceManager::SaveDebugLevelProperty(CanvasDebugLevel debugLevel)
+    void SharedDeviceState::SaveDebugLevelProperty(CanvasDebugLevel debugLevel)
     {
         StoreValueToPropertyKey(GetDebugLevelPropertyData(), debugLevel);
     }
 
-    CanvasDebugLevel CanvasDeviceManager::GetDebugLevel()
+    CanvasDebugLevel SharedDeviceState::GetDebugLevel()
     {
-        //
-        // m_debugLevel requires synchronization. One option might be use the existing mutex
-        // in CanvasDeviceManager- except GetSharedDevice already uses that lock to control
-        // cached devices, and the new device construction path also needs to look up the
-        // debug level. 
-        //
-        // Rather than complicate things to accomodate this, we use a
-        // std::atomic member to do this simple synchronization.
-        //
-        auto ret = m_debugLevel.load();
+        RecursiveLock lock(m_mutex);
 
-        return ret;
+        return m_currentDebugLevel;
     }
 
-    void CanvasDeviceManager::SetDebugLevel(CanvasDebugLevel const& value)
+    void SharedDeviceState::SetDebugLevel(CanvasDebugLevel const& value)
     {
-        m_debugLevel.store(value);
+        RecursiveLock lock(m_mutex);
+
+        m_currentDebugLevel = value;
+    }
+
+    // Presence of the new ID2D1Factory5 interface is used to check if we are running on a version of Windows that
+    // supports the latest D2D API functionality (AlphaMaskEffect, CrossFadeEffect, OpacityEffect, and TintEffect).
+    bool SharedDeviceState::IsID2D1Factory5Supported()
+    {
+        RecursiveLock lock(m_mutex);
+
+        if (m_isID2D1Factory5Supported < 0)
+        {
+            m_isID2D1Factory5Supported = 0;
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+            if (MaybeAs<ID2D1Factory5>(m_adapter->CreateD2DFactory(CanvasDebugLevel::None)))
+            {
+                m_isID2D1Factory5Supported = 1;
+            }
+#endif
+        }
+
+        return !!m_isID2D1Factory5Supported;
     }
 
 
     //
     // CanvasDeviceFactory
     //
-
-    std::shared_ptr<CanvasDeviceManager> CanvasDeviceFactory::CreateManager()
-    {
-        auto adapter = std::make_shared<DefaultDeviceResourceCreationAdapter>();
-        return std::make_shared<CanvasDeviceManager>(adapter);
-    }
 
     IFACEMETHODIMP CanvasDeviceFactory::CreateWithForceSoftwareRendererOption(
         boolean forceSoftwareRenderer,
@@ -430,8 +336,8 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             [&]
             {
                 CheckAndClearOutPointer(canvasDevice);
-                
-                auto newCanvasDevice = GetManager()->Create(!!forceSoftwareRenderer);
+
+                auto newCanvasDevice = CanvasDevice::CreateNew(!!forceSoftwareRenderer);
                 
                 ThrowIfFailed(newCanvasDevice.CopyTo(canvasDevice));
             });
@@ -447,7 +353,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
                 CheckInPointer(direct3DDevice);
                 CheckAndClearOutPointer(canvasDevice);
 
-                auto newCanvasDevice = GetManager()->Create(direct3DDevice);
+                auto newCanvasDevice = CanvasDevice::CreateNew(direct3DDevice);
 
                 ThrowIfFailed(newCanvasDevice.CopyTo(canvasDevice));
             });
@@ -458,17 +364,23 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
     {
         return ExceptionBoundary(
             [&]
-        {
-            CheckAndClearOutPointer(object);
+            {
+                CheckAndClearOutPointer(object);
 
-            auto newCanvasDevice = GetManager()->Create(
-                false); // Do not force software renderer
+                auto newCanvasDevice = CanvasDevice::CreateNew(
+                    false); // Do not force software renderer
 
-            ThrowIfFailed(newCanvasDevice.CopyTo(object));
-        });
+                ThrowIfFailed(newCanvasDevice.CopyTo(object));
+            });
     }
 
     IFACEMETHODIMP CanvasDeviceFactory::GetSharedDevice(
+        ICanvasDevice** device)
+    {
+        return GetSharedDeviceWithForceSoftwareRenderer(FALSE, device);
+    }
+
+    IFACEMETHODIMP CanvasDeviceFactory::GetSharedDeviceWithForceSoftwareRenderer(
         boolean forceSoftwareRenderer,
         ICanvasDevice** device)
     {
@@ -477,7 +389,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             {
                 CheckAndClearOutPointer(device);
 
-                auto sharedDevice = GetManager()->GetSharedDevice(!!forceSoftwareRenderer);
+                auto sharedDevice = SharedDeviceState::GetInstance()->GetSharedDevice(!!forceSoftwareRenderer);
 
                 ThrowIfFailed(sharedDevice.CopyTo(device));
             });
@@ -488,7 +400,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         return ExceptionBoundary(
             [&]
             {
-                GetManager()->SetDebugLevel(debugLevel);
+                SharedDeviceState::GetInstance()->SetDebugLevel(debugLevel);
             });
     }
 
@@ -498,30 +410,125 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             [&]
             {
                 CheckInPointer(debugLevel);
-                *debugLevel = GetManager()->GetDebugLevel();
+
+                *debugLevel = SharedDeviceState::GetInstance()->GetDebugLevel();
             });
     }
+
+
+    //
+    // ICanvasFactoryNative.
+    //
+    // This is not really related to CanvasDevice: we just attach it to the factory
+    // interface to give Microsoft.Graphics.Canvas.native.h a convenient way to access it.
+    //
+
+    IFACEMETHODIMP CanvasDeviceFactory::GetOrCreate(ICanvasDevice* device, IUnknown* resource, float dpi, IInspectable** wrapper)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                CheckInPointer(resource);
+                CheckAndClearOutPointer(wrapper);
+
+                auto result = ResourceManager::GetOrCreate(device, resource, dpi);
+
+                ThrowIfFailed(result.CopyTo(wrapper));
+            });
+    }
+
 
     //
     // CanvasDevice
     //
 
     CanvasDevice::CanvasDevice(
-        std::shared_ptr<CanvasDeviceManager> deviceManager,
-        bool forceSoftwareRenderer,
+        ID2D1Device1* d2dDevice,
         IDXGIDevice3* dxgiDevice,
-        ID2D1Device1* d2dDevice)
-        : ResourceWrapper(deviceManager, d2dDevice)
+        bool forceSoftwareRenderer)
+        : ResourceWrapper(d2dDevice)
         , m_forceSoftwareRenderer(forceSoftwareRenderer)
         , m_dxgiDevice(dxgiDevice)
+        , m_sharedState(SharedDeviceState::GetInstance())
+        , m_deviceContextPool(d2dDevice)
+#if WINVER > _WIN32_WINNT_WINBLUE
+        , m_spriteBatchQuirk(SpriteBatchQuirk::NeedsCheck)
+#endif
     {
-        CheckInPointer(dxgiDevice);
-
-        ThrowIfFailed(d2dDevice->CreateDeviceContext(
-            D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
-            &m_d2dResourceCreationDeviceContext));
+        if (!dxgiDevice)
+        {
+            auto dxgiDeviceFromD2DDevice = m_sharedState->GetAdapter()->GetDxgiDevice(d2dDevice);
+            m_dxgiDevice = dxgiDevice = dxgiDeviceFromD2DDevice.Get();
+        }
 
         InitializePrimaryOutput(dxgiDevice);
+    }
+
+    ComPtr<CanvasDevice> CanvasDevice::CreateNew(
+        bool forceSoftwareRenderer)
+    {
+        auto sharedState = SharedDeviceState::GetInstance();
+
+        auto debugLevel = sharedState->GetDebugLevel();
+        bool useDebugD3DDevice = debugLevel != CanvasDebugLevel::None;
+
+        auto d2dFactory = sharedState->GetAdapter()->CreateD2DFactory(debugLevel);
+
+        auto dxgiDevice = As<IDXGIDevice3>(MakeD3D11Device(sharedState->GetAdapter(), forceSoftwareRenderer, useDebugD3DDevice));
+
+        ComPtr<ID2D1Device1> d2dDevice;
+        ThrowIfFailed(d2dFactory->CreateDevice(dxgiDevice.Get(), &d2dDevice));
+
+        auto device = Make<CanvasDevice>(d2dDevice.Get(), dxgiDevice.Get(), forceSoftwareRenderer);
+        CheckMakeResult(device);
+
+        return device;
+    }
+
+    ComPtr<CanvasDevice> CanvasDevice::CreateNew(
+        IDirect3DDevice* direct3DDevice)
+    {
+        CheckInPointer(direct3DDevice);
+
+        auto sharedState = SharedDeviceState::GetInstance();
+
+        auto d2dFactory = sharedState->GetAdapter()->CreateD2DFactory(sharedState->GetDebugLevel());
+
+        ComPtr<IDXGIDevice3> dxgiDevice;
+        ThrowIfFailed(As<IDirect3DDxgiInterfaceAccess>(direct3DDevice)->GetInterface(IID_PPV_ARGS(&dxgiDevice)));
+
+        ComPtr<ID2D1Device1> d2dDevice;
+        ThrowIfFailed(d2dFactory->CreateDevice(dxgiDevice.Get(), &d2dDevice));
+
+        auto device = Make<CanvasDevice>(d2dDevice.Get(), dxgiDevice.Get());
+        CheckMakeResult(device);
+
+        return device;
+    }
+
+    ComPtr<ID3D11Device> CanvasDevice::MakeD3D11Device(
+        CanvasDeviceAdapter* adapter,
+        bool forceSoftwareRenderer,
+        bool useDebugD3DDevice)
+    {
+        ComPtr<ID3D11Device> d3dDevice;
+
+        if (adapter->TryCreateD3DDevice(forceSoftwareRenderer, useDebugD3DDevice, &d3dDevice))
+        {
+            return d3dDevice;
+        }
+
+        if (!forceSoftwareRenderer)
+        {
+            // try again using the software renderer
+            if (adapter->TryCreateD3DDevice(true, useDebugD3DDevice, &d3dDevice))
+            {
+                return d3dDevice;
+            }
+        }
+
+        // If we end up here then we failed to create a d3d device
+        ThrowHR(E_FAIL);
     }
 
     ComPtr<ID2D1Factory2> CanvasDevice::GetD2DFactory()
@@ -545,10 +552,8 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
                 CheckInPointer(value);
                 GetResource();  // this ensures that Close() hasn't been called
                 *value = m_forceSoftwareRenderer;
-                return S_OK;
             });
     }
-
 
     IFACEMETHODIMP CanvasDevice::get_MaximumBitmapSizeInPixels(int32_t* value)
     {
@@ -556,13 +561,75 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             [&]
             {
                 CheckInPointer(value);
-
-                auto& deviceContext = m_d2dResourceCreationDeviceContext.EnsureNotClosed();
+                
+                auto deviceContext = GetResourceCreationDeviceContext();
                 UINT32 maximumBitmapSize = deviceContext->GetMaximumBitmapSize();
 
                 assert(maximumBitmapSize <= INT_MAX);
 
                 *value = static_cast<int32_t>(maximumBitmapSize);
+            });
+    }
+
+    IFACEMETHODIMP CanvasDevice::IsPixelFormatSupported(DirectXPixelFormat pixelFormat, boolean* value)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                CheckInPointer(value);
+                
+                *value = !!GetResourceCreationDeviceContext()->IsDxgiFormatSupported(static_cast<DXGI_FORMAT>(pixelFormat));
+            });
+    }
+
+    IFACEMETHODIMP CanvasDevice::IsBufferPrecisionSupported(CanvasBufferPrecision bufferPrecision, boolean* value)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                CheckInPointer(value);
+                
+                *value = !!GetResourceCreationDeviceContext()->IsBufferPrecisionSupported(ToD2DBufferPrecision(bufferPrecision));
+            });
+    }
+
+    IFACEMETHODIMP CanvasDevice::get_MaximumCacheSize(UINT64* value)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                CheckInPointer(value);
+
+                *value = GetResource()->GetMaximumTextureMemory();
+            });
+    }
+
+    IFACEMETHODIMP CanvasDevice::put_MaximumCacheSize(UINT64 value)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                GetResource()->SetMaximumTextureMemory(value);
+            });
+    }
+
+    IFACEMETHODIMP CanvasDevice::get_LowPriority(boolean* value)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                CheckInPointer(value);
+     
+                *value = (GetResource()->GetRenderingPriority() == D2D1_RENDERING_PRIORITY_LOW);
+            });
+    }
+
+    IFACEMETHODIMP CanvasDevice::put_LowPriority(boolean value)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                GetResource()->SetRenderingPriority(value ? D2D1_RENDERING_PRIORITY_LOW : D2D1_RENDERING_PRIORITY_NORMAL);
             });
     }
 
@@ -624,24 +691,40 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             {
                 if (SUCCEEDED(GetDeviceRemovedErrorCode())) // Also ensures that Close() hasn't been called
                 {
-                    ThrowHR(E_INVALIDARG, HStringReference(Strings::DeviceExpectedToBeLost).Get());
+                    ThrowHR(E_INVALIDARG, Strings::DeviceExpectedToBeLost);
                 }
 
                 ThrowIfFailed(m_deviceLostEventList.InvokeAll(this, nullptr));
             });
     }
 
+    IFACEMETHODIMP CanvasDevice::Lock(ICanvasLock** value)
+    {
+        return ExceptionBoundary(
+            [&]
+            {
+                auto factory = GetD2DFactory();
+
+                auto lock = Make<CanvasLock>(As<ID2D1Multithread>(factory).Get());
+                CheckMakeResult(lock);
+                
+                ThrowIfFailed(lock.CopyTo(value));
+            });
+    }
+
     IFACEMETHODIMP CanvasDevice::Close()
     {
-        HRESULT hr = ResourceWrapper::Close();
-        if (FAILED(hr))
-            return hr;
-        
-        m_dxgiDevice.Close();
-        m_d2dResourceCreationDeviceContext.Close();
-        m_primaryOutput.Reset();
+        return ExceptionBoundary(
+            [&]
+            {
+                m_deviceContextPool.Close();
+                ThrowIfFailed(this->ResourceWrapper::Close()); // 'this->' is workaround for VS2013 calling with bad 'this' pointer
 
-        return S_OK;
+                m_dxgiDevice.Close();
+                m_primaryOutput.Reset();
+                m_sharedState.reset();
+                m_histogramEffect.Reset();
+            });
     }
 
     ComPtr<ID2D1Device1> CanvasDevice::GetD2DDevice()
@@ -649,7 +732,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         return GetResource();
     }
 
-    ComPtr<ID2D1DeviceContext1> CanvasDevice::CreateDeviceContext()
+    ComPtr<ID2D1DeviceContext1> CanvasDevice::CreateDeviceContextForDrawingSession()
     {
         ComPtr<ID2D1DeviceContext1> dc;
         ThrowIfFailed(GetResource()->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &dc));
@@ -658,9 +741,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
     ComPtr<ID2D1SolidColorBrush> CanvasDevice::CreateSolidColorBrush(D2D1_COLOR_F const& color)
     {
-        // TODO #802: this isn't very threadsafe - we should really have a different
-        // resource creation context per-thread.
-        auto deviceContext = m_d2dResourceCreationDeviceContext.EnsureNotClosed();
+        auto deviceContext = GetResourceCreationDeviceContext();
 
         ComPtr<ID2D1SolidColorBrush> brush;
         ThrowIfFailed(deviceContext->CreateSolidColorBrush(color, &brush));
@@ -668,23 +749,200 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         return brush;
     }
 
+    ComPtr<ID2D1Bitmap1> CanvasDevice::CreateBitmapFromWicBitmap(
+        ID2D1DeviceContext* deviceContext,
+        IWICBitmapSource* wicBitmapSource,
+        float dpi,
+        CanvasAlphaMode alpha)
+    {
+        D2D1_BITMAP_PROPERTIES1 bitmapProperties = D2D1::BitmapProperties1();
+        bitmapProperties.pixelFormat.alphaMode = ToD2DAlphaMode(alpha);
+        bitmapProperties.dpiX = bitmapProperties.dpiY = dpi;
+
+        uint32_t width, height;
+        ThrowIfFailed(wicBitmapSource->GetSize(&width, &height));
+
+        ComPtr<ID2D1Bitmap1> bitmap;
+        HRESULT hr = deviceContext->CreateBitmapFromWicBitmap(wicBitmapSource, &bitmapProperties, &bitmap);
+        ThrowIfCreateSurfaceFailed(hr, L"CanvasBitmap", width, height);
+
+        return bitmap;
+    }
+
+    ComPtr<ID2D1Bitmap1> CanvasDevice::CreateBitmapFromDdsFrame(
+        ID2D1DeviceContext* deviceContext,
+        IWICBitmapSource* wicBitmapSource,
+        IWICDdsFrameDecode* ddsFrame,
+        float dpi,
+        CanvasAlphaMode alpha)
+    {
+        if (alpha != CanvasAlphaMode::Premultiplied)
+            ThrowHR(E_INVALIDARG);
+
+        WICDdsFormatInfo info;
+        ThrowIfFailed(ddsFrame->GetFormatInfo(&info));
+
+        unsigned width;
+        unsigned height;
+        ThrowIfFailed(wicBitmapSource->GetSize(&width, &height));
+
+        //
+        // Explicitly validate that the width/height are a multiple of 4.  The
+        // CreateBitmap call below will fail with E_INVALIDARG if they're not,
+        // but this gives us a chance to produce a more appropriate error
+        // message.
+        //
+        auto blockSize = GetBlockSize(info.DxgiFormat);
+
+        if ((width % blockSize) != 0 || (height % blockSize) != 0)
+        {
+            ThrowHR(E_FAIL, Strings::BlockCompressedDimensionsMustBeMultipleOf4);
+        }
+
+        D2D1_BITMAP_PROPERTIES1 properties = D2D1::BitmapProperties1();
+        properties.pixelFormat.format = info.DxgiFormat;
+        properties.pixelFormat.alphaMode = D2D1_ALPHA_MODE_PREMULTIPLIED;
+        properties.dpiX = properties.dpiY = dpi;
+
+        auto bytesPerRow = width / blockSize * GetBytesPerBlock(info.DxgiFormat);
+        auto totalBytes = height / blockSize * bytesPerRow;
+
+        //
+        // We manually CreateBitmap and copy blocks into it, as opposed to using
+        // CreateBitmapFromWicBitmap.
+        //
+        // This is because CreateBitmapFromWicBitmap is very strict about which
+        // formats it supports.  If it cannot be sure that the DDS was intended
+        // to be used with premultiplied alpha then it will fail.  This means
+        // that the DDS DX10 header extension must be present.  Unfortunately,
+        // many popular DDS generators don't set this header.
+        //
+        // The net result here is that otherwise correct images saved from
+        // Photoshop, Paint.NET, Visual Studio etc. cannot be loaded.  Doing
+        // this ourselves means that we always treat the images as if they
+        // contained premultiplied alpha.
+        //
+        // This does mean that it is possible to load a non-premultiplied image
+        // and have it display incorrectly because it was assumed to be
+        // premultiplied.
+        //
+        std::vector<uint8_t> blockData(totalBytes);
+
+        ThrowIfFailed(ddsFrame->CopyBlocks(
+            nullptr, // null bounds == entire image
+            bytesPerRow,
+            totalBytes,
+            blockData.data()));
+
+        ComPtr<ID2D1Bitmap1> bitmap;
+        HRESULT hr = deviceContext->CreateBitmap(
+            D2D1_SIZE_U{ width, height },
+            blockData.data(),
+            bytesPerRow,
+            properties,
+            &bitmap);
+        
+        ThrowIfCreateSurfaceFailed(hr, L"CanvasBitmap", width, height);
+
+        return bitmap;
+    }
+
     ComPtr<ID2D1Bitmap1> CanvasDevice::CreateBitmapFromWicResource(
         IWICBitmapSource* wicBitmapSource,
         float dpi,
         CanvasAlphaMode alpha)
     {
-        auto deviceContext = m_d2dResourceCreationDeviceContext.EnsureNotClosed();
+        auto deviceContext = GetResourceCreationDeviceContext();
 
-        D2D1_BITMAP_PROPERTIES1 bitmapProperties = D2D1::BitmapProperties1();
-        bitmapProperties.pixelFormat.alphaMode = ToD2DAlphaMode(alpha);
-        bitmapProperties.dpiX = bitmapProperties.dpiY = dpi;
-
-        ComPtr<ID2D1Bitmap1> bitmap;
-        ThrowIfFailed(deviceContext->CreateBitmapFromWicBitmap(wicBitmapSource, &bitmapProperties, &bitmap));
-
-        return bitmap;
+        if (auto ddsFrame = MaybeAs<IWICDdsFrameDecode>(wicBitmapSource))
+            return CreateBitmapFromDdsFrame(deviceContext.Get(), wicBitmapSource, ddsFrame.Get(), dpi, alpha);
+        else
+            return CreateBitmapFromWicBitmap(deviceContext.Get(), wicBitmapSource, dpi, alpha);
     }
 
+    ComPtr<ID2D1Bitmap1> CanvasDevice::CreateBitmapFromBytes(
+        uint8_t* bytes,
+        uint32_t pitch,
+        int32_t widthInPixels,
+        int32_t heightInPixels,
+        float dpi,
+        DirectXPixelFormat format,
+        CanvasAlphaMode alphaMode)
+    {
+        auto deviceContext = GetResourceCreationDeviceContext();
+
+        D2D1_BITMAP_PROPERTIES1 bitmapProperties = D2D1::BitmapProperties1();
+        bitmapProperties.pixelFormat.alphaMode = ToD2DAlphaMode(alphaMode);
+        bitmapProperties.pixelFormat.format = static_cast<DXGI_FORMAT>(format);
+        bitmapProperties.dpiX = dpi;
+        bitmapProperties.dpiY = dpi;
+
+        auto size = D2D1::SizeU(widthInPixels, heightInPixels);
+
+        ComPtr<ID2D1Bitmap1> d2dBitmap;
+        HRESULT hr = deviceContext->CreateBitmap(
+            size,
+            bytes,
+            pitch,
+            &bitmapProperties,
+            &d2dBitmap);
+
+        ThrowIfCreateSurfaceFailed(hr, L"CanvasBitmap", widthInPixels, heightInPixels);
+
+        return d2dBitmap;
+    }
+
+    ComPtr<ID2D1Bitmap1> CanvasDevice::CreateBitmapFromSurface(
+        IDirect3DSurface* surface,
+        float dpi,
+        CanvasAlphaMode alphaMode)
+    {        
+        auto deviceContext = GetResourceCreationDeviceContext();
+
+        auto dxgiSurface = GetDXGIInterface<IDXGISurface2>(surface);
+
+        D2D1_BITMAP_PROPERTIES1 bitmapProperties = D2D1::BitmapProperties1();
+        bitmapProperties.pixelFormat.alphaMode = ToD2DAlphaMode(alphaMode);
+        bitmapProperties.dpiX = dpi;
+        bitmapProperties.dpiY = dpi;
+
+        // D2D requires bitmap flags that match the surface format, if a
+        // D2D1_BITMAP_PROPERTIES1 is specified.
+        //
+        ComPtr<ID3D11Texture2D> parentResource = GetTexture2DForDXGISurface(dxgiSurface.Get());
+
+        ComPtr<IDXGIResource1> dxgiResource;
+        ThrowIfFailed(parentResource.As(&dxgiResource));
+
+        DXGI_USAGE dxgiUsage;
+        ThrowIfFailed(dxgiResource->GetUsage(&dxgiUsage));
+
+        D3D11_TEXTURE2D_DESC texture2DDesc;
+        parentResource->GetDesc(&texture2DDesc);
+
+        if (texture2DDesc.BindFlags & D3D11_BIND_RENDER_TARGET && !(dxgiUsage & DXGI_USAGE_READ_ONLY))
+        {
+            bitmapProperties.bitmapOptions |= D2D1_BITMAP_OPTIONS_TARGET;
+        }
+
+        if (!(texture2DDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE))
+        {
+            bitmapProperties.bitmapOptions |= D2D1_BITMAP_OPTIONS_CANNOT_DRAW;
+        }
+
+        if (texture2DDesc.Usage & D3D11_USAGE_STAGING && texture2DDesc.CPUAccessFlags & D3D11_CPU_ACCESS_READ)
+        {
+            bitmapProperties.bitmapOptions |= D2D1_BITMAP_OPTIONS_CPU_READ;
+        }
+        
+        ComPtr<ID2D1Bitmap1> d2dBitmap;
+        ThrowIfFailed(deviceContext->CreateBitmapFromDxgiSurface(
+            dxgiSurface.Get(),
+            &bitmapProperties,
+            &d2dBitmap));
+
+        return d2dBitmap;
+    }
 
     ComPtr<ID2D1Bitmap1> CanvasDevice::CreateRenderTargetBitmap(
         float width,
@@ -693,7 +951,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         DirectXPixelFormat format,
         CanvasAlphaMode alpha)
     {
-        auto deviceContext = m_d2dResourceCreationDeviceContext.EnsureNotClosed();
+        auto deviceContext = GetResourceCreationDeviceContext();
 
         ComPtr<ID2D1Bitmap1> bitmap;
         D2D1_BITMAP_PROPERTIES1 bitmapProperties = D2D1::BitmapProperties1();
@@ -706,12 +964,14 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         auto pixelWidth = static_cast<uint32_t>(SizeDipsToPixels(width, dpi));
         auto pixelHeight = static_cast<uint32_t>(SizeDipsToPixels(height, dpi));
 
-        ThrowIfFailed(deviceContext->CreateBitmap(
+        HRESULT hr = deviceContext->CreateBitmap(
             D2D1_SIZE_U{ pixelWidth, pixelHeight },
             nullptr, // data 
             0,  // data pitch
-            &bitmapProperties, 
-            &bitmap));
+            &bitmapProperties,
+            &bitmap);
+
+        ThrowIfCreateSurfaceFailed(hr, L"CanvasRenderTarget", pixelWidth, pixelHeight);
 
         return bitmap;
     }
@@ -729,7 +989,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
     ComPtr<ID2D1BitmapBrush1> CanvasDevice::CreateBitmapBrush(ID2D1Bitmap1* bitmap)
     {
-        auto deviceContext = m_d2dResourceCreationDeviceContext.EnsureNotClosed();
+        auto deviceContext = GetResourceCreationDeviceContext();
 
         ComPtr<ID2D1BitmapBrush1> bitmapBrush;
         ThrowIfFailed(deviceContext->CreateBitmapBrush(bitmap, &bitmapBrush));
@@ -739,21 +999,12 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
     ComPtr<ID2D1ImageBrush> CanvasDevice::CreateImageBrush(ID2D1Image* image)
     {
-        auto deviceContext = m_d2dResourceCreationDeviceContext.EnsureNotClosed();
+        auto deviceContext = GetResourceCreationDeviceContext();
 
         ComPtr<ID2D1ImageBrush> imageBrush;
         ThrowIfFailed(deviceContext->CreateImageBrush(image, D2D1::ImageBrushProperties(D2D1::RectF()), &imageBrush));
 
         return imageBrush;
-    }
-
-    ComPtr<ID2D1Image> CanvasDevice::GetD2DImage(ICanvasImage* canvasImage)
-    {
-        ComPtr<ICanvasImageInternal> imageInternal;
-        ThrowIfFailed(canvasImage->QueryInterface(imageInternal.GetAddressOf()));
-
-        auto deviceContext = m_d2dResourceCreationDeviceContext.EnsureNotClosed();
-        return imageInternal->GetD2DImage(deviceContext.Get());
     }
 
     IFACEMETHODIMP CanvasDevice::Trim()
@@ -765,6 +1016,8 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
                 auto& dxgiDevice = m_dxgiDevice.EnsureNotClosed();
 
                 D2DResourceLock lock(d2dDevice.Get());
+
+                d2dDevice->ClearResources();
 
                 dxgiDevice->Trim();
             });
@@ -782,34 +1035,25 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
     }
 
     ComPtr<ID2D1GradientStopCollection1> CanvasDevice::CreateGradientStopCollection(
-        uint32_t gradientStopCount,
-        CanvasGradientStop const* gradientStops,
-        CanvasEdgeBehavior edgeBehavior,
-        CanvasColorSpace preInterpolationSpace,
-        CanvasColorSpace postInterpolationSpace,
-        CanvasBufferPrecision bufferPrecision,
-        CanvasAlphaMode alphaMode)
+        std::vector<D2D1_GRADIENT_STOP>&& stops,
+        D2D1_COLOR_SPACE preInterpolationSpace,
+        D2D1_COLOR_SPACE postInterpolationSpace,
+        D2D1_BUFFER_PRECISION bufferPrecision,
+        D2D1_EXTEND_MODE extendMode,
+        D2D1_COLOR_INTERPOLATION_MODE interpolationMode)
     {
-        auto deviceContext = m_d2dResourceCreationDeviceContext.EnsureNotClosed();
-
-        std::vector<D2D1_GRADIENT_STOP> d2dGradientStops;
-        d2dGradientStops.resize(gradientStopCount);
-        for (uint32_t i = 0; i < gradientStopCount; ++i)
-        {
-            d2dGradientStops[i].color = ToD2DColor(gradientStops[i].Color);
-            d2dGradientStops[i].position = gradientStops[i].Position;
-        }
+        auto deviceContext = GetResourceCreationDeviceContext();
 
         ComPtr<ID2D1GradientStopCollection1> gradientStopCollection;
         ThrowIfFailed(deviceContext->CreateGradientStopCollection(
-            &d2dGradientStops[0],
-            gradientStopCount,
-            static_cast<D2D1_COLOR_SPACE>(preInterpolationSpace),
-            static_cast<D2D1_COLOR_SPACE>(postInterpolationSpace),
-            ToD2DBufferPrecision(bufferPrecision),
-            static_cast<D2D1_EXTEND_MODE>(edgeBehavior),
-            ToD2DColorInterpolation(alphaMode),
-            gradientStopCollection.GetAddressOf()));
+            stops.data(),
+            static_cast<uint32_t>(stops.size()),
+            preInterpolationSpace,
+            postInterpolationSpace,
+            bufferPrecision,
+            extendMode,
+            interpolationMode,
+            &gradientStopCollection));
 
         return gradientStopCollection;
     }
@@ -817,7 +1061,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
     ComPtr<ID2D1LinearGradientBrush> CanvasDevice::CreateLinearGradientBrush(
         ID2D1GradientStopCollection1* stopCollection)
     {
-        auto deviceContext = m_d2dResourceCreationDeviceContext.EnsureNotClosed();
+        auto deviceContext = GetResourceCreationDeviceContext();
 
         D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES linearGradientBrushProperties = D2D1::LinearGradientBrushProperties(
             D2D1::Point2F(),
@@ -836,7 +1080,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
     ComPtr<ID2D1RadialGradientBrush> CanvasDevice::CreateRadialGradientBrush(
         ID2D1GradientStopCollection1* stopCollection)
     {
-        auto deviceContext = m_d2dResourceCreationDeviceContext.EnsureNotClosed();
+        auto deviceContext = GetResourceCreationDeviceContext();
 
         D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES radialGradientBrushProperties = D2D1::RadialGradientBrushProperties(
             D2D1::Point2F(),
@@ -891,7 +1135,10 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         swapChainDesc.AlphaMode = ToDxgiAlphaMode(alphaMode);
 
         ComPtr<IDXGISwapChain1> swapChain;
-        ThrowIfFailed(createFn(dxgiFactory.Get(), dxgiDevice.Get(), &swapChainDesc, &swapChain));
+        ThrowIfCreateSurfaceFailed(
+            createFn(dxgiFactory.Get(), dxgiDevice.Get(), &swapChainDesc, &swapChain),
+            L"CanvasSwapChain",
+            swapChainDesc.Width, swapChainDesc.Height);
 
         return swapChain;
     }
@@ -938,7 +1185,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
     ComPtr<ID2D1CommandList> CanvasDevice::CreateCommandList()
     {
-        auto deviceContext = m_d2dResourceCreationDeviceContext.EnsureNotClosed();
+        auto deviceContext = GetResourceCreationDeviceContext();
 
         ComPtr<ID2D1CommandList> cl;
         ThrowIfFailed(deviceContext->CreateCommandList(&cl));
@@ -1008,7 +1255,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
     ComPtr<ID2D1GeometryRealization> CanvasDevice::CreateFilledGeometryRealization(ID2D1Geometry* geometry, float flatteningTolerance)
     {
-        auto deviceContext = m_d2dResourceCreationDeviceContext.EnsureNotClosed();
+        auto deviceContext = GetResourceCreationDeviceContext();
 
         ComPtr<ID2D1GeometryRealization> geometryRealization;
         ThrowIfFailed(deviceContext->CreateFilledGeometryRealization(geometry, flatteningTolerance, &geometryRealization));
@@ -1022,7 +1269,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         ID2D1StrokeStyle* strokeStyle,
         float flatteningTolerance)
     {
-        auto deviceContext = m_d2dResourceCreationDeviceContext.EnsureNotClosed();
+        auto deviceContext = GetResourceCreationDeviceContext();
 
         ComPtr<ID2D1GeometryRealization> geometryRealization;
         ThrowIfFailed(deviceContext->CreateStrokedGeometryRealization(
@@ -1035,11 +1282,39 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         return geometryRealization;
     }
 
-    ComPtr<ID2D1DeviceContext1> CanvasDevice::GetResourceCreationDeviceContext()
+    ComPtr<ID2D1PrintControl> CanvasDevice::CreatePrintControl(
+        IPrintDocumentPackageTarget* target,
+        float dpi)
     {
-        auto deviceContext = m_d2dResourceCreationDeviceContext.EnsureNotClosed();
+        ComPtr<IWICImagingFactory> wicFactory;
+        ThrowIfFailed(
+            CoCreateInstance(
+            CLSID_WICImagingFactory,
+            nullptr,
+            CLSCTX_INPROC_SERVER,
+            IID_PPV_ARGS(&wicFactory)));
 
-        return deviceContext;
+        auto properties = D2D1_PRINT_CONTROL_PROPERTIES{
+            D2D1_PRINT_FONT_SUBSET_MODE_DEFAULT,
+            dpi,
+            D2D1_COLOR_SPACE_SRGB
+        };
+
+        auto& d2dDevice = GetResource();
+
+        ComPtr<ID2D1PrintControl> printControl;
+        ThrowIfFailed(d2dDevice->CreatePrintControl(
+            wicFactory.Get(),
+            target,
+            properties,
+            &printControl));
+
+        return printControl;
+    }
+
+    DeviceContextLease CanvasDevice::GetResourceCreationDeviceContext()
+    {
+        return m_deviceContextPool.TakeLease();
     }
 
     void CanvasDevice::InitializePrimaryOutput(IDXGIDevice3* dxgiDevice)
@@ -1082,6 +1357,126 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
     {
         return m_primaryOutput;
     }
+
+    void CanvasDevice::ThrowIfCreateSurfaceFailed(HRESULT hr, wchar_t const* typeName, uint32_t width, uint32_t height)
+    {
+        if (hr == E_INVALIDARG)
+        {
+            auto maximumBitmapSize = GetResourceCreationDeviceContext()->GetMaximumBitmapSize();
+
+            if (width > maximumBitmapSize || height > maximumBitmapSize)
+            {
+                WinStringBuilder message;
+                message.Format(Strings::SurfaceTooBig, typeName, width, height, maximumBitmapSize);
+                ThrowHR(E_INVALIDARG, message.Get());
+            }
+        }
+
+        ThrowIfFailed(hr);
+    }
+
+    static ComPtr<ID2D1Effect> InterlockedExchangeComPtr(ComPtr<ID2D1Effect>& target, ComPtr<ID2D1Effect>&& value)
+    {
+        auto addressOfTarget = reinterpret_cast<void* volatile*>(target.GetAddressOf());
+
+        auto exchanged = InterlockedExchangePointer(addressOfTarget, value.Detach());
+
+        ComPtr<ID2D1Effect> result;
+        result.Attach(reinterpret_cast<ID2D1Effect*>(exchanged));
+        return result;
+    }
+
+    ComPtr<ID2D1Effect> CanvasDevice::LeaseHistogramEffect(ID2D1DeviceContext* d2dContext)
+    {
+        ComPtr<ID2D1Effect> effect = InterlockedExchangeComPtr(m_histogramEffect, nullptr);
+
+        if (!effect)
+        {
+            ThrowIfFailed(d2dContext->CreateEffect(CLSID_D2D1Histogram, &effect));
+        }
+
+        return effect;
+    }
+
+    void CanvasDevice::ReleaseHistogramEffect(ComPtr<ID2D1Effect>&& effect)
+    {
+        InterlockedExchangeComPtr(m_histogramEffect, std::move(effect));
+    }
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+
+    ComPtr<ID2D1GradientMesh> CanvasDevice::CreateGradientMesh(
+        D2D1_GRADIENT_MESH_PATCH const* patches,
+        uint32_t patchCount)
+    {
+        auto deviceContext = GetResourceCreationDeviceContext();
+
+        auto deviceContext2 = As<ID2D1DeviceContext2>(deviceContext.Get());
+
+        ComPtr<ID2D1GradientMesh> gradientMesh;
+
+        ThrowIfFailed(deviceContext2->CreateGradientMesh(patches, patchCount, &gradientMesh));
+
+        return gradientMesh;
+    }
+
+    bool CanvasDevice::IsSpriteBatchQuirkRequired()
+    {
+        //
+        // A driver bug for older Qualcomm devices (eg Lumia 640) has the net
+        // effect that sprite batches are limited to 256 sprites.  Win2D works
+        // around this limiting the sprite batch size on these devices.
+        //
+        
+        std::unique_lock<std::mutex> lock(m_quirkMutex);
+
+        // The result of the quirk check is cached per-device to avoid
+        // performing the check more than necessary.
+        if (m_spriteBatchQuirk == SpriteBatchQuirk::NeedsCheck)
+        {
+            m_spriteBatchQuirk = DetectIfSpriteBatchQuirkIsRequired()
+                ? SpriteBatchQuirk::Required
+                : SpriteBatchQuirk::NotRequired;
+        }
+
+        switch (m_spriteBatchQuirk)
+        {
+        case SpriteBatchQuirk::Required:
+            return true;
+
+        case SpriteBatchQuirk::NotRequired:
+            return false;
+
+        default:
+            assert(false);
+            ThrowHR(E_UNEXPECTED);
+        }
+    }
+
+    bool CanvasDevice::DetectIfSpriteBatchQuirkIsRequired()
+    {
+        D2DResourceLock d2dLock(GetResource().Get());
+            
+        auto& dxgiDevice = m_dxgiDevice.EnsureNotClosed();
+
+        ComPtr<IDXGIAdapter> dxgiAdapter;
+        ThrowIfFailed(dxgiDevice->GetAdapter(&dxgiAdapter));
+
+        DXGI_ADAPTER_DESC adapterDesc;
+        ThrowIfFailed(dxgiAdapter->GetDesc(&adapterDesc));
+
+        if (adapterDesc.VendorId == QUALCOMM_VENDOR_ID)
+        {
+            auto featureLevel = As<ID3D11Device>(dxgiDevice)->GetFeatureLevel();
+
+            if (featureLevel <= D3D_FEATURE_LEVEL_9_3)
+                return true;
+        }
+
+        return false;
+    }
+
+#endif
 
     HRESULT CanvasDevice::GetDeviceRemovedErrorCode()
     {

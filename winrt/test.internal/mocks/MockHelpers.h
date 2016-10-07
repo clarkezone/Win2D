@@ -197,9 +197,14 @@ public:
 
     void SetExpectedCalls(int value)
     {
+        SetExpectedCalls(value, value);
+    }
+
+    void SetExpectedCalls(int minCalls, int maxCalls)
+    {
         Validate();
-        m_minimumCallCount = value;
-        m_maximumCallCount = value;
+        m_minimumCallCount = minCalls;
+        m_maximumCallCount = maxCalls;
         m_actualCallCount = 0;
     }
 
@@ -310,6 +315,11 @@ public:
         m_expectation->SetExpectedCalls(value);
     }
 
+    void SetExpectedCalls(int minCalls, int maxCalls)
+    {
+        m_expectation->SetExpectedCalls(minCalls, maxCalls);
+    }
+
     void ExpectAtLeastOneCall()
     {
         m_expectation->ExpectAtLeastOneCall();
@@ -377,7 +387,12 @@ public:
 
     void SetExpectedCalls(int value, std::function<FN> mock = nullptr)
     {
-        CallCounter::SetExpectedCalls(value);
+        SetExpectedCalls(value, value, mock);
+    }
+
+    void SetExpectedCalls(int minCalls, int maxCalls, std::function<FN> mock = nullptr)
+    {
+        CallCounter::SetExpectedCalls(minCalls, maxCalls);
         m_mock = mock;
     }
 
@@ -424,9 +439,486 @@ private:
     static typename std::enable_if<std::is_void<RET>::value, RET>::type Return(T value)
     {
     }
-    
-
 };
+
+//
+// Helpers for generating mock methods
+//
+
+template<typename F>
+struct FuncInfo;
+
+template<typename R>
+struct FuncInfo<R()>
+{
+    typedef R ReturnType;
+};
+
+template<typename R, typename A0>
+struct FuncInfo<R(A0)>
+{
+    typedef R ReturnType;
+    typedef A0 Arg0Type;
+};
+
+template<typename R, typename A0, typename A1>
+struct FuncInfo<R(A0, A1)>
+{
+    typedef R ReturnType;
+    typedef A0 Arg0Type;
+    typedef A1 Arg1Type;
+};
+
+template<typename R, typename A0, typename A1, typename A2>
+struct FuncInfo<R(A0, A1, A2)>
+{
+    typedef R ReturnType;
+    typedef A0 Arg0Type;
+    typedef A1 Arg1Type;
+    typedef A2 Arg2Type;
+};
+
+template<typename R, typename A0, typename A1, typename A2, typename A3>
+struct FuncInfo<R(A0, A1, A2, A3)>
+{
+    typedef R ReturnType;
+    typedef A0 Arg0Type;
+    typedef A1 Arg1Type;
+    typedef A2 Arg2Type;
+    typedef A3 Arg3Type;
+};
+
+template<typename R, typename A0, typename A1, typename A2, typename A3, typename A4>
+struct FuncInfo<R(A0, A1, A2, A3, A4)>
+{
+    typedef R ReturnType;
+    typedef A0 Arg0Type;
+    typedef A1 Arg1Type;
+    typedef A2 Arg2Type;
+    typedef A3 Arg3Type;
+    typedef A4 Arg4Type;
+};
+
+template<typename R, typename A0, typename A1, typename A2, typename A3, typename A4, typename A5>
+struct FuncInfo<R(A0, A1, A2, A3, A4, A5)>
+{
+    typedef R ReturnType;
+    typedef A0 Arg0Type;
+    typedef A1 Arg1Type;
+    typedef A2 Arg2Type;
+    typedef A3 Arg3Type;
+    typedef A4 Arg4Type;
+    typedef A5 Arg5Type;
+};
+
+template<typename R, typename A0, typename A1, typename A2, typename A3, typename A4, typename A5, typename A6>
+struct FuncInfo<R(A0, A1, A2, A3, A4, A5, A6)>
+{
+    typedef R ReturnType;
+    typedef A0 Arg0Type;
+    typedef A1 Arg1Type;
+    typedef A2 Arg2Type;
+    typedef A3 Arg3Type;
+    typedef A4 Arg4Type;
+    typedef A5 Arg5Type;
+    typedef A6 Arg6Type;
+};
+
+template<typename R, typename A0, typename A1, typename A2, typename A3, typename A4, typename A5, typename A6, typename A7>
+struct FuncInfo<R(A0, A1, A2, A3, A4, A5, A6, A7)>
+{
+    typedef R ReturnType;
+    typedef A0 Arg0Type;
+    typedef A1 Arg1Type;
+    typedef A2 Arg2Type;
+    typedef A3 Arg3Type;
+    typedef A4 Arg4Type;
+    typedef A5 Arg5Type;
+    typedef A6 Arg6Type;
+    typedef A7 Arg7Type;
+};
+
+template<typename R, typename A0, typename A1, typename A2, typename A3, typename A4, typename A5, typename A6, typename A7, typename A8>
+struct FuncInfo<R(A0, A1, A2, A3, A4, A5, A6, A7, A8)>
+{
+    typedef R ReturnType;
+    typedef A0 Arg0Type;
+    typedef A1 Arg1Type;
+    typedef A2 Arg2Type;
+    typedef A3 Arg3Type;
+    typedef A4 Arg4Type;
+    typedef A5 Arg5Type;
+    typedef A6 Arg6Type;
+    typedef A7 Arg7Type;
+    typedef A8 Arg8Type;
+};
+
+template<typename R, typename A0, typename A1, typename A2, typename A3, typename A4, typename A5, typename A6, typename A7, typename A8, typename A9>
+struct FuncInfo<R(A0, A1, A2, A3, A4, A5, A6, A7, A8, A9)>
+{
+    typedef R ReturnType;
+    typedef A0 Arg0Type;
+    typedef A1 Arg1Type;
+    typedef A2 Arg2Type;
+    typedef A3 Arg3Type;
+    typedef A4 Arg4Type;
+    typedef A5 Arg5Type;
+    typedef A6 Arg6Type;
+    typedef A7 Arg7Type;
+    typedef A8 Arg8Type;
+    typedef A9 Arg9Type;
+};
+
+template<typename R, typename A0, typename A1, typename A2, typename A3, typename A4, typename A5, typename A6, typename A7, typename A8, typename A9, typename A10>
+struct FuncInfo<R(A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10)>
+{
+    typedef R ReturnType;
+    typedef A0 Arg0Type;
+    typedef A1 Arg1Type;
+    typedef A2 Arg2Type;
+    typedef A3 Arg3Type;
+    typedef A4 Arg4Type;
+    typedef A5 Arg5Type;
+    typedef A6 Arg6Type;
+    typedef A7 Arg7Type;
+    typedef A8 Arg8Type;
+    typedef A9 Arg9Type;
+    typedef A10 Arg10Type;
+};
+
+
+template<typename R, typename A0, typename A1, typename A2, typename A3, typename A4, typename A5, typename A6, typename A7, typename A8, typename A9, typename A10, typename A11, typename A12, typename A13, typename A14, typename A15, typename A16>
+struct FuncInfo<R(A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16)>
+{
+    typedef R ReturnType;
+    typedef A0 Arg0Type;
+    typedef A1 Arg1Type;
+    typedef A2 Arg2Type;
+    typedef A3 Arg3Type;
+    typedef A4 Arg4Type;
+    typedef A5 Arg5Type;
+    typedef A6 Arg6Type;
+    typedef A7 Arg7Type;
+    typedef A8 Arg8Type;
+    typedef A9 Arg9Type;
+    typedef A10 Arg10Type;
+    typedef A11 Arg11Type;
+    typedef A12 Arg12Type;
+    typedef A13 Arg13Type;
+    typedef A14 Arg14Type;
+    typedef A15 Arg15Type;
+    typedef A16 Arg16Type;
+};
+
+
+template<typename R, typename A0, typename A1, typename A2, typename A3, typename A4, typename A5, typename A6, typename A7, typename A8, typename A9, typename A10, typename A11, typename A12, typename A13, typename A14, typename A15, typename A16, typename A17>
+struct FuncInfo<R(A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17)>
+{
+    typedef R ReturnType;
+    typedef A0 Arg0Type;
+    typedef A1 Arg1Type;
+    typedef A2 Arg2Type;
+    typedef A3 Arg3Type;
+    typedef A4 Arg4Type;
+    typedef A5 Arg5Type;
+    typedef A6 Arg6Type;
+    typedef A7 Arg7Type;
+    typedef A8 Arg8Type;
+    typedef A9 Arg9Type;
+    typedef A10 Arg10Type;
+    typedef A11 Arg11Type;
+    typedef A12 Arg12Type;
+    typedef A13 Arg13Type;
+    typedef A14 Arg14Type;
+    typedef A15 Arg15Type;
+    typedef A16 Arg16Type;
+    typedef A17 Arg17Type;
+};
+
+
+template<typename R, typename A0, typename A1, typename A2, typename A3, typename A4, typename A5, typename A6, typename A7, typename A8, typename A9, typename A10, typename A11, typename A12, typename A13, typename A14, typename A15, typename A16, typename A17, typename A18, typename A19, typename A20>
+struct FuncInfo<R(A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17, A18, A19, A20)>
+{
+    typedef R ReturnType;
+    typedef A0 Arg0Type;
+    typedef A1 Arg1Type;
+    typedef A2 Arg2Type;
+    typedef A3 Arg3Type;
+    typedef A4 Arg4Type;
+    typedef A5 Arg5Type;
+    typedef A6 Arg6Type;
+    typedef A7 Arg7Type;
+    typedef A8 Arg8Type;
+    typedef A9 Arg9Type;
+    typedef A10 Arg10Type;
+    typedef A11 Arg11Type;
+    typedef A12 Arg12Type;
+    typedef A13 Arg13Type;
+    typedef A14 Arg14Type;
+    typedef A15 Arg15Type;
+    typedef A16 Arg16Type;
+    typedef A17 Arg17Type;
+    typedef A18 Arg18Type;
+    typedef A19 Arg19Type;
+    typedef A20 Arg20Type;
+};
+
+#define MOCK_METHOD_IMPL0(name, modifier, ...)                          \
+    virtual FuncInfo<__VA_ARGS__>::ReturnType STDMETHODCALLTYPE name() modifier override \
+    {                                                                   \
+        return name ## Method.WasCalled();                              \
+    }                                                                   \
+    CALL_COUNTER_WITH_MOCK(name ## Method, __VA_ARGS__);
+
+#define MOCK_METHOD_IMPL1(name, modifier, ...)                          \
+    virtual FuncInfo<__VA_ARGS__>::ReturnType STDMETHODCALLTYPE name(   \
+        FuncInfo<__VA_ARGS__>::Arg0Type a0) modifier override           \
+    {                                                                   \
+        return name ## Method.WasCalled(a0);                            \
+    }                                                                   \
+    CALL_COUNTER_WITH_MOCK(name ## Method, __VA_ARGS__);
+
+#define MOCK_METHOD_IMPL2(name, modifier, ...)                          \
+    virtual FuncInfo<__VA_ARGS__>::ReturnType STDMETHODCALLTYPE name(   \
+        FuncInfo<__VA_ARGS__>::Arg0Type a0,                             \
+        FuncInfo<__VA_ARGS__>::Arg1Type a1) modifier override           \
+    {                                                                   \
+        return name ## Method.WasCalled(a0, a1);                        \
+    }                                                                   \
+    CALL_COUNTER_WITH_MOCK(name ## Method, __VA_ARGS__);
+
+#define MOCK_METHOD_IMPL3(name, modifier, ...)                          \
+    virtual FuncInfo<__VA_ARGS__>::ReturnType STDMETHODCALLTYPE name(   \
+        FuncInfo<__VA_ARGS__>::Arg0Type a0,                             \
+        FuncInfo<__VA_ARGS__>::Arg1Type a1,                             \
+        FuncInfo<__VA_ARGS__>::Arg2Type a2) modifier override           \
+    {                                                                   \
+        return name ## Method.WasCalled(a0, a1, a2);                    \
+    }                                                                   \
+    CALL_COUNTER_WITH_MOCK(name ## Method, __VA_ARGS__);
+
+#define MOCK_METHOD_IMPL4(name, modifier, ...)                          \
+    virtual FuncInfo<__VA_ARGS__>::ReturnType STDMETHODCALLTYPE name(   \
+        FuncInfo<__VA_ARGS__>::Arg0Type a0,                             \
+        FuncInfo<__VA_ARGS__>::Arg1Type a1,                             \
+        FuncInfo<__VA_ARGS__>::Arg2Type a2,                             \
+        FuncInfo<__VA_ARGS__>::Arg3Type a3) modifier override           \
+    {                                                                   \
+        return name ## Method.WasCalled(a0, a1, a2, a3);                \
+    }                                                                   \
+    CALL_COUNTER_WITH_MOCK(name ## Method, __VA_ARGS__);
+
+#define MOCK_METHOD_IMPL5(name, modifier, ...)                          \
+    virtual FuncInfo<__VA_ARGS__>::ReturnType STDMETHODCALLTYPE name(   \
+        FuncInfo<__VA_ARGS__>::Arg0Type a0,                             \
+        FuncInfo<__VA_ARGS__>::Arg1Type a1,                             \
+        FuncInfo<__VA_ARGS__>::Arg2Type a2,                             \
+        FuncInfo<__VA_ARGS__>::Arg3Type a3,                             \
+        FuncInfo<__VA_ARGS__>::Arg4Type a4) modifier override           \
+    {                                                                   \
+        return name ## Method.WasCalled(a0, a1, a2, a3, a4);            \
+    }                                                                   \
+    CALL_COUNTER_WITH_MOCK(name ## Method, __VA_ARGS__);
+
+#define MOCK_METHOD_IMPL6(name, modifier, ...)                          \
+    virtual FuncInfo<__VA_ARGS__>::ReturnType STDMETHODCALLTYPE name(   \
+        FuncInfo<__VA_ARGS__>::Arg0Type a0,                             \
+        FuncInfo<__VA_ARGS__>::Arg1Type a1,                             \
+        FuncInfo<__VA_ARGS__>::Arg2Type a2,                             \
+        FuncInfo<__VA_ARGS__>::Arg3Type a3,                             \
+        FuncInfo<__VA_ARGS__>::Arg4Type a4,                             \
+        FuncInfo<__VA_ARGS__>::Arg5Type a5) modifier override           \
+    {                                                                   \
+        return name ## Method.WasCalled(a0, a1, a2, a3, a4, a5);        \
+    }                                                                   \
+    CALL_COUNTER_WITH_MOCK(name ## Method, __VA_ARGS__);
+
+#define MOCK_METHOD_IMPL7(name, modifier, ...)                          \
+    virtual FuncInfo<__VA_ARGS__>::ReturnType STDMETHODCALLTYPE name(   \
+        FuncInfo<__VA_ARGS__>::Arg0Type a0,                             \
+        FuncInfo<__VA_ARGS__>::Arg1Type a1,                             \
+        FuncInfo<__VA_ARGS__>::Arg2Type a2,                             \
+        FuncInfo<__VA_ARGS__>::Arg3Type a3,                             \
+        FuncInfo<__VA_ARGS__>::Arg4Type a4,                             \
+        FuncInfo<__VA_ARGS__>::Arg5Type a5,                             \
+        FuncInfo<__VA_ARGS__>::Arg6Type a6) modifier override           \
+    {                                                                   \
+        return name ## Method.WasCalled(a0, a1, a2, a3, a4, a5, a6);    \
+    }                                                                   \
+    CALL_COUNTER_WITH_MOCK(name ## Method, __VA_ARGS__);
+
+#define MOCK_METHOD_IMPL8(name, modifier, ...)                          \
+    virtual FuncInfo<__VA_ARGS__>::ReturnType STDMETHODCALLTYPE name(   \
+        FuncInfo<__VA_ARGS__>::Arg0Type a0,                             \
+        FuncInfo<__VA_ARGS__>::Arg1Type a1,                             \
+        FuncInfo<__VA_ARGS__>::Arg2Type a2,                             \
+        FuncInfo<__VA_ARGS__>::Arg3Type a3,                             \
+        FuncInfo<__VA_ARGS__>::Arg4Type a4,                             \
+        FuncInfo<__VA_ARGS__>::Arg5Type a5,                             \
+        FuncInfo<__VA_ARGS__>::Arg6Type a6,                             \
+        FuncInfo<__VA_ARGS__>::Arg7Type a7) modifier override           \
+    {                                                                   \
+        return name ## Method.WasCalled(a0, a1, a2, a3, a4, a5, a6, a7); \
+    }                                                                   \
+    CALL_COUNTER_WITH_MOCK(name ## Method, __VA_ARGS__);
+
+#define MOCK_METHOD_IMPL9(name, modifier, ...)                          \
+    virtual FuncInfo<__VA_ARGS__>::ReturnType STDMETHODCALLTYPE name(   \
+        FuncInfo<__VA_ARGS__>::Arg0Type a0,                             \
+        FuncInfo<__VA_ARGS__>::Arg1Type a1,                             \
+        FuncInfo<__VA_ARGS__>::Arg2Type a2,                             \
+        FuncInfo<__VA_ARGS__>::Arg3Type a3,                             \
+        FuncInfo<__VA_ARGS__>::Arg4Type a4,                             \
+        FuncInfo<__VA_ARGS__>::Arg5Type a5,                             \
+        FuncInfo<__VA_ARGS__>::Arg6Type a6,                             \
+        FuncInfo<__VA_ARGS__>::Arg7Type a7,                             \
+        FuncInfo<__VA_ARGS__>::Arg8Type a8) modifier override           \
+    {                                                                   \
+        return name ## Method.WasCalled(a0, a1, a2, a3, a4, a5, a6, a7, a8); \
+    }                                                                   \
+    CALL_COUNTER_WITH_MOCK(name ## Method, __VA_ARGS__);
+
+#define MOCK_METHOD_IMPL10(name, modifier, ...)                         \
+    virtual FuncInfo<__VA_ARGS__>::ReturnType STDMETHODCALLTYPE name(   \
+        FuncInfo<__VA_ARGS__>::Arg0Type a0,                             \
+        FuncInfo<__VA_ARGS__>::Arg1Type a1,                             \
+        FuncInfo<__VA_ARGS__>::Arg2Type a2,                             \
+        FuncInfo<__VA_ARGS__>::Arg3Type a3,                             \
+        FuncInfo<__VA_ARGS__>::Arg4Type a4,                             \
+        FuncInfo<__VA_ARGS__>::Arg5Type a5,                             \
+        FuncInfo<__VA_ARGS__>::Arg6Type a6,                             \
+        FuncInfo<__VA_ARGS__>::Arg7Type a7,                             \
+        FuncInfo<__VA_ARGS__>::Arg8Type a8,                             \
+        FuncInfo<__VA_ARGS__>::Arg9Type a9) modifier override           \
+    {                                                                   \
+        return name ## Method.WasCalled(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9); \
+    }                                                                   \
+    CALL_COUNTER_WITH_MOCK(name ## Method, __VA_ARGS__);
+
+#define MOCK_METHOD_IMPL11(name, modifier, ...)                         \
+    virtual FuncInfo<__VA_ARGS__>::ReturnType STDMETHODCALLTYPE name(   \
+        FuncInfo<__VA_ARGS__>::Arg0Type a0,                             \
+        FuncInfo<__VA_ARGS__>::Arg1Type a1,                             \
+        FuncInfo<__VA_ARGS__>::Arg2Type a2,                             \
+        FuncInfo<__VA_ARGS__>::Arg3Type a3,                             \
+        FuncInfo<__VA_ARGS__>::Arg4Type a4,                             \
+        FuncInfo<__VA_ARGS__>::Arg5Type a5,                             \
+        FuncInfo<__VA_ARGS__>::Arg6Type a6,                             \
+        FuncInfo<__VA_ARGS__>::Arg7Type a7,                             \
+        FuncInfo<__VA_ARGS__>::Arg8Type a8,                             \
+        FuncInfo<__VA_ARGS__>::Arg9Type a9,                             \
+        FuncInfo<__VA_ARGS__>::Arg10Type a10) modifier override         \
+    {                                                                   \
+        return name ## Method.WasCalled(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10); \
+    }                                                                   \
+    CALL_COUNTER_WITH_MOCK(name ## Method, __VA_ARGS__);
+
+#define MOCK_METHOD_IMPL17(name, modifier, ...)                         \
+    virtual FuncInfo<__VA_ARGS__>::ReturnType STDMETHODCALLTYPE name(   \
+        FuncInfo<__VA_ARGS__>::Arg0Type a0,                             \
+        FuncInfo<__VA_ARGS__>::Arg1Type a1,                             \
+        FuncInfo<__VA_ARGS__>::Arg2Type a2,                             \
+        FuncInfo<__VA_ARGS__>::Arg3Type a3,                             \
+        FuncInfo<__VA_ARGS__>::Arg4Type a4,                             \
+        FuncInfo<__VA_ARGS__>::Arg5Type a5,                             \
+        FuncInfo<__VA_ARGS__>::Arg6Type a6,                             \
+        FuncInfo<__VA_ARGS__>::Arg7Type a7,                             \
+        FuncInfo<__VA_ARGS__>::Arg8Type a8,                             \
+        FuncInfo<__VA_ARGS__>::Arg9Type a9,                             \
+        FuncInfo<__VA_ARGS__>::Arg10Type a10,                           \
+        FuncInfo<__VA_ARGS__>::Arg11Type a11,                           \
+        FuncInfo<__VA_ARGS__>::Arg12Type a12,                           \
+        FuncInfo<__VA_ARGS__>::Arg13Type a13,                           \
+        FuncInfo<__VA_ARGS__>::Arg14Type a14,                           \
+        FuncInfo<__VA_ARGS__>::Arg15Type a15,                           \
+        FuncInfo<__VA_ARGS__>::Arg16Type a16) modifier override         \
+        {                                                               \
+            return name ## Method.WasCalled(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16); \
+        }                                                                   \
+    CALL_COUNTER_WITH_MOCK(name ## Method, __VA_ARGS__);
+
+#define MOCK_METHOD_IMPL18(name, modifier, ...)                         \
+    virtual FuncInfo<__VA_ARGS__>::ReturnType STDMETHODCALLTYPE name(   \
+        FuncInfo<__VA_ARGS__>::Arg0Type a0,                             \
+        FuncInfo<__VA_ARGS__>::Arg1Type a1,                             \
+        FuncInfo<__VA_ARGS__>::Arg2Type a2,                             \
+        FuncInfo<__VA_ARGS__>::Arg3Type a3,                             \
+        FuncInfo<__VA_ARGS__>::Arg4Type a4,                             \
+        FuncInfo<__VA_ARGS__>::Arg5Type a5,                             \
+        FuncInfo<__VA_ARGS__>::Arg6Type a6,                             \
+        FuncInfo<__VA_ARGS__>::Arg7Type a7,                             \
+        FuncInfo<__VA_ARGS__>::Arg8Type a8,                             \
+        FuncInfo<__VA_ARGS__>::Arg9Type a9,                             \
+        FuncInfo<__VA_ARGS__>::Arg10Type a10,                           \
+        FuncInfo<__VA_ARGS__>::Arg11Type a11,                           \
+        FuncInfo<__VA_ARGS__>::Arg12Type a12,                           \
+        FuncInfo<__VA_ARGS__>::Arg13Type a13,                           \
+        FuncInfo<__VA_ARGS__>::Arg14Type a14,                           \
+        FuncInfo<__VA_ARGS__>::Arg15Type a15,                           \
+        FuncInfo<__VA_ARGS__>::Arg16Type a16,                           \
+        FuncInfo<__VA_ARGS__>::Arg17Type a17) modifier override         \
+        {                                                               \
+        return name ## Method.WasCalled(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17); \
+        }                                                                   \
+    CALL_COUNTER_WITH_MOCK(name ## Method, __VA_ARGS__);
+
+#define MOCK_METHOD_IMPL21(name, modifier, ...)                         \
+    virtual FuncInfo<__VA_ARGS__>::ReturnType STDMETHODCALLTYPE name(   \
+        FuncInfo<__VA_ARGS__>::Arg0Type a0,                             \
+        FuncInfo<__VA_ARGS__>::Arg1Type a1,                             \
+        FuncInfo<__VA_ARGS__>::Arg2Type a2,                             \
+        FuncInfo<__VA_ARGS__>::Arg3Type a3,                             \
+        FuncInfo<__VA_ARGS__>::Arg4Type a4,                             \
+        FuncInfo<__VA_ARGS__>::Arg5Type a5,                             \
+        FuncInfo<__VA_ARGS__>::Arg6Type a6,                             \
+        FuncInfo<__VA_ARGS__>::Arg7Type a7,                             \
+        FuncInfo<__VA_ARGS__>::Arg8Type a8,                             \
+        FuncInfo<__VA_ARGS__>::Arg9Type a9,                             \
+        FuncInfo<__VA_ARGS__>::Arg10Type a10,                           \
+        FuncInfo<__VA_ARGS__>::Arg11Type a11,                           \
+        FuncInfo<__VA_ARGS__>::Arg12Type a12,                           \
+        FuncInfo<__VA_ARGS__>::Arg13Type a13,                           \
+        FuncInfo<__VA_ARGS__>::Arg14Type a14,                           \
+        FuncInfo<__VA_ARGS__>::Arg15Type a15,                           \
+        FuncInfo<__VA_ARGS__>::Arg16Type a16,                           \
+        FuncInfo<__VA_ARGS__>::Arg17Type a17,                           \
+        FuncInfo<__VA_ARGS__>::Arg18Type a18,                           \
+        FuncInfo<__VA_ARGS__>::Arg19Type a19,                           \
+        FuncInfo<__VA_ARGS__>::Arg20Type a20) modifier override         \
+        {                                                               \
+        return name ## Method.WasCalled(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20); \
+        }                                                                   \
+    CALL_COUNTER_WITH_MOCK(name ## Method, __VA_ARGS__);
+
+
+#define MOCK_METHOD0(name, ...) MOCK_METHOD_IMPL0(name, , __VA_ARGS__)
+#define MOCK_METHOD1(name, ...) MOCK_METHOD_IMPL1(name, , __VA_ARGS__)
+#define MOCK_METHOD2(name, ...) MOCK_METHOD_IMPL2(name, , __VA_ARGS__)
+#define MOCK_METHOD3(name, ...) MOCK_METHOD_IMPL3(name, , __VA_ARGS__)
+#define MOCK_METHOD4(name, ...) MOCK_METHOD_IMPL4(name, , __VA_ARGS__)
+#define MOCK_METHOD5(name, ...) MOCK_METHOD_IMPL5(name, , __VA_ARGS__)
+#define MOCK_METHOD6(name, ...) MOCK_METHOD_IMPL6(name, , __VA_ARGS__)
+#define MOCK_METHOD7(name, ...) MOCK_METHOD_IMPL7(name, , __VA_ARGS__)
+#define MOCK_METHOD8(name, ...) MOCK_METHOD_IMPL8(name, , __VA_ARGS__)
+#define MOCK_METHOD9(name, ...) MOCK_METHOD_IMPL9(name, , __VA_ARGS__)
+#define MOCK_METHOD10(name, ...) MOCK_METHOD_IMPL10(name, , __VA_ARGS__)
+#define MOCK_METHOD11(name, ...) MOCK_METHOD_IMPL11(name, , __VA_ARGS__)
+#define MOCK_METHOD17(name, ...) MOCK_METHOD_IMPL17(name, , __VA_ARGS__)
+#define MOCK_METHOD18(name, ...) MOCK_METHOD_IMPL18(name, , __VA_ARGS__)
+#define MOCK_METHOD21(name, ...) MOCK_METHOD_IMPL21(name, , __VA_ARGS__)
+
+#define MOCK_METHOD0_CONST(name, ...) MOCK_METHOD_IMPL0(name, const, __VA_ARGS__)
+#define MOCK_METHOD1_CONST(name, ...) MOCK_METHOD_IMPL1(name, const, __VA_ARGS__)
+#define MOCK_METHOD2_CONST(name, ...) MOCK_METHOD_IMPL2(name, const, __VA_ARGS__)
+#define MOCK_METHOD3_CONST(name, ...) MOCK_METHOD_IMPL3(name, const, __VA_ARGS__)
+#define MOCK_METHOD4_CONST(name, ...) MOCK_METHOD_IMPL4(name, const, __VA_ARGS__)
+#define MOCK_METHOD5_CONST(name, ...) MOCK_METHOD_IMPL5(name, const, __VA_ARGS__)
+#define MOCK_METHOD6_CONST(name, ...) MOCK_METHOD_IMPL6(name, const, __VA_ARGS__)
+#define MOCK_METHOD7_CONST(name, ...) MOCK_METHOD_IMPL7(name, const, __VA_ARGS__)
+#define MOCK_METHOD8_CONST(name, ...) MOCK_METHOD_IMPL8(name, const, __VA_ARGS__)
+#define MOCK_METHOD9_CONST(name, ...) MOCK_METHOD_IMPL9(name, const, __VA_ARGS__)
+#define MOCK_METHOD10_CONST(name, ...) MOCK_METHOD_IMPL10(name, const, __VA_ARGS__)
+#define MOCK_METHOD11_CONST(name, ...) MOCK_METHOD_IMPL11(name, const, __VA_ARGS__)
 
 
 //

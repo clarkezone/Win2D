@@ -4,108 +4,58 @@
 
 #pragma once
 
+#include "utils/LockUtilities.h"
 #include "CustomFontManager.h"
+#include "TrimmingSignInformation.h"
+
+//
+// CanvasLineSpacingMode is a type that is only available on Win10.
+// To reduce the number of guards around places that consume this type,
+// we define a placeholder for 8.1.
+//
+#if WINVER <= _WIN32_WINNT_WINBLUE
+enum CanvasLineSpacingMode { Default };
+#endif
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Text
 {
     using namespace ::Microsoft::WRL;
 
-    //
-    // CanvasTextFormatAdapter
-    //
-
-    class ICanvasTextFormatAdapter
-    {
-    public:
-        virtual ~ICanvasTextFormatAdapter() = default;
-
-        virtual ComPtr<IDWriteFactory> CreateDWriteFactory(DWRITE_FACTORY_TYPE type) = 0;
-        virtual IStorageFileStatics* GetStorageFileStatics() = 0;
-    };
-
-    class CanvasTextFormatAdapter : public ICanvasTextFormatAdapter
-    {
-        ComPtr<IStorageFileStatics> m_storageFileStatics;
-
-    public:
-        virtual ComPtr<IDWriteFactory> CreateDWriteFactory(DWRITE_FACTORY_TYPE type) override;
-        virtual IStorageFileStatics* GetStorageFileStatics() override;
-    };
-
-    class CanvasTextFormat;
-
-    //
-    // CanvasTextFormatManager
-    //
-    // This follows the pattern of CanvasTextFormatFactory /
-    // PerApplicationManager / CanvasTextFormatManager since it plays nicely
-    // with our established leak tracking code.  
-    //
-    // Note that CanvasTextFormatManager does not derive from ResourceManager,
-    // since CanvasTextFormat is not a wrapped resource and doesn't support
-    // idempotent interop.
-    //
-
-    class CanvasTextFormatManager 
-        : public CustomFontManager
-        , public std::enable_shared_from_this<CanvasTextFormatManager>
-        , public StoredInPropertyMap
-        , private LifespanTracker<CanvasTextFormatManager>
-    {
-    public:
-        CanvasTextFormatManager(std::shared_ptr<ICanvasTextFormatAdapter> adapter);
-
-        ComPtr<CanvasTextFormat> Create();
-        ComPtr<CanvasTextFormat> Create(IDWriteTextFormat* format);
-    };
-
 
     //
     // CanvasTextFormatFactory
     //
-
-    class CanvasTextFormatFactory 
-        : public ActivationFactory<
-            CloakedIid<ICanvasFactoryNative>>,
-          public PerApplicationManager<CanvasTextFormatFactory, CanvasTextFormatManager>
+    class CanvasTextFormatFactory
+        : public AgileActivationFactory<ICanvasTextFormatStatics>
+        , private LifespanTracker<CanvasTextFormatFactory>
     {
         InspectableClassStatic(RuntimeClass_Microsoft_Graphics_Canvas_Text_CanvasTextFormat, BaseTrust);
 
     public:
-        CanvasTextFormatFactory();
-
-        //
-        // ActivationFactory
-        //
-
         IFACEMETHOD(ActivateInstance)(IInspectable** obj) override;
 
-        //
-        // ICanvasFactoryNative
-        //
+        IFACEMETHOD(GetSystemFontFamilies)(
+            uint32_t* valueCount,
+            HSTRING** valueElements) override;
 
-        IFACEMETHOD(GetOrCreate)(
-            IUnknown* resource,
-            IInspectable** wrapper) override;
-
-        //
-        // Used by PerApplicationManager
-        //
-        static std::shared_ptr<CanvasTextFormatManager> CreateManager();
+        IFACEMETHOD(GetSystemFontFamiliesFromLocaleList)(
+            IVectorView<HSTRING>* localeList,
+            uint32_t* valueCount,
+            HSTRING** valueElements) override;
     };
 
 
-
     //
-    // CanvasTextFormat
+    // ICanvasTextFormatInternal
     //
 
-    [uuid(E295AC1E-B763-49D4-9AE3-6E75D0C429AA)]
-    class ICanvasTextFormatInternal : public IUnknown
+    class __declspec(uuid("E295AC1E-B763-49D4-9AE3-6E75D0C429AA"))
+    ICanvasTextFormatInternal : public IUnknown
     {
     public:
-        virtual ComPtr<IDWriteTextFormat> GetRealizedTextFormat() = 0;
-        virtual CanvasDrawTextOptions GetDrawTextOptions() = 0;
+        virtual ComPtr<IDWriteTextFormat1> GetRealizedTextFormat() = 0;
+        virtual ComPtr<IDWriteTextFormat> GetRealizedTextFormatClone(CanvasWordWrapping overrideWordWrapping) = 0;
+        virtual D2D1_DRAW_TEXT_OPTIONS GetDrawTextOptions() = 0;
     };
 
 
@@ -115,27 +65,31 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
     // keeps track of shadow copies of properties and recreates ("realizes") an
     // IDWriteTextFormat as necessary.
     //
-    class CanvasTextFormat : public RuntimeClass<
-        RuntimeClassFlags<WinRtClassicComMix>,
+    class CanvasTextFormat : RESOURCE_WRAPPER_RUNTIME_CLASS(
+        IDWriteTextFormat1,
+        CanvasTextFormat,
         ICanvasTextFormat,
-        ABI::Windows::Foundation::IClosable,
-        CloakedIid<ICanvasTextFormatInternal>,
-        CloakedIid<ICanvasResourceWrapperNative>>,
-        private LifespanTracker<CanvasTextFormat>
+        CloakedIid<ICanvasTextFormatInternal>)
     {
         InspectableClass(RuntimeClass_Microsoft_Graphics_Canvas_Text_CanvasTextFormat, BaseTrust);
 
-        std::shared_ptr<CanvasTextFormatManager> m_manager;
-        
+        std::shared_ptr<CustomFontManager> m_customFontManager;
+
         //
-        // Has Close() been called?  It is tempting to use a null m_format to
+        // Has Close() been called?  It is tempting to use a null resource to
         // indicated closed, but we need to be able to tell the difference
-        // between not having created m_format yet and being closed.
+        // between not having created the resource yet and being closed.
         //
         bool m_closed;
 
         //
-        // Shadow properties.  These values are used to recreate m_format when
+        // The various bits of shadow state and the realized format all need to
+        // be updated atomically.
+        //
+        std::mutex m_mutex;
+        
+        //
+        // Shadow properties.  These values are used to recreate the IDWriteTextFormat when
         // it is required.
         //
         ComPtr<IDWriteFontCollection> m_fontCollection;
@@ -155,22 +109,27 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         WinString m_trimmingDelimiter;
         int32_t m_trimmingDelimiterCount;
         CanvasWordWrapping m_wordWrapping;
+        CanvasVerticalGlyphOrientation m_verticalGlyphOrientation;
+        CanvasOpticalAlignment m_opticalAlignment;
+        bool m_lastLineWrapping;
+
+        TrimmingSignInformation m_trimmingSignInformation;
 
         //
-        // Draw text options are not part of m_format, but are stored in
-        // CanvasTextFormat.
+        // Draw text options are not part of IDWriteTextFormat, but are stored
+        // in CanvasTextFormat.  These are not protected by the mutex since they
+        // are independent from the shadow state / format.
         //
         CanvasDrawTextOptions m_drawTextOptions;
 
         //
-        // The IDWriteTextFormat object itself.  This is created on demand from
-        // the shadow properties.
+        // This type is used on Win10, and is defined as a placeholder on 8.1.
         //
-        ComPtr<IDWriteTextFormat> m_format;
+        CanvasLineSpacingMode m_lineSpacingMode;
 
     public:
-        CanvasTextFormat(std::shared_ptr<CanvasTextFormatManager> manager);
-        CanvasTextFormat(std::shared_ptr<CanvasTextFormatManager> manager, IDWriteTextFormat* format);
+        CanvasTextFormat();
+        CanvasTextFormat(IDWriteTextFormat1* format);
 
         //
         // ICanvasTextFormat
@@ -179,23 +138,32 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         IFACEMETHOD(get_##NAME)(TYPE* value) override;   \
         IFACEMETHOD(put_##NAME)(TYPE value) override
 
-        PROPERTY(Direction,              CanvasTextDirection);
-        PROPERTY(FontFamily,             HSTRING);
-        PROPERTY(FontSize,               float);
-        PROPERTY(FontStretch,            ABI::Windows::UI::Text::FontStretch);
-        PROPERTY(FontStyle,              ABI::Windows::UI::Text::FontStyle);
-        PROPERTY(FontWeight,             ABI::Windows::UI::Text::FontWeight);
-        PROPERTY(IncrementalTabStop,     float);
-        PROPERTY(LineSpacing,            float);
-        PROPERTY(LineSpacingBaseline,    float);
-        PROPERTY(LocaleName,             HSTRING);
-        PROPERTY(VerticalAlignment,      CanvasVerticalAlignment);
-        PROPERTY(HorizontalAlignment,    CanvasHorizontalAlignment);
-        PROPERTY(TrimmingGranularity,    CanvasTextTrimmingGranularity);
-        PROPERTY(TrimmingDelimiter,      HSTRING);
-        PROPERTY(TrimmingDelimiterCount, int32_t);
-        PROPERTY(WordWrapping,           CanvasWordWrapping);
-        PROPERTY(Options,                CanvasDrawTextOptions);
+        PROPERTY(Direction,                CanvasTextDirection);
+        PROPERTY(FontFamily,               HSTRING);
+        PROPERTY(FontSize,                 float);
+        PROPERTY(FontStretch,              ABI::Windows::UI::Text::FontStretch);
+        PROPERTY(FontStyle,                ABI::Windows::UI::Text::FontStyle);
+        PROPERTY(FontWeight,               ABI::Windows::UI::Text::FontWeight);
+        PROPERTY(IncrementalTabStop,       float);
+        PROPERTY(LineSpacing,              float);
+        PROPERTY(LineSpacingBaseline,      float);
+        PROPERTY(LocaleName,               HSTRING);
+        PROPERTY(VerticalAlignment,        CanvasVerticalAlignment);
+        PROPERTY(HorizontalAlignment,      CanvasHorizontalAlignment);
+        PROPERTY(TrimmingGranularity,      CanvasTextTrimmingGranularity);
+        PROPERTY(TrimmingDelimiter,        HSTRING);
+        PROPERTY(TrimmingDelimiterCount,   int32_t);
+        PROPERTY(WordWrapping,             CanvasWordWrapping);
+        PROPERTY(Options,                  CanvasDrawTextOptions);
+        PROPERTY(VerticalGlyphOrientation, CanvasVerticalGlyphOrientation);
+        PROPERTY(OpticalAlignment,         CanvasOpticalAlignment);
+        PROPERTY(LastLineWrapping,         boolean);
+        PROPERTY(TrimmingSign,             CanvasTrimmingSign);
+        PROPERTY(CustomTrimmingSign,       ICanvasTextInlineObject*);
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+        PROPERTY(LineSpacingMode,          CanvasLineSpacingMode);
+#endif
 
 #undef PROPERTY
 
@@ -209,39 +177,52 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         // ICanvasTextFormatInternal
         //
 
-        virtual ComPtr<IDWriteTextFormat> GetRealizedTextFormat() override;
-        virtual CanvasDrawTextOptions GetDrawTextOptions() override;
+        virtual ComPtr<IDWriteTextFormat1> GetRealizedTextFormat() override;
+        virtual ComPtr<IDWriteTextFormat> GetRealizedTextFormatClone(CanvasWordWrapping overrideWordWrapping) override;
+        virtual D2D1_DRAW_TEXT_OPTIONS GetDrawTextOptions() override;
 
         //
         // ICanvasResourceWrapperNative
         //
         
-        IFACEMETHOD(GetResource)(REFIID iid, void** resource) override;
-
+        IFACEMETHOD(GetNativeResource)(ICanvasDevice* device, float dpi, REFIID iid, void** resource) override;
 
     private:
+        Lock GetLock()
+        {
+            return Lock(m_mutex);
+        }
+        
         void ThrowIfClosed();
 
         template<typename T, typename ST, typename FN>
         HRESULT __declspec(nothrow) PropertyGet(T* value, ST const& shadowValue, FN realizedGetter);
 
         template<typename T, typename TT, typename FNV>
-        HRESULT __declspec(nothrow) PropertyPut(T value, TT* dest, FNV&& validator, void(CanvasTextFormat::*realizer)() = nullptr);
+        HRESULT __declspec(nothrow) PropertyPut(T value, TT* dest, FNV&& validator, void(CanvasTextFormat::*realizer)(IDWriteTextFormat1*) = nullptr);
         
         template<typename T, typename TT>
-        HRESULT __declspec(nothrow) PropertyPut(T value, TT* dest, void(CanvasTextFormat::*realizer)() = nullptr);
+        HRESULT __declspec(nothrow) PropertyPut(T value, TT* dest, void(CanvasTextFormat::*realizer)(IDWriteTextFormat1*) = nullptr);
 
         void SetShadowPropertiesFromDWrite();
 
         void Unrealize();
-        void RealizeDirection();
-        void RealizeIncrementalTabStop();
-        void RealizeLineSpacing();
-        void RealizeParagraphAlignment();
-        void RealizeTextAlignment();
-        void RealizeTrimming();
-        void RealizeWordWrapping();
-    };
+
+        void RealizeDirection(IDWriteTextFormat1* textFormat);
+        void RealizeIncrementalTabStop(IDWriteTextFormat1* textFormat);
+        void RealizeLineSpacing(IDWriteTextFormat1* textFormat);
+        void RealizeParagraphAlignment(IDWriteTextFormat1* textFormat);
+        void RealizeTextAlignment(IDWriteTextFormat1* textFormat);
+        void RealizeTrimming(IDWriteTextFormat1* textFormat);
+        void RealizeWordWrapping(IDWriteTextFormat1* textFormat);
+        void RealizeVerticalGlyphOrientation(IDWriteTextFormat1* textFormat);
+        void RealizeOpticalAlignment(IDWriteTextFormat1* textFormat);
+        void RealizeLastLineWrapping(IDWriteTextFormat1* textFormat);
+        void RealizeTrimmingSign(IDWriteTextFormat1* textFormat);
+        void RealizeCustomTrimmingSign(IDWriteTextFormat1* textFormat);
+
+        ComPtr<IDWriteTextFormat1> CreateRealizedTextFormat(bool skipWordWrapping = false);
+};
 
 
     // Helper for getting line spacing from DWrite   
@@ -264,25 +245,78 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
                 return -Spacing;
 
             case DWRITE_LINE_SPACING_METHOD_UNIFORM:
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+            case DWRITE_LINE_SPACING_METHOD_PROPORTIONAL:
+#endif
             default:
                 return Spacing;
             }
         }
 
-        static void Set(IDWriteTextFormat* format, float spacing, float baseline)
+#if WINVER > _WIN32_WINNT_WINBLUE
+        CanvasLineSpacingMode GetAdjustedLineSpacingMode(bool allowUniform = false) const
         {
-            // The line spacing method is determined by the value of the
-            // LineSpacing property.  Negative means DEFAULT while non-negative
-            // means UNIFORM.  In the DEFAULT method, the actual value of
-            // m_lineSpacing is ignored, although it is still validated to be
-            // non-negative.  For this reason we pass in the fabs of the value
-            // that was set.  This also allows us to round-trip the values.
+            if (Method == DWRITE_LINE_SPACING_METHOD_PROPORTIONAL)
+            {
+                return CanvasLineSpacingMode::Proportional;
+            }
+            else
+            {
+                return allowUniform? CanvasLineSpacingMode::Uniform : CanvasLineSpacingMode::Default;
+            }
+        }
+#endif
+
+        static void Set(
+            IDWriteTextFormat* format,
+            CanvasLineSpacingMode lineSpacingMode,
+            float spacing, 
+            float baseline)
+        {
+            //
+            // The DWrite line spacing method is determined by the value of the
+            // LineSpacing property, together with the LineSpacingMode
+            // property (when available, on Win10+).  
+            //
+            //  If LineSpacingMode == Default (or always, on Win8.1):
+            //     Use DWRITE_LINE_SPACING_METHOD_UNIFORM if LineSpacing is positive.
+            //     Use DWRITE_LINE_SPACING_METHOD_DEFAULT if LineSpacing is negative.
+            //
+            //  If LineSpacingMode == Uniform
+            //     Use DWRITE_LINE_SPACING_METHOD_UNIFORM.
+            //
+            //  If LineSpacingMode == Proportional
+            //     Use DWRITE_LINE_SPACING_METHOD_PROPORTIONAL.
+            //
+            //
+            // In the DEFAULT method, the actual value of m_lineSpacing is ignored, 
+            // although it is still validated to be non-negative.  
+            // For this reason we pass in the fabs of the value
+            // that was set.  This also allows us to round-trip the values in that 
+            // case.
+            //
+
             //
             // signbit() is used so we can tell the difference between 0.0 and
             // -0.0.
-            auto method = signbit(spacing)
-                ? DWRITE_LINE_SPACING_METHOD_DEFAULT 
+            //
+            DWRITE_LINE_SPACING_METHOD method = signbit(spacing)
+                ? DWRITE_LINE_SPACING_METHOD_DEFAULT
                 : DWRITE_LINE_SPACING_METHOD_UNIFORM;
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+            if (lineSpacingMode == CanvasLineSpacingMode::Uniform)
+            {
+                method = DWRITE_LINE_SPACING_METHOD_UNIFORM;
+            }
+            else if (lineSpacingMode == CanvasLineSpacingMode::Proportional)
+            {
+                method = DWRITE_LINE_SPACING_METHOD_PROPORTIONAL;
+            }
+#else
+            UNREFERENCED_PARAMETER(lineSpacingMode);
+#endif
 
             ThrowIfFailed(format->SetLineSpacing(
                 method,

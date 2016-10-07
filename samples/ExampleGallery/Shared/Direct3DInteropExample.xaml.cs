@@ -2,6 +2,7 @@
 //
 // Licensed under the MIT License. See LICENSE.txt in the project root for license information.
 
+using ExampleGallery.Direct3DInterop;
 using Microsoft.Graphics.Canvas;
 using Microsoft.Graphics.Canvas.Effects;
 using Microsoft.Graphics.Canvas.Text;
@@ -9,13 +10,10 @@ using Microsoft.Graphics.Canvas.UI;
 using Microsoft.Graphics.Canvas.UI.Xaml;
 using System;
 using System.Numerics;
+using Windows.Foundation;
 using Windows.UI;
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
-
-#if !WINDOWS_UWP
-using ExampleGallery.Direct3DInterop;
-#endif
 
 namespace ExampleGallery
 {
@@ -26,11 +24,6 @@ namespace ExampleGallery
         public float BloomIntensity { get; set; }
         public float BloomThreshold { get; set; }
         public float BloomBlur { get; set; }
-
-
-        // This example is temporarily disabled for UAP.
-        // We'll turn it on as soon as a UAP NuGet package for the DirectX Tool Kit is available.
-#if !WINDOWS_UWP
 
 
         // The TeapotRenderer class is provided by the ExampleGallery.Direct3DInterop project,
@@ -56,11 +49,13 @@ namespace ExampleGallery
 
 
         // Bloom postprocess uses Win2D image effects to create a glow around bright parts of the 3D model.
-        CanvasRenderTarget bloomRenderTarget;
         LinearTransferEffect extractBrightAreas;
         GaussianBlurEffect blurBrightAreas;
         LinearTransferEffect adjustBloomIntensity;
         BlendEffect bloomResult;
+
+        CanvasRenderTarget bloomRenderTarget;
+        Size bloomRenderTargetSize;
 
 
         public Direct3DInteropExample()
@@ -254,19 +249,18 @@ namespace ExampleGallery
             drawingSession.DrawImage(bloomResult);
         }
 
-        int DipsToPixelSize(ICanvasAnimatedControl sender, float dips)
-        {
-            System.Diagnostics.Debug.Assert(dips > 0);
-            return Math.Max(sender.ConvertDipsToPixels(dips, CanvasDpiRounding.Round), 1);
-        }
 
         void DemandCreateBloomRenderTarget(ICanvasAnimatedControl sender)
         {
             // Early-out if we already have a rendertarget of the correct size.
-            // Compare sizes as pixels rather than DIPs to avoid rounding artifacts.
+            // This compares against a stored copy of sender.Size, rather than reading back bloomRenderTarget.Size,
+            // because the actual rendertarget size will be rounded to an integer number of pixels, 
+            // thus may not be identical to the size that was passed in when constructing the rendertarget.
+            var senderSize = sender.Size;
+
             if (bloomRenderTarget != null &&
-                bloomRenderTarget.SizeInPixels.Width == DipsToPixelSize(sender, (float)sender.Size.Width) &&
-                bloomRenderTarget.SizeInPixels.Height == DipsToPixelSize(sender, (float)sender.Size.Height))
+                bloomRenderTargetSize == senderSize &&
+                bloomRenderTarget.Dpi == sender.Dpi)
             {
                 return;
             }
@@ -278,45 +272,13 @@ namespace ExampleGallery
             }
 
             // Create the new rendertarget.
-            bloomRenderTarget = new CanvasRenderTarget(sender, sender.Size);
+            bloomRenderTarget = new CanvasRenderTarget(sender, senderSize);
+            bloomRenderTargetSize = senderSize;
 
             // Configure the bloom effect to use this new rendertarget.
             extractBrightAreas.Source = bloomRenderTarget;
             bloomResult.Background = bloomRenderTarget;
         }
-
-
-#else   // WINDOWS_UWP
-
-        public Direct3DInteropExample()
-        {
-            this.InitializeComponent();
-        }
-
-        void canvas_CreateResources(CanvasAnimatedControl sender, CanvasCreateResourcesEventArgs args)
-        {
-        }
-
-        void canvas_Update(ICanvasAnimatedControl sender, CanvasAnimatedUpdateEventArgs args)
-        {
-        }
-
-        void canvas_Draw(ICanvasAnimatedControl sender, CanvasAnimatedDrawEventArgs args)
-        {
-            args.DrawingSession.DrawText(
-                "This example is temporarily disabled for UAP.\n\n" +
-                "We'll turn it on as soon as a UAP NuGet package\n" +
-                "for the DirectX Tool Kit is available.",
-                sender.Size.ToVector2() / 2,
-                Colors.Red,
-                new CanvasTextFormat
-                {
-                    HorizontalAlignment = CanvasHorizontalAlignment.Center,
-                    VerticalAlignment = CanvasVerticalAlignment.Center,
-                });
-        }
-
-#endif  // WINDOWS_UWP
 
 
         private void control_Unloaded(object sender, RoutedEventArgs e)

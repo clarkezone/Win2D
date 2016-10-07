@@ -9,12 +9,15 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    ArithmeticCompositeEffect::ArithmeticCompositeEffect()
-        : CanvasEffect(CLSID_D2D1ArithmeticComposite, 2, 2, true)
+    ArithmeticCompositeEffect::ArithmeticCompositeEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 2, 2, true, device, effect, static_cast<IArithmeticCompositeEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<float[4]>(D2D1_ARITHMETICCOMPOSITE_PROP_COEFFICIENTS, Numerics::Vector4{ 1.0f, 0.0f, 0.0f, 0.0f });
-        SetBoxedProperty<boolean>(D2D1_ARITHMETICCOMPOSITE_PROP_CLAMP_OUTPUT, static_cast<boolean>(false));
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<float[4]>(D2D1_ARITHMETICCOMPOSITE_PROP_COEFFICIENTS, Numerics::Vector4{ 1.0f, 0.0f, 0.0f, 0.0f });
+            SetBoxedProperty<boolean>(D2D1_ARITHMETICCOMPOSITE_PROP_CLAMP_OUTPUT, static_cast<boolean>(false));
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY(ArithmeticCompositeEffect,
@@ -34,5 +37,5 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
     IMPLEMENT_EFFECT_PROPERTY_MAPPING(ArithmeticCompositeEffect,
         { L"ClampOutput", D2D1_ARITHMETICCOMPOSITE_PROP_CLAMP_OUTPUT, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT })
 
-    ActivatableClass(ArithmeticCompositeEffect);
+    ActivatableClassWithFactory(ArithmeticCompositeEffect, SimpleAgileActivationFactory<ArithmeticCompositeEffect>);
 }}}}}

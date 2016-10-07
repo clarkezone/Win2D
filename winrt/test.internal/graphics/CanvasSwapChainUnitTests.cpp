@@ -7,18 +7,17 @@
 #include "mocks/MockDXGIAdapter.h"
 #include "mocks/MockDXGIFactory.h"
 #include "stubs/StubDxgiDevice.h"
+#include "stubs/StubDxgiSwapChain.h"
 
 TEST_CLASS(CanvasSwapChainUnitTests)
 {
     struct StubDeviceFixture
     {
-        std::shared_ptr<CanvasSwapChainManager> m_swapChainManager;
         ComPtr<StubCanvasDevice> m_canvasDevice;
 
         StubDeviceFixture()
         {
             m_canvasDevice = Make<StubCanvasDevice>();
-            m_swapChainManager = std::make_shared<CanvasSwapChainManager>();
             
             m_canvasDevice->CreateSwapChainForCompositionMethod.AllowAnyCall([=](int32_t, int32_t, DirectXPixelFormat, int32_t, CanvasAlphaMode)
             {
@@ -30,7 +29,7 @@ TEST_CLASS(CanvasSwapChainUnitTests)
 
         ComPtr<CanvasSwapChain> CreateTestSwapChain(float dpi = DEFAULT_DPI)
         {
-            return m_swapChainManager->Create(
+            return CanvasSwapChain::CreateNew(
                 m_canvasDevice.Get(),
                 1.0f,
                 1.0f,
@@ -73,7 +72,7 @@ TEST_CLASS(CanvasSwapChainUnitTests)
                 return dxgiSwapChain;
             });
 
-        auto swapChain = f.m_swapChainManager->Create(
+        auto swapChain = CanvasSwapChain::CreateNew(
             f.m_canvasDevice.Get(),
             23.0f,
             45.0f,
@@ -92,12 +91,11 @@ TEST_CLASS(CanvasSwapChainUnitTests)
         ComPtr<MockDxgiFactory> DxgiFactory;
         ComPtr<StubDxgiDevice> DxgiDevice;
         ComPtr<CanvasDevice> Device;
-        std::shared_ptr<CanvasSwapChainManager> SwapChainManager;
+        std::shared_ptr<CanvasDeviceAdapter> Adapter;
 
         MockDxgiFixture()
             : DxgiFactory(Make<MockDxgiFactory>())
             , DxgiDevice(Make<StubDxgiDevice>())
-            , SwapChainManager(std::make_shared<CanvasSwapChainManager>())
         {
             auto dxgiAdapter = Make<MockDxgiAdapter>();
             dxgiAdapter->GetParentMethod.AllowAnyCall(
@@ -116,10 +114,10 @@ TEST_CLASS(CanvasSwapChainUnitTests)
 
             auto d2dDevice = Make<MockD2DDevice>(DxgiDevice.Get());
 
-            auto resourceCreationAdapter = std::make_shared<TestDeviceResourceCreationAdapter>();
-            auto deviceManager = std::make_shared<CanvasDeviceManager>(resourceCreationAdapter);
+            Adapter = std::make_shared<TestDeviceAdapter>();
+            CanvasDeviceAdapter::SetInstance(Adapter);
 
-            Device = deviceManager->GetOrCreate(d2dDevice.Get());
+            Device = Make<CanvasDevice>(d2dDevice.Get());
         }
     };
 
@@ -177,7 +175,7 @@ TEST_CLASS(CanvasSwapChainUnitTests)
                 return dxgiSwapChain.CopyTo(swapChain);
             });
 
-        auto sc = f.SwapChainManager->Create(
+        auto sc = CanvasSwapChain::CreateNew(
             f.Device.Get(),
             f.Window.Get(),
             anyDpi);
@@ -202,9 +200,9 @@ TEST_CLASS(CanvasSwapChainUnitTests)
                 return S_OK;
             });
 
-        ExpectHResultException(E_INVALIDARG, [&] { f.SwapChainManager->Create(nullptr, f.Window.Get(), anyDpi); });
-        ExpectHResultException(E_INVALIDARG, [&] { f.SwapChainManager->Create(f.Device.Get(), nullptr, anyDpi); });
-        ExpectHResultException(E_INVALIDARG, [&] { f.SwapChainManager->Create(f.Device.Get(), f.Window.Get(), -1.0f); });
+        ExpectHResultException(E_INVALIDARG, [&] { CanvasSwapChain::CreateNew(nullptr, f.Window.Get(), anyDpi); });
+        ExpectHResultException(E_INVALIDARG, [&] { CanvasSwapChain::CreateNew(f.Device.Get(), nullptr, anyDpi); });
+        ExpectHResultException(E_INVALIDARG, [&] { CanvasSwapChain::CreateNew(f.Device.Get(), f.Window.Get(), -1.0f); });
     }
 
     TEST_METHOD_EX(CanvasSwapChain_CreateForCoreWindowWithAllOptionsAndDpi)
@@ -242,7 +240,7 @@ TEST_CLASS(CanvasSwapChainUnitTests)
                 return dxgiSwapChain.CopyTo(swapChain);
             });
 
-        auto sc = f.SwapChainManager->Create(
+        auto sc = CanvasSwapChain::CreateNew(
             f.Device.Get(),
             f.Window.Get(),
             anyWidthInDips,
@@ -266,12 +264,12 @@ TEST_CLASS(CanvasSwapChainUnitTests)
         auto anyBufferCount = 3;
         auto anyDpi = 50.0f;
 
-        ExpectHResultException(E_INVALIDARG, [&] { f.SwapChainManager->Create((ICanvasDevice*)nullptr, f.Window.Get(), anyWidthInDips, anyHeightInDips, anyDpi, anyPixelFormat, anyBufferCount); });
-        ExpectHResultException(E_INVALIDARG, [&] { f.SwapChainManager->Create(f.Device.Get(), (ICoreWindow*)nullptr, anyWidthInDips, anyHeightInDips, anyDpi, anyPixelFormat, anyBufferCount); });
-        ExpectHResultException(E_INVALIDARG, [&] { f.SwapChainManager->Create(f.Device.Get(), f.Window.Get(), -1.0f, anyHeightInDips, anyDpi, anyPixelFormat, anyBufferCount); });
-        ExpectHResultException(E_INVALIDARG, [&] { f.SwapChainManager->Create(f.Device.Get(), f.Window.Get(), anyWidthInDips, -1.0f, anyDpi, anyPixelFormat, anyBufferCount); });
-        ExpectHResultException(E_INVALIDARG, [&] { f.SwapChainManager->Create(f.Device.Get(), f.Window.Get(), anyWidthInDips, anyHeightInDips, -1.0f, anyPixelFormat, anyBufferCount); });
-        ExpectHResultException(E_INVALIDARG, [&] { f.SwapChainManager->Create(f.Device.Get(), f.Window.Get(), anyWidthInDips, anyHeightInDips, anyDpi, anyPixelFormat, -1); });
+        ExpectHResultException(E_INVALIDARG, [&] { CanvasSwapChain::CreateNew((ICanvasDevice*)nullptr, f.Window.Get(), anyWidthInDips, anyHeightInDips, anyDpi, anyPixelFormat, anyBufferCount); });
+        ExpectHResultException(E_INVALIDARG, [&] { CanvasSwapChain::CreateNew(f.Device.Get(), (ICoreWindow*)nullptr, anyWidthInDips, anyHeightInDips, anyDpi, anyPixelFormat, anyBufferCount); });
+        ExpectHResultException(E_INVALIDARG, [&] { CanvasSwapChain::CreateNew(f.Device.Get(), f.Window.Get(), -1.0f, anyHeightInDips, anyDpi, anyPixelFormat, anyBufferCount); });
+        ExpectHResultException(E_INVALIDARG, [&] { CanvasSwapChain::CreateNew(f.Device.Get(), f.Window.Get(), anyWidthInDips, -1.0f, anyDpi, anyPixelFormat, anyBufferCount); });
+        ExpectHResultException(E_INVALIDARG, [&] { CanvasSwapChain::CreateNew(f.Device.Get(), f.Window.Get(), anyWidthInDips, anyHeightInDips, -1.0f, anyPixelFormat, anyBufferCount); });
+        ExpectHResultException(E_INVALIDARG, [&] { CanvasSwapChain::CreateNew(f.Device.Get(), f.Window.Get(), anyWidthInDips, anyHeightInDips, anyDpi, anyPixelFormat, -1); });
     }
 
 
@@ -280,7 +278,7 @@ TEST_CLASS(CanvasSwapChainUnitTests)
     public:
         ComPtr<CanvasSwapChain> CreateTestSwapChain(float width, float height, int32_t bufferCount)
         {
-            return SwapChainManager->Create(
+            return CanvasSwapChain::CreateNew(
                 Device.Get(),
                 width,
                 height,
@@ -293,14 +291,11 @@ TEST_CLASS(CanvasSwapChainUnitTests)
 
     TEST_METHOD_EX(CanvasSwapChain_Creation_InvalidParameters)
     {
-        FullDeviceFixture f0;
-        ExpectHResultException(E_INVALIDARG, [&]  {  f0.CreateTestSwapChain(-1, 100, 2); });
-
-        FullDeviceFixture f1;
-        ExpectHResultException(E_INVALIDARG, [&]  {  f1.CreateTestSwapChain(123, -3, 2); });
-
-        FullDeviceFixture f2;
-        ExpectHResultException(E_INVALIDARG, [&]  {  f2.CreateTestSwapChain(100, 100, -3); });
+        FullDeviceFixture f;
+        
+        ExpectHResultException(E_INVALIDARG, [&] {  f.CreateTestSwapChain(-1, 100, 2); });
+        ExpectHResultException(E_INVALIDARG, [&] {  f.CreateTestSwapChain(123, -3, 2); });
+        ExpectHResultException(E_INVALIDARG, [&] {  f.CreateTestSwapChain(100, 100, -3); });
     }
 
     TEST_METHOD_EX(CanvasSwapChain_Closed)
@@ -624,9 +619,7 @@ TEST_CLASS(CanvasSwapChainUnitTests)
 
         f.m_canvasDevice->CreateSwapChainForCompositionMethod.AllowAnyCall([=](int32_t, int32_t, DirectXPixelFormat, int32_t, CanvasAlphaMode)
         {
-            auto swapChain = Make<MockDxgiSwapChain>();
-
-            swapChain->SetMatrixTransformMethod.SetExpectedCalls(1);
+            auto swapChain = Make<StubDxgiSwapChain>();
 
             swapChain->ResizeBuffersMethod.SetExpectedCalls(1,
                 [=](UINT bufferCount,
@@ -659,9 +652,7 @@ TEST_CLASS(CanvasSwapChainUnitTests)
 
         f.m_canvasDevice->CreateSwapChainForCompositionMethod.AllowAnyCall([&](int32_t, int32_t, DirectXPixelFormat, int32_t, CanvasAlphaMode)
         {
-            auto swapChain = Make<MockDxgiSwapChain>();
-
-            swapChain->SetMatrixTransformMethod.SetExpectedCalls(1);
+            auto swapChain = Make<StubDxgiSwapChain>();
 
             swapChain->ResizeBuffersMethod.SetExpectedCalls(1,
                 [&](UINT bufferCount,
@@ -724,9 +715,7 @@ TEST_CLASS(CanvasSwapChainUnitTests)
 
             f.m_canvasDevice->CreateSwapChainForCompositionMethod.AllowAnyCall([=](int32_t, int32_t, DirectXPixelFormat, int32_t, CanvasAlphaMode)
             {
-                auto swapChain = Make<MockDxgiSwapChain>();
-            
-                swapChain->SetMatrixTransformMethod.SetExpectedCalls(1);
+                auto swapChain = Make<StubDxgiSwapChain>();
 
                 swapChain->ResizeBuffersMethod.SetExpectedCalls(1,
                     [=](UINT bufferCount,
@@ -757,12 +746,12 @@ TEST_CLASS(CanvasSwapChainUnitTests)
                 return swapChain;
             });
 
-            auto canvasSwapChain = f.m_swapChainManager->Create(f.m_canvasDevice.Get(),
-                                                                1.0f, 1.0f,
-                                                                DEFAULT_DPI,
-                                                                originalPixelFormat,
-                                                                originalBufferCount,
-                                                                CanvasAlphaMode::Premultiplied);
+            auto canvasSwapChain = CanvasSwapChain::CreateNew(f.m_canvasDevice.Get(),
+                                                              1.0f, 1.0f,
+                                                              DEFAULT_DPI,
+                                                              originalPixelFormat,
+                                                              originalBufferCount,
+                                                              CanvasAlphaMode::Premultiplied);
 
             switch (whichOverload)
             {
@@ -861,11 +850,11 @@ TEST_CLASS(CanvasSwapChainUnitTests)
         auto deviceContext = Make<MockD2DDeviceContext>();
         auto d2dBitmap = Make<MockD2DBitmap>();
 
-        auto canvasSwapChain = f.m_swapChainManager->GetOrCreate(
+        auto canvasSwapChain = Make<CanvasSwapChain>(
             f.m_canvasDevice.Get(),
             dxgiSwapChain.Get(),
-            anyDpi);
-
+            anyDpi,
+            false);
 
         dxgiSwapChain->GetDesc1Method.SetExpectedCalls(1,
             [&] (DXGI_SWAP_CHAIN_DESC1* desc)
@@ -885,9 +874,8 @@ TEST_CLASS(CanvasSwapChainUnitTests)
                 return dxgiSurface.CopyTo(riid, surface);
             });
 
-
-        f.m_canvasDevice->CreateDeviceContextMethod.SetExpectedCalls(1,
-            [&] ()
+        f.m_canvasDevice->CreateDeviceContextForDrawingSessionMethod.SetExpectedCalls(1,
+            [&]
             {
                 return deviceContext;
             });
@@ -941,7 +929,6 @@ TEST_CLASS(CanvasSwapChainUnitTests)
 
     struct DrawingSessionAdapterFixture
     {
-        std::shared_ptr<CanvasSwapChainManager> m_swapChainManager;
         ComPtr<StubCanvasDevice> m_canvasDevice;
         ComPtr<MockD2DDeviceContext> m_deviceContext;
 
@@ -953,8 +940,6 @@ TEST_CLASS(CanvasSwapChainUnitTests)
 
         DrawingSessionAdapterFixture(Options options = None)
         {
-            m_swapChainManager = std::make_shared<CanvasSwapChainManager>();
-
             m_deviceContext = Make<MockD2DDeviceContext>();
 
             auto expectedTargetBitmap = Make<StubD2DBitmap>();
@@ -992,7 +977,7 @@ TEST_CLASS(CanvasSwapChainUnitTests)
                         });
 
                     m_deviceContext->BeginDrawMethod.SetExpectedCalls(1,
-                        []()
+                        []
                         {
 
                         });
@@ -1022,9 +1007,7 @@ TEST_CLASS(CanvasSwapChainUnitTests)
             
             m_canvasDevice->CreateSwapChainForCompositionMethod.AllowAnyCall([=](int32_t, int32_t, DirectXPixelFormat, int32_t, CanvasAlphaMode)
             {
-                auto swapChain = Make<MockDxgiSwapChain>();
-
-                swapChain->SetMatrixTransformMethod.SetExpectedCalls(1);
+                auto swapChain = Make<StubDxgiSwapChain>(expectedBackBufferSurface);
 
                 swapChain->GetDesc1Method.SetExpectedCalls(1,
                     [=](DXGI_SWAP_CHAIN_DESC1* desc)
@@ -1038,24 +1021,13 @@ TEST_CLASS(CanvasSwapChainUnitTests)
                         return S_OK;
                     });
 
-                swapChain->GetBufferMethod.SetExpectedCalls(1,
-                    [=](UINT index, const IID& iid, void** out)
-                    {
-                        Assert::AreEqual(0u, index);
-                        Assert::AreEqual(__uuidof(IDXGISurface2), iid);
-
-                        ThrowIfFailed(expectedBackBufferSurface.CopyTo(reinterpret_cast<IDXGISurface2**>(out)));
-
-                        return S_OK;
-                    });
-
                 return swapChain;
             });
         }
 
         ComPtr<CanvasSwapChain> CreateTestSwapChain()
         {
-            return m_swapChainManager->Create(
+            return CanvasSwapChain::CreateNew(
                 m_canvasDevice.Get(),
                 1.0f,
                 1.0f,
@@ -1107,18 +1079,84 @@ TEST_CLASS(CanvasSwapChainUnitTests)
         Assert::AreEqual(E_NOTIMPL, canvasSwapChain->CreateDrawingSession(Color{0, 0, 0, 0}, &drawingSession));
     }
 
+    TEST_METHOD_EX(CanvasSwapChain_ResizeBuffers_DoesNotMessUpTransform)
+    {
+        struct TestCase
+        {
+            Matrix3x2 Transform;
+            float Dpi;
+        } testCases[] {
+            { { 2.0f, 0.0f, 0.0f, 2.0f, 1.0f, 1.0f }, DEFAULT_DPI / 2 },
+            { { -1.0f, 1.0f, 2.0f, 3.0f, 1.0f, 1.0f }, DEFAULT_DPI },
+            { { 4.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f }, DEFAULT_DPI * 2 },
+            { { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f }, DEFAULT_DPI },
+        };
+
+        for (auto testCase : testCases)
+        {
+            DrawingSessionAdapterFixture f;
+
+            // Create a swap chain at default DPI
+            auto swapChain = f.CreateTestSwapChain();
+
+            Matrix3x2 transform1 = testCase.Transform;
+            ThrowIfFailed(swapChain->put_TransformMatrix(transform1));
+
+            // Resize, changing only the DPI
+            ThrowIfFailed(swapChain->ResizeBuffersWithWidthAndHeightAndDpi(1.0f, 1.0f, testCase.Dpi));
+
+            // Get the transform back
+            Matrix3x2 transform2;
+            ThrowIfFailed(swapChain->get_TransformMatrix(&transform2));
+
+            // Should be equal
+            Assert::AreEqual(transform1, transform2);
+        }
+    }
+
+    TEST_METHOD_EX(CanvasSwapChain_ResizeBuffers_OnCoreWindowSwapChain_DoesNotAttemptToModifyMatrix)
+    {
+        auto device = Make<StubCanvasDevice>();
+
+        device->CreateSwapChainForCoreWindowMethod.SetExpectedCalls(1,
+            [=] (ICoreWindow*, int32_t, int32_t, DirectXPixelFormat, int32_t, CanvasAlphaMode)
+            {
+                auto dxgiSwapChain = Make<MockDxgiSwapChain>();
+                dxgiSwapChain->SetMatrixTransformMethod.SetExpectedCalls(0);
+                dxgiSwapChain->GetMatrixTransformMethod.SetExpectedCalls(0);
+                dxgiSwapChain->ResizeBuffersMethod.SetExpectedCalls(1);
+                return dxgiSwapChain;
+            });
+
+        auto swapChain = CanvasSwapChain::CreateNew(
+            device.Get(),
+            Make<MockCoreWindow>().Get(),
+            1.0f,
+            1.0f,
+            DEFAULT_DPI,
+            CanvasSwapChain::DefaultPixelFormat,
+            CanvasSwapChain::DefaultBufferCount);
+
+        ThrowIfFailed(swapChain->ResizeBuffersWithAllOptions(
+            2,
+            2,
+            DEFAULT_DPI * 2,
+            CanvasSwapChain::DefaultPixelFormat,
+            CanvasSwapChain::DefaultBufferCount));
+    }
+
     TEST_METHOD_EX(CanvasSwapChain_DpiProperties)
     {
         const float dpi = 144;
 
         StubDeviceFixture f;
 
-        auto swapChain = f.m_swapChainManager->Create(f.m_canvasDevice.Get(),
-                                                      1.0f, 1.0f,
-                                                      dpi,
-                                                      PIXEL_FORMAT(B8G8R8A8UIntNormalizedSrgb),
-                                                      2,
-                                                      CanvasAlphaMode::Ignore);
+        auto swapChain = CanvasSwapChain::CreateNew(f.m_canvasDevice.Get(),
+                                                    1.0f, 1.0f,
+                                                    dpi,
+                                                    PIXEL_FORMAT(B8G8R8A8UIntNormalizedSrgb),
+                                                    2,
+                                                    CanvasAlphaMode::Ignore);
 
         float actualDpi = 0;
         ThrowIfFailed(swapChain->get_Dpi(&actualDpi));
@@ -1147,7 +1185,7 @@ TEST_CLASS(CanvasSwapChainUnitTests)
         auto mockDxgiOutput = Make<MockDxgiOutput>();
 
         f.m_canvasDevice->GetPrimaryDisplayOutputMethod.SetExpectedCalls(1, 
-            [&]()
+            [&]
             {
                 return mockDxgiOutput;
             });
@@ -1165,22 +1203,22 @@ TEST_CLASS(CanvasSwapChainUnitTests)
 
         f.m_canvasDevice->CreateSwapChainForCompositionMethod.AllowAnyCall(
             [=](int32_t, int32_t, DirectXPixelFormat, int32_t, CanvasAlphaMode)
-        {
-            auto dxgiSwapChain = Make<MockDxgiSwapChain>();
-            dxgiSwapChain->SetMatrixTransformMethod.SetExpectedCalls(1);
-            return dxgiSwapChain;
-        });
+            {
+                auto dxgiSwapChain = Make<MockDxgiSwapChain>();
+                dxgiSwapChain->SetMatrixTransformMethod.SetExpectedCalls(1);
+                return dxgiSwapChain;
+            });
 
         f.m_canvasDevice->GetPrimaryDisplayOutputMethod.SetExpectedCalls(1,
-            [&]()
+            [&]
             {
                 return nullptr;
             });
 
-        std::shared_ptr<MockCanvasSwapChainManager> swapChainManager =
-            std::make_shared<MockCanvasSwapChainManager>();
+        auto swapChainAdapter = std::make_shared<CanvasSwapChainTestAdapter>();
+        CanvasSwapChainAdapter::SetInstance(swapChainAdapter);
 
-        auto canvasSwapChain = swapChainManager->Create(
+        auto canvasSwapChain = CanvasSwapChain::CreateNew(
             f.m_canvasDevice.Get(),
             1.0f,
             1.0f,
@@ -1190,7 +1228,7 @@ TEST_CLASS(CanvasSwapChainUnitTests)
             CanvasSwapChain::DefaultCompositionAlphaMode);
 
         bool sleepCalled = false;
-        swapChainManager->GetTestAdapter()->m_sleepFn =
+        swapChainAdapter->m_sleepFn =
             [&](DWORD timeInMs)
             {
                 Assert::IsFalse(sleepCalled);

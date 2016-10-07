@@ -13,7 +13,6 @@ using Microsoft.Graphics.Canvas;
 using Microsoft.Graphics.Canvas.Effects;
 
 #if WINDOWS_UWP
-using Windows.Graphics.DirectX;
 using Windows.Graphics.Effects;
 using System.Numerics;
 #else
@@ -28,6 +27,15 @@ namespace test.managed
     [TestClass]
     public class EffectTests
     {
+        CanvasDevice device, device2;
+
+        ColorManagementProfile[] colorProfiles;
+
+#if WINDOWS_UWP
+        EffectTransferTable3D[] transferTables;
+#endif
+
+
         [TestMethod]
         public void ReflectOverAllEffects()
         {
@@ -35,36 +43,60 @@ namespace test.managed
 
             var effectTypes = from type in assembly.DefinedTypes
                               where type.ImplementedInterfaces.Contains(typeof(IGraphicsEffect))
+                              where !type.IsInterface
+                              where type.AsType() != typeof(PixelShaderEffect)
                               select type;
+
+            device = new CanvasDevice();
+            device2 = new CanvasDevice();
 
             foreach (var effectType in effectTypes)
             {
+                // Skip testing eg. CrossFadeEffect if we are running on an OS that doesn't support it.
+                if (!IsEffectSupported(effectType))
+                    continue;
+
                 IGraphicsEffect effect = (IGraphicsEffect)Activator.CreateInstance(effectType.AsType());
 
-                TestEffectSources(effectType, effect);
+                // Test an un-realized effect instance.
+                TestEffectSources(effectType, effect, null);
                 TestEffectProperties(effectType, effect);
+                TestEffectHdrProperties(effectType, effect);
+
+                // Realize the effect (creating a backing D2D effect instance), then test it again.
+                var initialSourceImage = RealizeEffect(device, effectType, effect);
+
+                TestEffectSources(effectType, effect, initialSourceImage);
+                TestEffectProperties(effectType, effect);
+                TestEffectHdrProperties(effectType, effect);
+
+                // Test that interop can successfully transfer property values in both directions.
+                TestEffectInterop(effectType, effect);
             }
         }
 
 
-        static void TestEffectSources(TypeInfo effectType, IGraphicsEffect effect)
+        static void TestEffectSources(TypeInfo effectType, IGraphicsEffect effect, ICanvasImage initialSourceImage)
         {
             var sourceProperties = (from property in effectType.DeclaredProperties
                                     where property.PropertyType == typeof(IGraphicsEffectSource)
                                     select property).ToList();
 
+            if (!sourceProperties.Any())
+                return;
+
             // Should have the same number of strongly typed properties as the effect has sources.
             Assert.AreEqual(sourceProperties.Count, EffectAccessor.GetSourceCount(effect));
 
-            // Initial source values should all be null.
+            // Initial source values should all be as expected.
             for (int i = 0; i < EffectAccessor.GetSourceCount(effect); i++)
             {
-                Assert.IsNull(EffectAccessor.GetSource(effect, i));
-                Assert.IsNull(sourceProperties[i].GetValue(effect));
+                Assert.AreEqual(EffectAccessor.GetSource(effect, i), initialSourceImage);
+                Assert.AreEqual(sourceProperties[i].GetValue(effect), initialSourceImage);
             }
 
-            var testValue1 = new GaussianBlurEffect();
-            var testValue2 = new ShadowEffect();
+            var testValue1 = new GaussianBlurEffect() { Source = new ColorSourceEffect() };
+            var testValue2 = new ShadowEffect() { Source = new ColorSourceEffect() };
 
             var whichIndexIsProperty = new List<int>();
 
@@ -73,6 +105,7 @@ namespace test.managed
             {
                 // Change a property value, and see which source changes.
                 sourceProperties[i].SetValue(effect, testValue1);
+                Assert.AreSame(testValue1, sourceProperties[i].GetValue(effect));
 
                 int whichIndexIsThis = 0;
                 
@@ -86,10 +119,12 @@ namespace test.managed
 
                 // Change the same property value again, and make sure the same source changes.
                 sourceProperties[i].SetValue(effect, testValue2);
+                Assert.AreSame(testValue2, sourceProperties[i].GetValue(effect));
                 Assert.AreSame(testValue2, EffectAccessor.GetSource(effect, whichIndexIsThis));
 
                 // Change the property value to null.
                 sourceProperties[i].SetValue(effect, null);
+                Assert.IsNull(sourceProperties[i].GetValue(effect));
                 Assert.IsNull(EffectAccessor.GetSource(effect, whichIndexIsThis));
             }
 
@@ -98,13 +133,9 @@ namespace test.managed
         }
 
 
-        static void TestEffectProperties(TypeInfo effectType, IGraphicsEffect effect)
+        void TestEffectProperties(TypeInfo effectType, IGraphicsEffect effect)
         {
-            var properties = (from property in effectType.DeclaredProperties
-                              where property.Name != "Name"
-                              where property.Name != "Sources"
-                              where property.PropertyType != typeof(IGraphicsEffectSource)
-                              select property).ToList();
+            var properties = GetEffectProperties(effectType).ToList();
 
             IList<object> effectProperties = new ViewIndexerAsList<object>(() => EffectAccessor.GetPropertyCount(effect),
                                                                            i => EffectAccessor.GetProperty(effect, i));
@@ -127,6 +158,7 @@ namespace test.managed
 
                 // Change a property value, and see which collection properties match the result.
                 properties[i].SetValue(effect, testValue1);
+                AssertPropertyValuesAreEqual(testValue1, properties[i].GetValue(effect));
 
                 var matches1 = (from j in Enumerable.Range(0, effectProperties.Count)
                                 where BoxedValuesAreEqual(effectProperties[j], Box(testValue1, properties[i]), properties[i])
@@ -134,6 +166,7 @@ namespace test.managed
 
                 // Change the same property to a different value, and see which collection properties match now.
                 properties[i].SetValue(effect, testValue2);
+                AssertPropertyValuesAreEqual(testValue2, properties[i].GetValue(effect));
 
                 var matches2 = (from j in Enumerable.Range(0, effectProperties.Count)
                                 where BoxedValuesAreEqual(effectProperties[j], Box(testValue2, properties[i]), properties[i])
@@ -148,7 +181,9 @@ namespace test.managed
                 whichIndexIsProperty.Add(whichIndexIsThis);
 
                 // Change the property value back to its initial state.
-                properties[i].SetValue(effect, Unbox(initialValues[whichIndexIsThis], properties[i]));
+                var unboxedValue = Unbox(initialValues[whichIndexIsThis], properties[i]);
+                properties[i].SetValue(effect, unboxedValue);
+                AssertPropertyValuesAreEqual(unboxedValue, properties[i].GetValue(effect));
                 Assert.IsTrue(BoxedValuesAreEqual(initialValues[whichIndexIsThis], effectProperties[whichIndexIsThis], properties[i]));
 
                 // Validate that IGraphicsEffectD2D1Interop agrees with what we think the type and index of this property is.
@@ -170,6 +205,176 @@ namespace test.managed
 
             // Should not have any duplicate property mappings.
             Assert.AreEqual(whichIndexIsProperty.Count, whichIndexIsProperty.Distinct().Count());
+        }
+
+
+        static void TestEffectHdrProperties(TypeInfo effectType, IGraphicsEffect effect)
+        {
+            var properties = GetEffectProperties(effectType).ToList();
+            var hdrProperties = properties.Where(p => p.Name.EndsWith("Hdr"));
+
+            foreach (var hdrProperty in hdrProperties)
+            {
+                var colorPropertyName = hdrProperty.Name.Substring(0, hdrProperty.Name.Length - 3);
+                var colorProperty = properties.Single(p => p.Name == colorPropertyName);
+
+                var originalHdrValue = hdrProperty.GetValue(effect);
+                var originalColorValue = colorProperty.GetValue(effect);
+
+                // Verify that a value set to the color property is picked up on the HDR version of it
+                var color = Color.FromArgb(1, 2, 3, 4);
+                colorProperty.SetValue(effect, color);
+
+                // Color properties may or may not force the alpha channel to 255. Other tests
+                // verify that this is done correctly, so we just read back the property value.
+                color = (Color)colorProperty.GetValue(effect);
+
+                var expectedHdrColor = new Vector4
+                {
+                    X = color.R / 255.0f,
+                    Y = color.G / 255.0f,
+                    Z = color.B / 255.0f,
+                    W = color.A / 255.0f
+                };
+                var retrievedHdrColor = (Vector4)hdrProperty.GetValue(effect);
+
+                Assert.AreEqual(expectedHdrColor, retrievedHdrColor);
+
+                // Verify that a value set to the HDR property is picked up on the non-HDR version.
+                var hdrColor = new Vector4
+                {
+                    X = 0.2f,
+                    Y = 0.4f,
+                    Z = 0.6f,
+                    W = 0.8f
+                };
+                hdrProperty.SetValue(effect, hdrColor);
+                hdrColor = (Vector4)hdrProperty.GetValue(effect);
+
+                var expectedColor = Color.FromArgb((byte)(hdrColor.W * 255.0f), (byte)(hdrColor.X * 255.0f), (byte)(hdrColor.Y * 255.0f), (byte)(hdrColor.Z * 255.0f));
+
+                var retrievedColor = (Color)colorProperty.GetValue(effect);
+                Assert.AreEqual(expectedColor, retrievedColor);
+
+                // Verify that the non-HDR properties are saturated when they return
+                hdrColor = new Vector4 { X = 1.0f, Y = 2.0f, Z = 3.0f, W = 4.0f };
+                hdrProperty.SetValue(effect, hdrColor);
+                hdrColor = (Vector4)hdrProperty.GetValue(effect);
+
+                expectedColor = Color.FromArgb(255, 255, 255, 255);
+                retrievedColor = (Color)colorProperty.GetValue(effect);
+                Assert.AreEqual(expectedColor, retrievedColor);
+
+                // Check the interop settings
+                int mappingIndex;
+                EffectPropertyMapping mapping;
+                EffectAccessor.GetNamedPropertyMapping(effect, colorProperty.Name, out mappingIndex, out mapping);
+
+                int hdrMappingIndex;
+                EffectPropertyMapping hdrMapping;
+                EffectAccessor.GetNamedPropertyMapping(effect, hdrProperty.Name, out hdrMappingIndex, out hdrMapping);
+
+                Assert.AreEqual(mappingIndex, hdrMappingIndex);
+
+                Assert.AreEqual(EffectPropertyMapping.Unknown, hdrMapping);
+
+                // Restore the values
+                hdrProperty.SetValue(effect, originalHdrValue);
+                colorProperty.SetValue(effect, originalColorValue);
+            }
+        }
+
+
+        static ICanvasImage RealizeEffect(CanvasDevice device, TypeInfo effectType, IGraphicsEffect effect)
+        {
+            var dummySourceImage = new CanvasCommandList(device);
+
+            // We can't realize an effect with invalid inputs, so must first set them all to something reasonable.
+            foreach (var sourceProperty in effectType.DeclaredProperties.Where(p => p.PropertyType == typeof(IGraphicsEffectSource)))
+            {
+                sourceProperty.SetValue(effect, dummySourceImage);
+            }
+
+            // Add one image to any variable size Sources collection properties.
+            foreach (var sourcesProperty in effectType.DeclaredProperties.Where(p => p.Name == "Sources"))
+            {
+                var sources = sourcesProperty.GetValue(effect) as IList<IGraphicsEffectSource>;
+
+                sources.Clear();
+                sources.Add(dummySourceImage);
+            }
+
+            EffectAccessor.RealizeEffect(device, effect);
+
+            return dummySourceImage;
+        }
+
+
+        void TestEffectInterop(TypeInfo effectType, IGraphicsEffect realizedEffect)
+        {
+            // One Win2D effect is backed by a realized ID2D1Effect instance, the other is not.
+            // Their property values should be the same either way.
+            IGraphicsEffect unrealizedEffect = (IGraphicsEffect)Activator.CreateInstance(effectType.AsType());
+
+            PropertyValuesShouldMatch(effectType, realizedEffect, unrealizedEffect);
+
+            // Create a new ID2D1Effect instance, then wrap a Win2D effect around it.
+            // We should get the same default property values either way.
+            IGraphicsEffect wrappedEffect = EffectAccessor.CreateThenWrapNewEffectOfSameType(device, realizedEffect);
+
+            // Special case: Win2D intentionally defaults to a different DpiCompensationEffect.BorderMode vs. D2D.
+            if (wrappedEffect is DpiCompensationEffect)
+            {
+                var dpiCompensationEffect = wrappedEffect as DpiCompensationEffect;
+                Assert.AreEqual(EffectBorderMode.Soft, dpiCompensationEffect.BorderMode);
+                dpiCompensationEffect.BorderMode = EffectBorderMode.Hard;
+            }
+
+            PropertyValuesShouldMatch(effectType, unrealizedEffect, wrappedEffect);
+
+            // Re-realize the new effect onto a second device.
+            // All property values should be successfully transferred across.
+            RealizeEffect(device2, effectType, wrappedEffect);
+
+            PropertyValuesShouldMatch(effectType, unrealizedEffect, wrappedEffect);
+        }
+
+
+        static void PropertyValuesShouldMatch(TypeInfo effectType, IGraphicsEffect effect1, IGraphicsEffect effect2)
+        {
+            foreach (var property in GetEffectProperties(effectType))
+            {
+                object value1 = property.GetValue(effect1);
+                object value2 = property.GetValue(effect2);
+
+                AssertPropertyValuesAreEqual(value1, value2);
+            }
+        }
+
+
+        static IEnumerable<PropertyInfo> GetEffectProperties(TypeInfo effectType)
+        {
+            return from property in effectType.DeclaredProperties
+                   where property.Name != "Name"
+                   where property.Name != "Sources"
+                   where property.Name != "BufferPrecision"
+                   where property.Name != "CacheOutput"
+                   where property.Name != "IsSupported"
+                   where property.PropertyType != typeof(IGraphicsEffectSource)
+                   select property;
+        }
+
+
+        static bool IsEffectSupported(TypeInfo effectType)
+        {
+            var isSupported = from property in effectType.DeclaredProperties
+                              where property.Name == "IsSupported"
+                              select property;
+
+            if (!isSupported.Any())
+                return true;
+
+            return (bool)isSupported.Single().GetValue(null);
         }
 
 
@@ -274,6 +479,14 @@ namespace test.managed
                     (float)c.A / 255,
                 };
             }
+            else if (value is ColorManagementProfile
+#if WINDOWS_UWP
+                  || value is EffectTransferTable3D
+#endif
+                    )
+            {
+                return new object[] { value };
+            }
             else
             {
                 throw new NotSupportedException("Unsupported Box type " + value.GetType());
@@ -304,7 +517,7 @@ namespace test.managed
             }
             else if (type.GetTypeInfo().IsEnum)
             {
-                return Enum.GetValues(type).GetValue((int)(uint)value);
+                return GetEnumValues(type).GetValue((int)(uint)value);
             }
             else if (type == typeof(Vector2))
             {
@@ -399,6 +612,17 @@ namespace test.managed
                                       (byte)(a[1] * 255),
                                       (byte)(a[2] * 255));
             }
+            else if (type == typeof(ColorManagementProfile)
+#if WINDOWS_UWP
+                  || type == typeof(EffectTransferTable3D)
+#endif
+                    )
+            {
+                var a = (object[])value;
+                Assert.AreEqual(1, a.Length);
+
+                return a[0];
+            }
             else
             {
                 throw new NotSupportedException("Unsupported Unbox type " + type);
@@ -421,7 +645,7 @@ namespace test.managed
             }
             else if (value1 is float)
             {
-                return Math.Abs((float)value1 - (float)value2) < 0.000001;
+                return Math.Abs((float)value1 - (float)value2) < 0.00001;
             }
             else if (value1 is float[])
             {
@@ -433,6 +657,13 @@ namespace test.managed
                     a1 = ConvertRgbToRgba(a1);
                     a2 = ConvertRgbToRgba(a2);
                 }
+
+                return a1.SequenceEqual(a2);
+            }
+            else if (value1 is object[])
+            {
+                object[] a1 = (object[])value1;
+                object[] a2 = (object[])value2;
 
                 return a1.SequenceEqual(a2);
             }
@@ -515,7 +746,7 @@ namespace test.managed
         }
 
 
-        static object GetArbitraryTestValue(Type type, bool whichOne)
+        object GetArbitraryTestValue(Type type, bool whichOne)
         {
             if (type == typeof(int))
             {
@@ -531,7 +762,7 @@ namespace test.managed
             }
             else if (type.GetTypeInfo().IsEnum)
             {
-                return Enum.GetValues(type).GetValue(whichOne ? 0 : 1);
+                return GetEnumValues(type).GetValue(whichOne ? 0 : 1);
             }
             else if (type == typeof(Vector2))
             {
@@ -613,6 +844,34 @@ namespace test.managed
                 return whichOne ? new float[] { 1, 2, 3 } :
                                   new float[] { 4, 5, 6, 7, 8, 9 };
             }
+            else if (type == typeof(ColorManagementProfile))
+            {
+                if (colorProfiles == null)
+                {
+                    colorProfiles = new ColorManagementProfile[]
+                    {
+                        new ColorManagementProfile(CanvasColorSpace.Srgb),
+                        new ColorManagementProfile(CanvasColorSpace.ScRgb),
+                    };
+                }
+
+                return colorProfiles[whichOne ? 0 : 1];
+            }
+#if WINDOWS_UWP
+            else if (type == typeof(EffectTransferTable3D))
+            {
+                if (transferTables == null)
+                {
+                    transferTables = new EffectTransferTable3D[]
+                    {
+                        EffectTransferTable3D.CreateFromColors(device, new Color[8], 2, 2, 2),
+                        EffectTransferTable3D.CreateFromColors(device, new Color[8], 2, 2, 2),
+                    };
+                }
+
+                return transferTables[whichOne ? 0 : 1];
+            }
+#endif
             else
             {
                 throw new NotSupportedException("Unsupported GetArbitraryTestValue type " + type);
@@ -620,62 +879,96 @@ namespace test.managed
         }
 
 
+        // Replacement for Enum.GetValues, to work around VS2015 .NET Native reflection bug.
+        static object[] GetEnumValues(Type type)
+        {
+            Assert.IsTrue(type.GetTypeInfo().IsEnum);
+
+            var values = from field in type.GetTypeInfo().DeclaredFields
+                         where field.IsStatic
+                         orderby field.GetValue(null)
+                         select field.GetValue(null);
+
+            return values.ToArray();
+        }
+
+
         static void FilterOutCustomizedEffectProperties(Type effectType, ref List<PropertyInfo> properties, ref IList<object> effectProperties)
         {
             // Customized properties that our general purpose reflection based property test won't understand.
-            string[] propertiesToRemove;
-            int[] indexMapping;
+            List<string> propertiesToRemove = new List<string>();
+            int[] indexMapping = null;
 
             if (effectType == typeof(ArithmeticCompositeEffect))
             {
                 // ArithmeticCompositeEffect has strange customized properties.
                 // Win2D exposes what D2D treats as a single Vector4 as 4 separate float properties. 
-                propertiesToRemove = new string[]
+                propertiesToRemove.AddRange(new string[]
                 {
                     "MultiplyAmount",
                     "Source1Amount",
                     "Source2Amount",
                     "Offset"
-                };
+                });
 
                 indexMapping = new int[] { 1 };
+            }
+            else if (effectType == typeof(ColorManagementEffect))
+            {
+                // ColorManagementEffect.AlphaMode has special logic to remap enum values between WinRT and D2D.
+                propertiesToRemove.Add("AlphaMode");
+                indexMapping = new int[] { 0, 1, 2, 3, 5 };
             }
             else if (effectType == typeof(ColorMatrixEffect))
             {
                 // ColorMatrixEffect.AlphaMode has special logic to remap enum values between WinRT and D2D.
-                propertiesToRemove = new string[] { "AlphaMode", };
+                propertiesToRemove.Add("AlphaMode");
                 indexMapping = new int[] { 0, 2 };
             }
 #if WINDOWS_UWP
             else if (effectType == typeof(SepiaEffect))
             {
                 // SepiaEffect.AlphaMode has special logic to remap enum values between WinRT and D2D.
-                propertiesToRemove = new string[] { "AlphaMode", };
+                propertiesToRemove.Add("AlphaMode");
                 indexMapping = new int[] { 0 };
             }
             else if (effectType == typeof(EdgeDetectionEffect))
             {
                 // EdgeDetectionEffect.AlphaMode has special logic to remap enum values between WinRT and D2D.
-                propertiesToRemove = new string[] { "AlphaMode", };
+                propertiesToRemove.Add("AlphaMode");
                 indexMapping = new int[] { 0, 1, 2, 3 };
+            }
+            else if (effectType == typeof(TableTransfer3DEffect))
+            {
+                // TableTransfer3DEffect.AlphaMode has special logic to remap enum values between WinRT and D2D.
+                propertiesToRemove.Add("AlphaMode");
+                indexMapping = new int[] { 0 };
             }
             else if (effectType == typeof(HighlightsAndShadowsEffect))
             {
                 // HighlightsAndShadowsEffect.SourceIsLinearGamma projects an enum value as a bool.
-                propertiesToRemove = new string[] { "SourceIsLinearGamma", };
+                propertiesToRemove.Add("SourceIsLinearGamma");
                 indexMapping = new int[] { 0, 1, 2, 4 };
             }
 #endif  // WINDOWS_UWP
-            else
+
+            // Remove any HDR properties
+            var hdrProperties = properties.Where(p => p.Name.EndsWith("Hdr")).Select(p => p.Name);
+
+            // Sanity check that HDR properties have matching non-HDR version
+            foreach (var p in hdrProperties)
             {
-                // Other effects do not need special filtering.
-                return;
+                var nonHdr = p.Substring(0, p.Length - 3);
+                properties.Single(cp => cp.Name == nonHdr);
             }
+
+            propertiesToRemove.AddRange(hdrProperties);
 
             // Hide the customized properties, so ReflectOverAllEffects test won't see them.
             properties = properties.Where(p => !propertiesToRemove.Contains(p.Name)).ToList();
 
-            effectProperties = new FilteredViewOfList<object>(effectProperties, indexMapping);
+            if (indexMapping != null)
+                effectProperties = new FilteredViewOfList<object>(effectProperties, indexMapping);
         }
 
 
@@ -822,33 +1115,52 @@ namespace test.managed
         const uint D2D1_ALPHA_MODE_STRAIGHT = 2;
 
 
-        [TestMethod]
-        public void ColorMatrixEffectCustomizations()
+        static void TestAlphaModeCustomizations(IGraphicsEffect effect, int propertyIndex, Func<CanvasAlphaMode> getAlphaMode, Action<CanvasAlphaMode> setAlphaMode)
         {
-            var effect = new ColorMatrixEffect();
-
             // Verify defaults.
-            Assert.AreEqual(CanvasAlphaMode.Premultiplied, effect.AlphaMode);
-            Assert.AreEqual(D2D1_ALPHA_MODE_PREMULTIPLIED, EffectAccessor.GetProperty(effect, 1));
+            Assert.AreEqual(CanvasAlphaMode.Premultiplied, getAlphaMode());
+            Assert.AreEqual(D2D1_ALPHA_MODE_PREMULTIPLIED, EffectAccessor.GetProperty(effect, propertyIndex));
 
             // Change the property, and verify that the boxed value changes to match.
-            effect.AlphaMode = CanvasAlphaMode.Straight;
-            Assert.AreEqual(D2D1_ALPHA_MODE_STRAIGHT, EffectAccessor.GetProperty(effect, 1));
+            setAlphaMode(CanvasAlphaMode.Straight);
+            Assert.AreEqual(D2D1_ALPHA_MODE_STRAIGHT, EffectAccessor.GetProperty(effect, propertyIndex));
 
-            effect.AlphaMode = CanvasAlphaMode.Premultiplied;
-            Assert.AreEqual(D2D1_ALPHA_MODE_PREMULTIPLIED, EffectAccessor.GetProperty(effect, 1));
+            setAlphaMode(CanvasAlphaMode.Premultiplied);
+            Assert.AreEqual(D2D1_ALPHA_MODE_PREMULTIPLIED, EffectAccessor.GetProperty(effect, propertyIndex));
 
             // Verify unsupported value throws.
-            Assert.ThrowsException<ArgumentException>(() => { effect.AlphaMode = CanvasAlphaMode.Ignore; });
-            Assert.AreEqual(CanvasAlphaMode.Premultiplied, effect.AlphaMode);
+            Assert.ThrowsException<ArgumentException>(() => { setAlphaMode(CanvasAlphaMode.Ignore); });
+            Assert.AreEqual(CanvasAlphaMode.Premultiplied, getAlphaMode());
 
             // Validate that IGraphicsEffectD2D1Interop reports the right customizations.
             int index;
             EffectPropertyMapping mapping;
 
             EffectAccessor.GetNamedPropertyMapping(effect, "AlphaMode", out index, out mapping);
-            Assert.AreEqual(1, index);
+            Assert.AreEqual(propertyIndex, index);
             Assert.AreEqual(EffectPropertyMapping.ColorMatrixAlphaMode, mapping);
+        }
+
+
+        [TestMethod]
+        public void ColorManagementEffectCustomizations()
+        {
+            var effect = new ColorManagementEffect();
+
+            TestAlphaModeCustomizations(effect, 4,
+                                        () => effect.AlphaMode,
+                                        alphaMode => effect.AlphaMode = alphaMode);
+        }
+
+
+        [TestMethod]
+        public void ColorMatrixEffectCustomizations()
+        {
+            var effect = new ColorMatrixEffect();
+
+            TestAlphaModeCustomizations(effect, 1,
+                                        () => effect.AlphaMode,
+                                        alphaMode => effect.AlphaMode = alphaMode);
         }
 
 
@@ -860,28 +1172,9 @@ namespace test.managed
         {
             var effect = new SepiaEffect();
 
-            // Verify defaults.
-            Assert.AreEqual(CanvasAlphaMode.Premultiplied, effect.AlphaMode);
-            Assert.AreEqual(D2D1_ALPHA_MODE_PREMULTIPLIED, EffectAccessor.GetProperty(effect, 1));
-
-            // Change the property, and verify that the boxed value changes to match.
-            effect.AlphaMode = CanvasAlphaMode.Straight;
-            Assert.AreEqual(D2D1_ALPHA_MODE_STRAIGHT, EffectAccessor.GetProperty(effect, 1));
-
-            effect.AlphaMode = CanvasAlphaMode.Premultiplied;
-            Assert.AreEqual(D2D1_ALPHA_MODE_PREMULTIPLIED, EffectAccessor.GetProperty(effect, 1));
-
-            // Verify unsupported value throws.
-            Assert.ThrowsException<ArgumentException>(() => { effect.AlphaMode = CanvasAlphaMode.Ignore; });
-            Assert.AreEqual(CanvasAlphaMode.Premultiplied, effect.AlphaMode);
-
-            // Validate that IGraphicsEffectD2D1Interop reports the right customizations.
-            int index;
-            EffectPropertyMapping mapping;
-
-            EffectAccessor.GetNamedPropertyMapping(effect, "AlphaMode", out index, out mapping);
-            Assert.AreEqual(1, index);
-            Assert.AreEqual(EffectPropertyMapping.ColorMatrixAlphaMode, mapping);
+            TestAlphaModeCustomizations(effect, 1,
+                                        () => effect.AlphaMode,
+                                        alphaMode => effect.AlphaMode = alphaMode);
         }
 
 
@@ -890,28 +1183,20 @@ namespace test.managed
         {
             var effect = new EdgeDetectionEffect();
 
-            // Verify defaults.
-            Assert.AreEqual(CanvasAlphaMode.Premultiplied, effect.AlphaMode);
-            Assert.AreEqual(D2D1_ALPHA_MODE_PREMULTIPLIED, EffectAccessor.GetProperty(effect, 4));
+            TestAlphaModeCustomizations(effect, 4,
+                                        () => effect.AlphaMode,
+                                        alphaMode => effect.AlphaMode = alphaMode);
+        }
 
-            // Change the property, and verify that the boxed value changes to match.
-            effect.AlphaMode = CanvasAlphaMode.Straight;
-            Assert.AreEqual(D2D1_ALPHA_MODE_STRAIGHT, EffectAccessor.GetProperty(effect, 4));
 
-            effect.AlphaMode = CanvasAlphaMode.Premultiplied;
-            Assert.AreEqual(D2D1_ALPHA_MODE_PREMULTIPLIED, EffectAccessor.GetProperty(effect, 4));
+        [TestMethod]
+        public void TableTransfer3DEffectCustomizations()
+        {
+            var effect = new TableTransfer3DEffect();
 
-            // Verify unsupported value throws.
-            Assert.ThrowsException<ArgumentException>(() => { effect.AlphaMode = CanvasAlphaMode.Ignore; });
-            Assert.AreEqual(CanvasAlphaMode.Premultiplied, effect.AlphaMode);
-
-            // Validate that IGraphicsEffectD2D1Interop reports the right customizations.
-            int index;
-            EffectPropertyMapping mapping;
-
-            EffectAccessor.GetNamedPropertyMapping(effect, "AlphaMode", out index, out mapping);
-            Assert.AreEqual(4, index);
-            Assert.AreEqual(EffectPropertyMapping.ColorMatrixAlphaMode, mapping);
+            TestAlphaModeCustomizations(effect, 1,
+                                        () => effect.AlphaMode,
+                                        alphaMode => effect.AlphaMode = alphaMode);
         }
 
 
@@ -1008,18 +1293,6 @@ namespace test.managed
 
         class NotACanvasImage : IGraphicsEffectSource { }
 
-        void VerifyExceptionMessage(string expected, string sourceMessage)
-        {
-            // Exception messages contain something like 
-            // "Invalid pointer\r\n\r\nEffect source #0 is null",
-            // The 'invalid pointer' part is locale 
-            // dependent and is stripped out.
-
-            string delimiterString = "\r\n\r\n";
-            int delimiterPosition = sourceMessage.LastIndexOf(delimiterString);
-            string exceptionMessage = sourceMessage.Substring(delimiterPosition + delimiterString.Length);
-            Assert.AreEqual(expected, exceptionMessage);
-        }
 
         [TestMethod]
         public void EffectExceptionMessages()
@@ -1031,28 +1304,70 @@ namespace test.managed
             using (var drawingSession = renderTarget.CreateDrawingSession())
             {
                 // Null source.
-                try
-                {
-                    drawingSession.DrawImage(effect);
-                    Assert.Fail("should throw");
-                }
-                catch (NullReferenceException e)
-                {
-                    VerifyExceptionMessage("Effect source #0 is null.", e.Message);
-                }
+                Utils.AssertThrowsException< ArgumentException>(
+                    () => drawingSession.DrawImage(effect),  
+                    "Effect source #0 is null.");
+
+                // Null source (tree 2 deep).
+                effect.Source = new GaussianBlurEffect();
+
+                Utils.AssertThrowsException<ArgumentException>(
+                    () => drawingSession.DrawImage(effect), 
+                    "Effect source #0 is null.");
 
                 // Invalid source type.
                 effect.Source = new NotACanvasImage();
 
-                try
-                {
-                    drawingSession.DrawImage(effect);
-                    Assert.Fail("should throw");
-                }
-                catch (InvalidCastException e)
-                {
-                    VerifyExceptionMessage("Effect source #0 is an unsupported type. To draw an effect using Win2D, all its sources must be Win2D ICanvasImage objects.", e.Message);
-                }
+                Utils.AssertThrowsException<InvalidCastException>(
+                    () => drawingSession.DrawImage(effect), 
+                    "Effect source #0 is an unsupported type. To draw an effect using Win2D, all its sources must be Win2D ICanvasImage objects.");
+
+                // Invalid source type (tree 2 deep).
+                effect.Source = new GaussianBlurEffect { Source = new NotACanvasImage() };
+
+                Utils.AssertThrowsException<InvalidCastException>(
+                    () => drawingSession.DrawImage(effect), 
+                    "Effect source #0 is an unsupported type. To draw an effect using Win2D, all its sources must be Win2D ICanvasImage objects.");
+
+                // But I can set invalid source types as long as I don't draw with them,
+                // even when the effect is previously realized.
+                effect.Source = new ColorSourceEffect();
+                drawingSession.DrawImage(effect);
+
+                effect.Source = new NotACanvasImage();  // no exception
+
+                effect.Source = new ColorSourceEffect();
+                drawingSession.DrawImage(effect);
+
+                effect.Source = new GaussianBlurEffect { Source = new NotACanvasImage() };  // no exception
+            }
+        }
+
+
+        [TestMethod]
+        public void EffectDrawFailsWhenSourceIsBitmapOnWrongDevice()
+        {
+            var effect = new GaussianBlurEffect();
+
+            using (var device = new CanvasDevice())
+            using (var renderTarget = new CanvasRenderTarget(device, 1, 1, 96))
+            using (var drawingSession = renderTarget.CreateDrawingSession())
+            using (var otherDevice = new CanvasDevice())
+            using (var bitmapOnOtherDevice = new CanvasRenderTarget(otherDevice, 1, 1, 96))
+            {
+                // Source bitmap is on the wrong device.
+                effect.Source = bitmapOnOtherDevice;
+
+                Utils.AssertThrowsException<ArgumentException>(
+                    () => drawingSession.DrawImage(effect),
+                    "Effect source #0 is associated with a different device.");
+
+                // Source is another effect, whose source is a bitmap on the wrong device.
+                effect.Source = new GaussianBlurEffect { Source = bitmapOnOtherDevice };
+
+                Utils.AssertThrowsException<ArgumentException>(
+                    () => drawingSession.DrawImage(effect),
+                    "Effect source #0 is associated with a different device.");
             }
         }
 

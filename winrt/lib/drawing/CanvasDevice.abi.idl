@@ -5,6 +5,7 @@
 namespace Microsoft.Graphics.Canvas
 {    
     runtimeclass CanvasDevice;
+    runtimeclass CanvasLock;
 
     [version(VERSION)]
     typedef enum CanvasDpiRounding
@@ -51,8 +52,15 @@ namespace Microsoft.Graphics.Canvas
         //
         // The implementation checks if a device is already lost before it 
         // returns it. If the device is already lost it will recreate it.
-        // 
+        //
+        // Defaults for forceSoftwareRenderer = false
+        //
+        [overload("GetSharedDevice")]
         HRESULT GetSharedDevice(
+            [out, retval] CanvasDevice** canvasDevice);
+        
+        [overload("GetSharedDevice")]
+        HRESULT GetSharedDeviceWithForceSoftwareRenderer(
             [in] boolean forceSoftwareRenderer, 
             [out, retval] CanvasDevice** canvasDevice);
 
@@ -80,6 +88,20 @@ namespace Microsoft.Graphics.Canvas
         [propget]
         HRESULT MaximumBitmapSizeInPixels(
             [out, retval] INT32* value);
+
+        HRESULT IsPixelFormatSupported(
+            [in] DIRECTX_PIXEL_FORMAT pixelFormat,
+            [out, retval] boolean* value);
+
+        HRESULT IsBufferPrecisionSupported(
+            [in] CanvasBufferPrecision bufferPrecision,
+            [out, retval] boolean* value);
+
+        [propget] HRESULT MaximumCacheSize([out, retval] UINT64* value);
+        [propput] HRESULT MaximumCacheSize([in] UINT64 value);
+
+        [propget] HRESULT LowPriority([out, retval] boolean* value);
+        [propput] HRESULT LowPriority([in] boolean value);
 
         //
         // This event is raised whenever the native device resource is lost-
@@ -112,11 +134,31 @@ namespace Microsoft.Graphics.Canvas
         // the device is lost.
         //
         HRESULT RaiseDeviceLost();
+
+        //
+        // Locks access to this device to this thread.
+        //
+        // This calls ID2D1MultiThread::Enter.  When the lock object is closed
+        // it calls ID2D1MultiThread::Leave.
+        //
+        HRESULT Lock([out, retval] CanvasLock** lock);
     };
 
-    [version(VERSION), activatable(VERSION), activatable(ICanvasDeviceFactory, VERSION), static(ICanvasDeviceStatics, VERSION)]
+    [STANDARD_ATTRIBUTES, activatable(VERSION), activatable(ICanvasDeviceFactory, VERSION), static(ICanvasDeviceStatics, VERSION)]
     runtimeclass CanvasDevice
     {
         [default] interface ICanvasDevice;
     }
+
+    [version(VERSION), uuid(7A0E8498-FBA9-4FB0-AA8C-6A48B5EE3E4F), exclusiveto(CanvasLock)]
+    interface ICanvasLock : IInspectable
+    {
+    }
+
+    [STANDARD_ATTRIBUTES]
+    runtimeclass CanvasLock
+    {
+        [default] interface ICanvasLock;
+        interface Windows.Foundation.IClosable;
+    };
 }

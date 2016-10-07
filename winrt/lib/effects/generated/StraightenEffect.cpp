@@ -11,13 +11,16 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    StraightenEffect::StraightenEffect()
-        : CanvasEffect(CLSID_D2D1Straighten, 3, 1, true)
+    StraightenEffect::StraightenEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 3, 1, true, device, effect, static_cast<IStraightenEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<float>(D2D1_STRAIGHTEN_PROP_ANGLE, 0.0f);
-        SetBoxedProperty<boolean>(D2D1_STRAIGHTEN_PROP_MAINTAIN_SIZE, static_cast<boolean>(false));
-        SetBoxedProperty<uint32_t>(D2D1_STRAIGHTEN_PROP_SCALE_MODE, D2D1_INTERPOLATION_MODE_LINEAR);
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<float>(D2D1_STRAIGHTEN_PROP_ANGLE, 0.0f);
+            SetBoxedProperty<boolean>(D2D1_STRAIGHTEN_PROP_MAINTAIN_SIZE, static_cast<boolean>(false));
+            SetBoxedProperty<uint32_t>(D2D1_STRAIGHTEN_PROP_SCALE_MODE, D2D1_INTERPOLATION_MODE_LINEAR);
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY(StraightenEffect,
@@ -48,7 +51,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         { L"MaintainSize",      D2D1_STRAIGHTEN_PROP_MAINTAIN_SIZE, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT             },
         { L"InterpolationMode", D2D1_STRAIGHTEN_PROP_SCALE_MODE,    GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT             })
 
-    ActivatableClass(StraightenEffect);
+    ActivatableClassWithFactory(StraightenEffect, SimpleAgileActivationFactory<StraightenEffect>);
 }}}}}
 
 #endif // _WIN32_WINNT_WIN10

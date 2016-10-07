@@ -9,13 +9,16 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    GaussianBlurEffect::GaussianBlurEffect()
-        : CanvasEffect(CLSID_D2D1GaussianBlur, 3, 1, true)
+    GaussianBlurEffect::GaussianBlurEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 3, 1, true, device, effect, static_cast<IGaussianBlurEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<float>(D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION, 3.0f);
-        SetBoxedProperty<uint32_t>(D2D1_GAUSSIANBLUR_PROP_OPTIMIZATION, D2D1_GAUSSIANBLUR_OPTIMIZATION_BALANCED);
-        SetBoxedProperty<uint32_t>(D2D1_GAUSSIANBLUR_PROP_BORDER_MODE, D2D1_BORDER_MODE_SOFT);
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<float>(D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION, 3.0f);
+            SetBoxedProperty<uint32_t>(D2D1_GAUSSIANBLUR_PROP_OPTIMIZATION, D2D1_GAUSSIANBLUR_OPTIMIZATION_BALANCED);
+            SetBoxedProperty<uint32_t>(D2D1_GAUSSIANBLUR_PROP_BORDER_MODE, D2D1_BORDER_MODE_SOFT);
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY_WITH_VALIDATION(GaussianBlurEffect,
@@ -46,5 +49,5 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         { L"Optimization", D2D1_GAUSSIANBLUR_PROP_OPTIMIZATION,       GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT },
         { L"BorderMode",   D2D1_GAUSSIANBLUR_PROP_BORDER_MODE,        GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT })
 
-    ActivatableClass(GaussianBlurEffect);
+    ActivatableClassWithFactory(GaussianBlurEffect, SimpleAgileActivationFactory<GaussianBlurEffect>);
 }}}}}

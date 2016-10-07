@@ -6,6 +6,7 @@
 
 #include "mocks/MockD2DRectangleGeometry.h"
 #include "mocks/MockD2DGeometryRealization.h"
+#include "mocks/MockD2DGradientMesh.h"
 
 namespace canvas
 {
@@ -18,14 +19,18 @@ namespace canvas
         ComPtr<ID2D1Device1> m_d2DDevice;
         ComPtr<MockD3D11Device> m_d3dDevice;
         ComPtr<MockEventSource<DeviceLostHandlerType>> m_deviceLostEventSource;
-
+        DeviceContextPool m_deviceContextPool;
+        
     public:
-        StubCanvasDevice(ComPtr<ID2D1Device1> device = Make<StubD2DDevice>())
+        StubCanvasDevice(ComPtr<ID2D1Device1> device = Make<StubD2DDevice>(), ComPtr<MockD3D11Device> d3dDevice = nullptr)
             : m_d2DDevice(device)
+            , m_d3dDevice(d3dDevice)
             , m_deviceLostEventSource(Make<MockEventSource<DeviceLostHandlerType>>(L"DeviceLost"))
+            , m_deviceContextPool(m_d2DDevice.Get())
         {
             GetInterfaceMethod.AllowAnyCall();
-            CreateDeviceContextMethod.AllowAnyCall(
+            
+            CreateDeviceContextForDrawingSessionMethod.AllowAnyCall(
                 [=]
                 {
                     ComPtr<ID2D1DeviceContext1> dc;
@@ -54,9 +59,7 @@ namespace canvas
             GetResourceCreationDeviceContextMethod.AllowAnyCall(
                 [=]
                 {
-                    ComPtr<ID2D1DeviceContext1> dc;
-                    ThrowIfFailed(m_d2DDevice->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &dc));
-                    return dc;
+                    return m_deviceContextPool.TakeLease();
                 });
 
             GetPrimaryDisplayOutputMethod.AllowAnyCall(
@@ -80,7 +83,7 @@ namespace canvas
                 });
 
             RaiseDeviceLostMethod.AllowAnyCall(
-                [=]()
+                [=]
                 {
                     return m_deviceLostEventSource->InvokeAll(this, nullptr);
                 });
@@ -91,6 +94,14 @@ namespace canvas
                     *out = false;
                     return S_OK;
                 });
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+            CreateGradientMeshMethod.AllowAnyCall(
+                [=](D2D1_GRADIENT_MESH_PATCH const*, UINT32)
+                {
+                    return Make<MockD2DGradientMesh>();
+                });
+#endif
         }
 
         void MarkAsLost()
@@ -109,10 +120,7 @@ namespace canvas
         IFACEMETHODIMP get_Device(ICanvasDevice** value) override
         {
             ComPtr<ICanvasDevice> device(this);
-
-            *value = device.Detach();
-
-            return S_OK;
+            return device.CopyTo(value);
         }
 
         IFACEMETHODIMP GetInterface(REFIID iid, void** p) override

@@ -8,31 +8,34 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
 {
     using namespace ::Microsoft::WRL;
 
-    class CanvasCachedGeometry;
-    class CanvasCachedGeometryManager;
-
-    struct CanvasCachedGeometryTraits
-    {
-        typedef ID2D1GeometryRealization resource_t;
-        typedef CanvasCachedGeometry wrapper_t;
-        typedef ICanvasCachedGeometry wrapper_interface_t;
-        typedef CanvasCachedGeometryManager manager_t;
-    };
-
     class CanvasCachedGeometry : RESOURCE_WRAPPER_RUNTIME_CLASS(
-        CanvasCachedGeometryTraits,
-        IClosable)
+        ID2D1GeometryRealization,
+        CanvasCachedGeometry,
+        ICanvasCachedGeometry,
+        CloakedIid<ICanvasResourceWrapperWithDevice>)
     {
         InspectableClass(RuntimeClass_Microsoft_Graphics_Canvas_Geometry_CanvasCachedGeometry, BaseTrust);
 
         ClosablePtr<ICanvasDevice> m_canvasDevice;
 
     public:
+        // Cached fills
+        static ComPtr<CanvasCachedGeometry> CreateNew(
+            ICanvasDevice* device,
+            ICanvasGeometry* geometry,
+            float flatteningTolerance);
+
+        // Cached strokes
+        static ComPtr<CanvasCachedGeometry> CreateNew(
+            ICanvasDevice* device,
+            ICanvasGeometry* geometry,
+            float strokeWidth,
+            ICanvasStrokeStyle* strokeStyle,
+            float flatteningTolerance);
 
         CanvasCachedGeometry(
-            std::shared_ptr<CanvasCachedGeometryManager> manager,
-            ID2D1GeometryRealization* d2dGeometryRealization,
-            ComPtr<ICanvasDevice> const& device);
+            ICanvasDevice* device,
+            ID2D1GeometryRealization* d2dGeometryRealization);
 
         IFACEMETHOD(Close)();
 
@@ -40,39 +43,13 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
     };
 
 
-    class CanvasCachedGeometryManager : public ResourceManager<CanvasCachedGeometryTraits>
-    {
-    public:
-        // Cached fills
-        ComPtr<CanvasCachedGeometry> CreateNew(
-            ICanvasDevice* device,
-            ICanvasGeometry* geometry,
-            float flatteningTolerance);
-
-        // Cached strokes
-        ComPtr<CanvasCachedGeometry> CreateNew(
-            ICanvasDevice* device,
-            ICanvasGeometry* geometry,
-            float strokeWidth,
-            ICanvasStrokeStyle* strokeStyle,
-            float flatteningTolerance);
-
-        ComPtr<CanvasCachedGeometry> CreateWrapper(
-            ICanvasDevice* device,
-            ID2D1GeometryRealization* resource);
-    };
-
     class CanvasCachedGeometryFactory
-        : public ActivationFactory<
-            ICanvasCachedGeometryStatics,
-            CloakedIid<ICanvasDeviceResourceFactoryNative>> ,
-            public PerApplicationManager<CanvasCachedGeometryFactory, CanvasCachedGeometryManager>
+        : public AgileActivationFactory<ICanvasCachedGeometryStatics>
+        , private LifespanTracker<CanvasCachedGeometryFactory>
     {
         InspectableClassStatic(RuntimeClass_Microsoft_Graphics_Canvas_Geometry_CanvasCachedGeometry, BaseTrust);
 
     public:
-        IMPLEMENT_DEFAULT_ICANVASDEVICERESOURCEFACTORYNATIVE();
-
         IFACEMETHOD(CreateFill)(
             ICanvasGeometry* geometry,
             ICanvasCachedGeometry** cachedGeometry) override;

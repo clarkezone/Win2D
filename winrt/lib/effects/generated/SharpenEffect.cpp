@@ -11,12 +11,15 @@
 
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { namespace Effects
 {
-    SharpenEffect::SharpenEffect()
-        : CanvasEffect(CLSID_D2D1Sharpen, 2, 1, true)
+    SharpenEffect::SharpenEffect(ICanvasDevice* device, ID2D1Effect* effect)
+        : CanvasEffect(EffectId(), 2, 1, true, device, effect, static_cast<ISharpenEffect*>(this))
     {
-        // Set default values
-        SetBoxedProperty<float>(D2D1_SHARPEN_PROP_SHARPNESS, 0.0f);
-        SetBoxedProperty<float>(D2D1_SHARPEN_PROP_THRESHOLD, 0.0f);
+        if (!effect)
+        {
+            // Set default values
+            SetBoxedProperty<float>(D2D1_SHARPEN_PROP_SHARPNESS, 0.0f);
+            SetBoxedProperty<float>(D2D1_SHARPEN_PROP_THRESHOLD, 0.0f);
+        }
     }
 
     IMPLEMENT_EFFECT_PROPERTY_WITH_VALIDATION(SharpenEffect,
@@ -41,7 +44,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         { L"Amount",    D2D1_SHARPEN_PROP_SHARPNESS, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT },
         { L"Threshold", D2D1_SHARPEN_PROP_THRESHOLD, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT })
 
-    ActivatableClass(SharpenEffect);
+    ActivatableClassWithFactory(SharpenEffect, SimpleAgileActivationFactory<SharpenEffect>);
 }}}}}
 
 #endif // _WIN32_WINNT_WIN10

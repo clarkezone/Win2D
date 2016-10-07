@@ -11,15 +11,12 @@ Licensed under the MIT License. See LICENSE.txt in the project root for license 
   </assembly>
   <members>
   
-    <member name="T:Microsoft.Graphics.Canvas.Effects.SpotSpecularEffect">
+    <member name="T:Microsoft.Graphics.Canvas.Effects.SpotSpecularEffect" NoComposition="true">
       <summary>
-        <p>
-          Lighting effect creates an image that appears to be a reflective surface where 
-          the light source is limited to a directed cone of light. This effect uses the 
-          alpha channel as a height map, and lights it with a point light source applying 
-          the specular portion of the Phong lighting model.
-        </p>
-        <p><i>Supported by Win2D but not Windows.UI.Composition.</i></p>
+        Lighting effect creates an image that appears to be a reflective surface where 
+        the light source is limited to a directed cone of light. This effect uses the 
+        alpha channel as a height map, and lights it with a point light source applying 
+        the specular portion of the Phong lighting model.
       </summary>
       <remarks>
         <p>This Windows Runtime type corresponds to the 
@@ -28,9 +25,6 @@ Licensed under the MIT License. See LICENSE.txt in the project root for license 
     </member>
     <member name="M:Microsoft.Graphics.Canvas.Effects.SpotSpecularEffect.#ctor">
       <summary>Initializes a new instance of the SpotSpecularEffect class.</summary>
-    </member>
-    <member name="M:Microsoft.Graphics.Canvas.Effects.SpotSpecularEffect.Dispose">
-      <summary>Releases all resources used by the SpotSpecularEffect.</summary>
     </member>
     <member name="P:Microsoft.Graphics.Canvas.Effects.SpotSpecularEffect.SpecularExponent">
       <summary>Specular power for the Phong lighting model. Larger values produce 
@@ -58,6 +52,9 @@ Licensed under the MIT License. See LICENSE.txt in the project root for license 
     <member name="P:Microsoft.Graphics.Canvas.Effects.SpotSpecularEffect.LightColor">
       <summary>Color of the incoming light. Default value white.</summary>
     </member>
+    <member name="P:Microsoft.Graphics.Canvas.Effects.SpotSpecularEffect.LightColorHdr">
+      <summary>High-dynamic-range color of the incoming light. Default value white.</summary>
+    </member>
     <member name="P:Microsoft.Graphics.Canvas.Effects.SpotSpecularEffect.HeightMapScale">
       <summary>Height map scale factor in the Z direction. Default value 1.</summary>
     </member>
@@ -73,18 +70,8 @@ Licensed under the MIT License. See LICENSE.txt in the project root for license 
       <summary>Focus of the spot light. Default value 1.</summary>
     </member>
     
-    <member name="M:Microsoft.Graphics.Canvas.Effects.SpotSpecularEffect.GetBounds(Microsoft.Graphics.Canvas.CanvasDrawingSession)">
-      <summary>Retrieves the bounds of this CanvasImage, in device-independent units.</summary>
-      <inheritdoc/>
-    </member>
-    <member name="M:Microsoft.Graphics.Canvas.Effects.SpotSpecularEffect.GetBounds(Microsoft.Graphics.Canvas.CanvasDrawingSession,Microsoft.Graphics.Canvas.Numerics.Matrix3x2)">
-      <summary>Retrieves the bounds of the CanvasImage, in device-independent units.</summary>
-      <inheritdoc/>
-    </member>
-    <member name="P:Microsoft.Graphics.Canvas.Effects.SpotSpecularEffect.Name">
-      <summary>Attaches a user-defined name string to the effect.</summary>
-      <inheritdoc/>
-    </member>
+    <inherittemplate name="EffectTemplate" replacement="SpotSpecularEffect" />
+    <inherittemplate name="ICanvasEffectTemplate" replacement="SpotSpecularEffect" />
 
   </members>
 </doc>

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "DeviceContextPool.h"
+
 namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 {
     using namespace ::Microsoft::WRL;
@@ -12,17 +14,19 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
     using namespace ABI::Windows::ApplicationModel::Core;
 
     class CanvasDevice;
-    class CanvasDeviceManager;
+    class SharedDeviceState;
+    class DefaultDeviceAdapter;
+
 
     //
     // Abstracts away some lower-level resource access, allowing unit
     // tests to provide test doubles. Because they are internal, they can return
     // ComPtrs and throw exceptions on failure.
     //
-    class ICanvasDeviceResourceCreationAdapter
+    class CanvasDeviceAdapter : public Singleton<CanvasDeviceAdapter, DefaultDeviceAdapter>
     {
     public:
-        virtual ~ICanvasDeviceResourceCreationAdapter() = default;
+        virtual ~CanvasDeviceAdapter() = default;
 
         virtual ComPtr<ID2D1Factory2> CreateD2DFactory(CanvasDebugLevel debugLevel) = 0;
 
@@ -39,13 +43,12 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
     //
     // Default implementation of the adapter, used in production.
     //
-    class DefaultDeviceResourceCreationAdapter : public ICanvasDeviceResourceCreationAdapter,
-                                                 private LifespanTracker<DefaultDeviceResourceCreationAdapter>
+    class DefaultDeviceAdapter : public CanvasDeviceAdapter
     {
         ComPtr<IPropertyValueStatics> m_propertyValueStatics;
 
     public:
-        DefaultDeviceResourceCreationAdapter();
+        DefaultDeviceAdapter();
 
         virtual ComPtr<ID2D1Factory2> CreateD2DFactory(CanvasDebugLevel debugLevel) override;
 
@@ -67,37 +70,53 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
     // cross DLL boundaries these use exceptions for error handling and can
     // take/return C++ types.
     //
-    [uuid(E2C64DD1-4126-4C7A-A5D2-D5E8B2C7235C)]
-    class ICanvasDeviceInternal : public IUnknown
+    class __declspec(uuid("E2C64DD1-4126-4C7A-A5D2-D5E8B2C7235C"))
+    ICanvasDeviceInternal : public IUnknown
     {
     public:
         virtual ComPtr<ID2D1Device1> GetD2DDevice() = 0;
 
-        virtual ComPtr<ID2D1DeviceContext1> CreateDeviceContext() = 0;
+        virtual ComPtr<ID2D1DeviceContext1> CreateDeviceContextForDrawingSession() = 0;
 
         virtual ComPtr<ID2D1SolidColorBrush> CreateSolidColorBrush(D2D1_COLOR_F const& color) = 0;
+
         virtual ComPtr<ID2D1Bitmap1> CreateBitmapFromWicResource(
             IWICBitmapSource* wicBitmapSource,
             float dpi,
             CanvasAlphaMode alpha) = 0;
+
+        virtual ComPtr<ID2D1Bitmap1> CreateBitmapFromBytes(
+            uint8_t* bytes,
+            uint32_t pitch,
+            int32_t widthInPixels,
+            int32_t heightInPixels,
+            float dpi,
+            DirectXPixelFormat format,
+            CanvasAlphaMode alphaMode) = 0;
+
+        virtual ComPtr<ID2D1Bitmap1> CreateBitmapFromSurface(
+            IDirect3DSurface* surface,
+            float dpi,
+            CanvasAlphaMode alphaMode) = 0;
+
         virtual ComPtr<ID2D1Bitmap1> CreateRenderTargetBitmap(
             float width,
             float height,
             float dpi,
             DirectXPixelFormat format,
             CanvasAlphaMode alpha) = 0;
+
         virtual ComPtr<ID2D1BitmapBrush1> CreateBitmapBrush(ID2D1Bitmap1* bitmap) = 0;
+
         virtual ComPtr<ID2D1ImageBrush> CreateImageBrush(ID2D1Image* image) = 0;
-        virtual ComPtr<ID2D1Image> GetD2DImage(ICanvasImage* canvasImage) = 0;
 
         virtual ComPtr<ID2D1GradientStopCollection1> CreateGradientStopCollection(
-            uint32_t gradientStopCount,
-            CanvasGradientStop const* gradientStops,
-            CanvasEdgeBehavior edgeBehavior,
-            CanvasColorSpace preInterpolationSpace,
-            CanvasColorSpace postInterpolationSpace,
-            CanvasBufferPrecision bufferPrecision,
-            CanvasAlphaMode alphaMode) = 0;
+            std::vector<D2D1_GRADIENT_STOP>&& stops,
+            D2D1_COLOR_SPACE preInterpolationSpace,
+            D2D1_COLOR_SPACE postInterpolationSpace,
+            D2D1_BUFFER_PRECISION bufferPrecision,
+            D2D1_EXTEND_MODE extendMode,
+            D2D1_COLOR_INTERPOLATION_MODE interpolationMode) = 0;
 
         virtual ComPtr<ID2D1LinearGradientBrush> CreateLinearGradientBrush(
             ID2D1GradientStopCollection1* stopCollection) = 0;
@@ -136,19 +155,24 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             ID2D1StrokeStyle* strokeStyle,
             float flatteningTolerance) = 0;
 
-        virtual ComPtr<ID2D1DeviceContext1> GetResourceCreationDeviceContext() = 0;
+        virtual ComPtr<ID2D1PrintControl> CreatePrintControl(IPrintDocumentPackageTarget*, float dpi) = 0;
+
+        virtual DeviceContextLease GetResourceCreationDeviceContext() = 0;
 
         virtual ComPtr<IDXGIOutput> GetPrimaryDisplayOutput() = 0;
+
+        virtual void ThrowIfCreateSurfaceFailed(HRESULT hr, wchar_t const* typeName, uint32_t width, uint32_t height) = 0;
+
+        virtual ComPtr<ID2D1Effect> LeaseHistogramEffect(ID2D1DeviceContext* d2dContext) = 0;
+        virtual void ReleaseHistogramEffect(ComPtr<ID2D1Effect>&& effect) = 0;
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+        virtual ComPtr<ID2D1GradientMesh> CreateGradientMesh(D2D1_GRADIENT_MESH_PATCH const* patches, uint32_t patchCount) = 0;
+
+        virtual bool IsSpriteBatchQuirkRequired() = 0;
+#endif
     };
 
-
-    struct CanvasDeviceTraits
-    {
-        typedef ID2D1Device1 resource_t;
-        typedef CanvasDevice wrapper_t;
-        typedef ICanvasDevice wrapper_interface_t;
-        typedef CanvasDeviceManager manager_t;
-    };
 
     typedef ITypedEventHandler<CanvasDevice*, IInspectable*> DeviceLostHandlerType;
 
@@ -156,7 +180,9 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
     // The CanvasDevice class itself.
     //
     class CanvasDevice : RESOURCE_WRAPPER_RUNTIME_CLASS(
-        CanvasDeviceTraits, 
+        ID2D1Device1,
+        CanvasDevice,
+        ICanvasDevice,
         CloakedIid<ICanvasDeviceInternal>,
         ICanvasResourceCreator,
         IDirect3DDevice,
@@ -169,20 +195,41 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         bool m_forceSoftwareRenderer; 
         
         ClosablePtr<IDXGIDevice3> m_dxgiDevice;
-        ClosablePtr<ID2D1DeviceContext1> m_d2dResourceCreationDeviceContext;
-
+        
         // Null-versus-non-null is not necessarily tied to whether the 
         // device object is open or closed.
         ComPtr<IDXGIOutput> m_primaryOutput;
 
         EventSource<DeviceLostHandlerType, InvokeModeOptions<StopOnFirstError>> m_deviceLostEventList;
 
+        // Backreference keeps the shared device state alive as long as any device exists.
+        std::shared_ptr<SharedDeviceState> m_sharedState;
+
+        DeviceContextPool m_deviceContextPool;
+
+        ComPtr<ID2D1Effect> m_histogramEffect;
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+        std::mutex m_quirkMutex;
+        
+        enum class SpriteBatchQuirk
+        {
+            NeedsCheck,
+            Required,
+            NotRequired
+        };
+
+        SpriteBatchQuirk m_spriteBatchQuirk;
+#endif
+
     public:
+        static ComPtr<CanvasDevice> CreateNew(bool forceSoftwareRenderer);
+        static ComPtr<CanvasDevice> CreateNew(IDirect3DDevice* direct3DDevice);
+
         CanvasDevice(
-            std::shared_ptr<CanvasDeviceManager> manager,
-            bool forceSoftwareRenderer,
-            IDXGIDevice3* dxgiDevice,
-            ID2D1Device1* d2dDevice);
+            ID2D1Device1* d2dDevice,
+            IDXGIDevice3* dxgiDevice = nullptr,
+            bool forceSoftwareRenderer = false);
 
         //
         // ICanvasDevice
@@ -192,6 +239,16 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
         IFACEMETHOD(get_MaximumBitmapSizeInPixels)(int32_t* value) override;
 
+        IFACEMETHOD(IsPixelFormatSupported)(DirectXPixelFormat pixelFormat, boolean* value) override;
+
+        IFACEMETHOD(IsBufferPrecisionSupported)(CanvasBufferPrecision bufferPrecision, boolean* value) override;
+
+        IFACEMETHOD(get_MaximumCacheSize)(UINT64* value) override;
+        IFACEMETHOD(put_MaximumCacheSize)(UINT64 value) override;
+
+        IFACEMETHOD(get_LowPriority)(boolean* value) override;
+        IFACEMETHOD(put_LowPriority)(boolean value) override;
+
         IFACEMETHOD(add_DeviceLost)(DeviceLostHandlerType* value, EventRegistrationToken* token) override;
 
         IFACEMETHOD(remove_DeviceLost)(EventRegistrationToken token) override;
@@ -199,6 +256,8 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         IFACEMETHOD(IsDeviceLost)(int hresult, boolean* value) override;
 
         IFACEMETHOD(RaiseDeviceLost)() override;
+
+        IFACEMETHOD(Lock)(ICanvasLock** value) override;
 
         //
         // ICanvasResourceCreator
@@ -217,21 +276,40 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         //
 
         virtual ComPtr<ID2D1Device1> GetD2DDevice() override;
-        virtual ComPtr<ID2D1DeviceContext1> CreateDeviceContext() override;
+
+        virtual ComPtr<ID2D1DeviceContext1> CreateDeviceContextForDrawingSession() override;
+
         virtual ComPtr<ID2D1SolidColorBrush> CreateSolidColorBrush(D2D1_COLOR_F const& color) override;
+
         virtual ComPtr<ID2D1Bitmap1> CreateBitmapFromWicResource(
             IWICBitmapSource* wicBitmapSource,
             float dpi,
             CanvasAlphaMode alpha) override;
+
+        virtual ComPtr<ID2D1Bitmap1> CreateBitmapFromBytes(
+            uint8_t* bytes,
+            uint32_t pitch,
+            int32_t widthInPixels,
+            int32_t heightInPixels,
+            float dpi,
+            DirectXPixelFormat format,
+            CanvasAlphaMode alphaMode) override;
+            
+        virtual ComPtr<ID2D1Bitmap1> CreateBitmapFromSurface(
+            IDirect3DSurface* surface,
+            float dpi,
+            CanvasAlphaMode alphaMode) override;
+
         virtual ComPtr<ID2D1Bitmap1> CreateRenderTargetBitmap(
             float width,
             float height,
             float dpi,
             DirectXPixelFormat format,
             CanvasAlphaMode alpha) override;
+
         virtual ComPtr<ID2D1BitmapBrush1> CreateBitmapBrush(ID2D1Bitmap1* bitmap) override;
+
         virtual ComPtr<ID2D1ImageBrush> CreateImageBrush(ID2D1Image* image) override;
-        virtual ComPtr<ID2D1Image> GetD2DImage(ICanvasImage* canvasImage) override;
 
         virtual ComPtr<ID2D1LinearGradientBrush> CreateLinearGradientBrush(
             ID2D1GradientStopCollection1* stopCollection) override;
@@ -240,13 +318,12 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             ID2D1GradientStopCollection1* stopCollection) override;
 
         virtual ComPtr<ID2D1GradientStopCollection1> CreateGradientStopCollection(
-            uint32_t gradientStopCount,
-            CanvasGradientStop const* gradientStops,
-            CanvasEdgeBehavior edgeBehavior,
-            CanvasColorSpace preInterpolationSpace,
-            CanvasColorSpace postInterpolationSpace,
-            CanvasBufferPrecision bufferPrecision,
-            CanvasAlphaMode alphaMode) override;
+            std::vector<D2D1_GRADIENT_STOP>&& stops,
+            D2D1_COLOR_SPACE preInterpolationSpace,
+            D2D1_COLOR_SPACE postInterpolationSpace,
+            D2D1_BUFFER_PRECISION bufferPrecision,
+            D2D1_EXTEND_MODE extendMode,
+            D2D1_COLOR_INTERPOLATION_MODE interpolationMode) override;
 
         virtual ComPtr<IDXGISwapChain1> CreateSwapChainForComposition(
             int32_t widthInPixels,
@@ -279,9 +356,24 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             ID2D1StrokeStyle* strokeStyle,
             float flatteningTolerance) override;
 
-        virtual ComPtr<ID2D1DeviceContext1> GetResourceCreationDeviceContext() override;
+        virtual ComPtr<ID2D1PrintControl> CreatePrintControl(
+            IPrintDocumentPackageTarget*,
+            float dpi) override;
+
+        virtual DeviceContextLease GetResourceCreationDeviceContext() override final;
 
         virtual ComPtr<IDXGIOutput> GetPrimaryDisplayOutput() override;
+
+        virtual void ThrowIfCreateSurfaceFailed(HRESULT hr, wchar_t const* typeName, uint32_t width, uint32_t height) override;
+
+        virtual ComPtr<ID2D1Effect> LeaseHistogramEffect(ID2D1DeviceContext* d2dContext) override;
+        virtual void ReleaseHistogramEffect(ComPtr<ID2D1Effect>&& effect) override;
+
+#if WINVER > _WIN32_WINNT_WINBLUE
+        virtual ComPtr<ID2D1GradientMesh> CreateGradientMesh(D2D1_GRADIENT_MESH_PATCH const* patches, uint32_t patchCount) override;
+
+        virtual bool IsSpriteBatchQuirkRequired() override;
+#endif
 
         //
         // IDirect3DDevice
@@ -301,6 +393,8 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         HRESULT GetDeviceRemovedErrorCode();
 
     private:
+        static ComPtr<ID3D11Device> MakeD3D11Device(CanvasDeviceAdapter* adapter, bool forceSoftwareRenderer, bool useDebugD3DDevice);
+
         template<typename FN>
         ComPtr<IDXGISwapChain1> CreateSwapChain(
             int32_t widthInPixels,
@@ -313,48 +407,52 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         ComPtr<ID2D1Factory2> GetD2DFactory();
 
         void InitializePrimaryOutput(IDXGIDevice3* dxgiDevice);
+
+        bool DetectIfSpriteBatchQuirkIsRequired();
+
+        ComPtr<ID2D1Bitmap1> CreateBitmapFromWicBitmap(ID2D1DeviceContext* deviceContext, IWICBitmapSource* wicBitmapSource, float dpi, CanvasAlphaMode alpha);
+        ComPtr<ID2D1Bitmap1> CreateBitmapFromDdsFrame(ID2D1DeviceContext* deviceContext, IWICBitmapSource* wicBitmapSource, IWICDdsFrameDecode* ddsFrame, float dpi, CanvasAlphaMode alpha);
     };
 
 
     //
-    // Responsible for creating and tracking CanvasDevice instances and the
-    // ID2D1Device they wrap.
+    // Singleton shared by all active CanvasDevice instances, responsible for tracking global
+    // state such as the shared device pool and value of the debug level static property.
     //
-    class CanvasDeviceManager : public ResourceManager<CanvasDeviceTraits>
+    class SharedDeviceState : public Singleton<SharedDeviceState>
     {
-        std::shared_ptr<ICanvasDeviceResourceCreationAdapter> m_adapter;
+        std::shared_ptr<CanvasDeviceAdapter> m_adapter;
 
         WeakRef m_sharedDevices[2];
-        std::mutex m_mutex;
 
-        std::atomic<CanvasDebugLevel> m_debugLevel;
+        CanvasDebugLevel m_sharedDeviceDebugLevels[2];
+        CanvasDebugLevel m_currentDebugLevel;
+
+        int m_isID2D1Factory5Supported; // negative = not yet checked.
+
+        std::recursive_mutex m_mutex;
+
     public:
-        CanvasDeviceManager(std::shared_ptr<ICanvasDeviceResourceCreationAdapter> adapter);
+        SharedDeviceState();
 
-        virtual ~CanvasDeviceManager();
+        virtual ~SharedDeviceState();
         
-        ComPtr<CanvasDevice> CreateNew(bool forceSoftwareRenderer);
-        ComPtr<CanvasDevice> CreateNew(bool forceSoftwareRenderer, bool useD3DDebugDevice, ID2D1Factory2* d2dFactory);
-        ComPtr<CanvasDevice> CreateNew(IDirect3DDevice* direct3DDevice);
-        ComPtr<CanvasDevice> CreateNew(IDirect3DDevice* direct3DDevice, ID2D1Factory2* d2dFactory);
-        ComPtr<CanvasDevice> CreateWrapper(ID2D1Device1* d2dDevice);
-
         ComPtr<ICanvasDevice> GetSharedDevice(bool forceSoftwareRenderer);
 
         CanvasDebugLevel GetDebugLevel();
         void SetDebugLevel(CanvasDebugLevel const& value);
 
+        bool IsID2D1Factory5Supported();
+
+        CanvasDeviceAdapter* GetAdapter() const { return m_adapter.get(); }
+
     private:
-        ComPtr<IDXGIDevice3> MakeDXGIDevice(bool forceSoftwareRenderer, bool useDebugD3DDevice) const;
-
-        ComPtr<ID3D11Device> MakeD3D11Device(bool forceSoftwareRenderer, bool useDebugD3DDevice) const;
-
         CanvasDebugLevel LoadDebugLevelProperty();
         void SaveDebugLevelProperty(CanvasDebugLevel debugLevel);
 
         struct PropertyData
         {
-            HStringReference KeyName;
+            Wrappers::HStringReference KeyName;
             ComPtr<IMap<HSTRING, IInspectable*>> PropertyMap;
             ComPtr<IInspectable> PropertyHolder;
             HRESULT LookupResult;
@@ -368,23 +466,18 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
     // WinRT activation factory for the CanvasDevice runtimeclass.
     //
     class CanvasDeviceFactory 
-        : public ActivationFactory<
-            ICanvasDeviceFactory, 
-            ICanvasDeviceStatics, 
-            CloakedIid<ICanvasFactoryNative>>,
-          public PerApplicationManager<CanvasDeviceFactory, CanvasDeviceManager>
+        : public AgileActivationFactory<ICanvasDeviceFactory, ICanvasDeviceStatics, CloakedIid<ICanvasFactoryNative>>
+        , private LifespanTracker<CanvasDeviceFactory>
                                 
     {
         InspectableClassStatic(RuntimeClass_Microsoft_Graphics_Canvas_CanvasDevice, BaseTrust);
 
     public:
-        IMPLEMENT_DEFAULT_ICANVASFACTORYNATIVE();
-
         //
         // ActivationFactory
         //
 
-        IFACEMETHOD(ActivateInstance)(_COM_Outptr_ IInspectable** ppvObject) override;
+        IFACEMETHOD(ActivateInstance)(IInspectable** ppvObject) override;
 
         //
         // ICanvasDeviceFactory
@@ -402,6 +495,9 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         // ICanvasDeviceStatics
         //
         IFACEMETHOD(GetSharedDevice)(
+            ICanvasDevice** device);
+
+        IFACEMETHOD(GetSharedDeviceWithForceSoftwareRenderer)(
             boolean forceSoftwareRenderer,
             ICanvasDevice** device);
 
@@ -409,8 +505,15 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         IFACEMETHOD(get_DebugLevel)(CanvasDebugLevel* debugLevel);
 
         //
-        // Used by PerApplicationManager
+        // ICanvasFactoryNative.
         //
-        static std::shared_ptr<CanvasDeviceManager> CreateManager();
+        IFACEMETHOD(GetOrCreate)(
+            ICanvasDevice* device,
+            IUnknown* resource,
+            float dpi,
+            IInspectable** wrapper) override;
     };
+
+    static uint32_t const QUALCOMM_VENDOR_ID = 0x4D4F4351;
+
 }}}}

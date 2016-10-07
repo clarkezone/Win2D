@@ -11,15 +11,36 @@ namespace canvas
         ComPtr<ID2D1Device> m_owner;
         ComPtr<ID2D1Image> m_target;
         D2D1_BITMAP_PROPERTIES1* m_overrideProperties;
+        float m_dpiX;
+        float m_dpiY;
 
     public:
-        StubD2DDeviceContext(ID2D1Device* owner)
+        StubD2DDeviceContext(ID2D1Device* owner = nullptr)
             : m_owner(owner)
             , m_overrideProperties(nullptr)
+            , m_dpiX(DEFAULT_DPI)
+            , m_dpiY(DEFAULT_DPI)
         {
             ClearMethod.AllowAnyCall();
 
-            SetDpiMethod.AllowAnyCall();
+            SetDpiMethod.AllowAnyCall(
+                [=] (float x, float y)
+                {
+                    m_dpiX = x;
+                    m_dpiY = y;
+                });
+            GetDpiMethod.AllowAnyCall(
+                [=] (float* x, float* y)
+                {
+                    *x = m_dpiX;
+                    *y = m_dpiY;
+                });
+            
+            GetImageLocalBoundsMethod.AllowAnyCall(
+                [](ID2D1Image*, D2D1_RECT_F*)
+                {
+                    return S_OK;
+                });
 
             SetTextAntialiasModeMethod.AllowAnyCall();
         }
