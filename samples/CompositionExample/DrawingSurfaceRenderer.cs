@@ -26,7 +26,8 @@ namespace CompositionExample
         public DrawingSurfaceRenderer(Compositor compositor, CompositionGraphicsDevice compositionGraphicsDevice)
         {
             drawingSurfaceVisual = compositor.CreateSpriteVisual();
-            drawingSurface = compositionGraphicsDevice.CreateDrawingSurface(new Size(256, 256), DirectXPixelFormat.B8G8R8A8UIntNormalized, DirectXAlphaMode.Premultiplied);
+            //drawingSurface = compositionGraphicsDevice.CreateDrawingSurface(new Size(256, 256), DirectXPixelFormat.B8G8R8A8UIntNormalized, DirectXAlphaMode.Premultiplied);
+            drawingSurface = compositionGraphicsDevice.CreateVirtualDrawingSurface(new Size(256, 256), DirectXPixelFormat.B8G8R8A8UIntNormalized, DirectXAlphaMode.Premultiplied);
             drawingSurfaceVisual.Brush = compositor.CreateSurfaceBrush(drawingSurface);
             DrawDrawingSurface();
 

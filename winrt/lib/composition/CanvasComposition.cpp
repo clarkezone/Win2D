@@ -162,36 +162,74 @@ public:
     }
 };
 
+class CompositionVirtualDrawingSurfaceDrawingSessionAdapter
+	: public ICanvasDrawingSessionAdapter
+	, private LifespanTracker<CompositionVirtualDrawingSurfaceDrawingSessionAdapter>
+{
+	ComPtr<ICompositionVirtualDrawingSurfaceInterop> m_drawingSurface;
+
+public:
+	CompositionVirtualDrawingSurfaceDrawingSessionAdapter(ComPtr<ICompositionVirtualDrawingSurfaceInterop>&& drawingSurface)
+		: m_drawingSurface(std::move(drawingSurface))
+	{
+	}
+
+	virtual void EndDraw(ID2D1DeviceContext1*) override
+	{
+		ThrowIfFailed(m_drawingSurface->EndDraw());
+	}
+};
+
 
 HRESULT CanvasCompositionStatics::CreateDrawingSessionImpl(ICompositionDrawingSurface* drawingSurface, RECT const* updateRect, ICanvasDrawingSession** drawingSession)
 {
-    return ExceptionBoundary(
-        [&]
-        {
-            CheckInPointer(drawingSurface);
-            CheckAndClearOutPointer(drawingSession);
-            
-            auto drawingSurfaceInterop = As<ICompositionDrawingSurfaceInterop>(drawingSurface);
+	return ExceptionBoundary(
+		[&]
+	{
+		CheckInPointer(drawingSurface);
+		CheckAndClearOutPointer(drawingSession);
 
-            ComPtr<ID2D1DeviceContext> deviceContext;
-            POINT offset;            
-            ThrowIfFailed(drawingSurfaceInterop->BeginDraw(updateRect, IID_PPV_ARGS(&deviceContext), &offset));
+		ComPtr<ICompositionDrawingSurfaceInterop> drawingSurfaceInterop = nullptr;
 
-            deviceContext->SetTransform(D2D1::Matrix3x2F::Translation((float)offset.x, (float)offset.y));
+		auto drawingVirtualSurfaceInterop = As<ICompositionVirtualDrawingSurfaceInterop>(drawingSurface);
 
-            // Although we could look up the owner using interop, via the
-            // deviceContext, drawing session will do this lazily for us if
-            // anyone actually requests it.
-            ICanvasDevice* owner = nullptr;
+		ComPtr<ID2D1DeviceContext> deviceContext;
+		POINT offset;
 
-            auto newDs = CanvasDrawingSession::CreateNew(
-                As<ID2D1DeviceContext1>(deviceContext).Get(),
-                std::make_shared<CompositionDrawingSurfaceDrawingSessionAdapter>(std::move(drawingSurfaceInterop)),
-                owner,
-                nullptr,
-                D2D1_POINT_2F{ (float)offset.x, (float)offset.y });
-            ThrowIfFailed(newDs.CopyTo(drawingSession));
-        });
+		if (drawingVirtualSurfaceInterop == nullptr) {
+			drawingSurfaceInterop = As<ICompositionDrawingSurfaceInterop>(drawingSurface);
+			ThrowIfFailed(drawingSurfaceInterop->BeginDraw(updateRect, IID_PPV_ARGS(&deviceContext), &offset));
+		}
+		else {
+			ThrowIfFailed(drawingVirtualSurfaceInterop->BeginDraw(updateRect, IID_PPV_ARGS(&deviceContext), &offset));
+		}
+
+		deviceContext->SetTransform(D2D1::Matrix3x2F::Translation((float)offset.x, (float)offset.y));
+
+		// Although we could look up the owner using interop, via the
+		// deviceContext, drawing session will do this lazily for us if
+		// anyone actually requests it.
+		ICanvasDevice* owner = nullptr;
+
+		if (drawingVirtualSurfaceInterop != nullptr) {
+			auto newDs = CanvasDrawingSession::CreateNew(
+				As<ID2D1DeviceContext1>(deviceContext).Get(),
+				std::make_shared<CompositionVirtualDrawingSurfaceDrawingSessionAdapter>(std::move(drawingVirtualSurfaceInterop)),
+				owner,
+				nullptr,
+				D2D1_POINT_2F{ (float)offset.x, (float)offset.y });
+			ThrowIfFailed(newDs.CopyTo(drawingSession));
+		}
+		else {
+			auto newDs = CanvasDrawingSession::CreateNew(
+				As<ID2D1DeviceContext1>(deviceContext).Get(),
+				std::make_shared<CompositionDrawingSurfaceDrawingSessionAdapter>(std::move(drawingSurfaceInterop)),
+				owner,
+				nullptr,
+				D2D1_POINT_2F{ (float)offset.x, (float)offset.y });
+			ThrowIfFailed(newDs.CopyTo(drawingSession));
+		}
+	});
 }
 
 
