@@ -25,6 +25,8 @@
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <GenerateManifest>false</GenerateManifest>
     <NuGetPackageImportStamp>c59169d0</NuGetPackageImportStamp>
+    <WindowsTargetPlatformVersion>10.0.14931.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformMinVersion>10.0.14931.0</WindowsTargetPlatformMinVersion>
   </PropertyGroup>
   <Import Project="..\..\..\..\build\Win2D.cpp.props" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
