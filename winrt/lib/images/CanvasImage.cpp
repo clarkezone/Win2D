@@ -141,6 +141,25 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
     }
     
 
+    static GUID const& DxgiFormatToWic(DXGI_FORMAT format)
+    {
+        switch (format)
+        {
+        case DXGI_FORMAT_R16G16B16A16_UNORM:
+            return GUID_WICPixelFormat64bppRGBA;
+        
+        case DXGI_FORMAT_R16G16B16A16_FLOAT:
+            return GUID_WICPixelFormat64bppRGBAHalf;
+        
+        case DXGI_FORMAT_R32G32B32A32_FLOAT:
+            return GUID_WICPixelFormat128bppRGBAFloat;
+
+        default:
+            return GUID_WICPixelFormat32bppBGRA;
+        }
+    }
+
+
     IFACEMETHODIMP CanvasImageFactory::SaveWithQualityAndBufferPrecisionAsync(
         ICanvasImage* image,
         Rect sourceRectangle,
@@ -179,7 +198,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
                 auto canvasDevice = GetCanvasDevice(resourceCreator);
                 auto d2dDevice = GetWrappedResource<ID2D1Device>(canvasDevice);
 
-                auto d2dImage = GetWrappedResource<ID2D1Image>(image, canvasDevice.Get());
+                auto d2dImage = As<ICanvasImageInternal>(image)->GetD2DImage(canvasDevice.Get(), nullptr, GetImageFlags::None, dpi);
 
                 auto adapter = m_adapter;
                 auto istream = adapter->CreateStreamOverRandomAccessStream(stream);
@@ -228,46 +247,51 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
                 auto deviceContext = deviceInternal->GetResourceCreationDeviceContext();
                 
-                // Look up a histogram effect.
-                ComPtr<ID2D1Effect> histogram = deviceInternal->LeaseHistogramEffect(deviceContext.Get());
+                // Look up the histogram and atlas effects.
+                auto effects = deviceInternal->LeaseHistogramEffect(deviceContext.Get());
 
-                auto releaseHistogram = MakeScopeWarden(
+                auto releaseEffects = MakeScopeWarden(
                     [&]
                     {
-                        histogram->SetInput(0, nullptr);
-                        deviceInternal->ReleaseHistogramEffect(std::move(histogram));
+                        effects.AtlasEffect->SetInput(0, nullptr);
+                        deviceInternal->ReleaseHistogramEffect(std::move(effects));
                     });
 
-                // Configure the histogram effect.
+                // Configure the atlas effect to select what region of the source image we want to feed into the histogram.
                 float realizedDpi;
 
                 auto d2dImage = As<ICanvasImageInternal>(image)->GetD2DImage(device.Get(), deviceContext.Get(), GetImageFlags::None, DEFAULT_DPI, &realizedDpi);
 
                 if (realizedDpi != 0 && realizedDpi != DEFAULT_DPI)
                 {
-                    ThrowIfFailed(D2D1::SetDpiCompensatedEffectInput(deviceContext.Get(), histogram.Get(), 0, As<ID2D1Bitmap>(d2dImage).Get()));
+                    ThrowIfFailed(D2D1::SetDpiCompensatedEffectInput(deviceContext.Get(), effects.AtlasEffect.Get(), 0, As<ID2D1Bitmap>(d2dImage).Get()));
                 }
                 else
                 {
-                    histogram->SetInput(0, d2dImage.Get());
+                    effects.AtlasEffect->SetInput(0, d2dImage.Get());
                 }
 
-                histogram->SetValue(D2D1_HISTOGRAM_PROP_CHANNEL_SELECT, channelSelect);
-                histogram->SetValue(D2D1_HISTOGRAM_PROP_NUM_BINS, numberOfBins);
+                effects.AtlasEffect->SetValue(D2D1_ATLAS_PROP_INPUT_RECT, ToD2DRect(sourceRectangle));
+
+                // Configure the histogram effect.
+                effects.HistogramEffect->SetInputEffect(0, effects.AtlasEffect.Get());
+
+                effects.HistogramEffect->SetValue(D2D1_HISTOGRAM_PROP_CHANNEL_SELECT, channelSelect);
+                effects.HistogramEffect->SetValue(D2D1_HISTOGRAM_PROP_NUM_BINS, numberOfBins);
 
                 // Evaluate the histogram by drawing the effect.
                 deviceContext->BeginDraw();
 
-                deviceContext->DrawImage(As<ID2D1Image>(histogram).Get(), D2D1_POINT_2F{ 0, 0 }, ToD2DRect(sourceRectangle));
+                deviceContext->DrawImage(As<ID2D1Image>(effects.HistogramEffect).Get());
 
                 ThrowIfFailed(deviceContext->EndDraw());
 
                 // Read back the results.
                 ComArray<float> array(numberOfBins);
 
-                ThrowIfFailed(histogram->GetValue(D2D1_HISTOGRAM_PROP_HISTOGRAM_OUTPUT,
-                                                  reinterpret_cast<BYTE*>(array.GetData()),
-                                                  array.GetSize() * sizeof(float)));
+                ThrowIfFailed(effects.HistogramEffect->GetValue(D2D1_HISTOGRAM_PROP_HISTOGRAM_OUTPUT,
+                                                                reinterpret_cast<BYTE*>(array.GetData()),
+                                                                array.GetSize() * sizeof(float)));
 
                 array.Detach(valueCount, valueElements);
             });
@@ -359,8 +383,16 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
             value.fltVal = quality;
             ThrowIfFailed(frameProperties->Write(1, &option, &value));
         }
-        
+
         ThrowIfFailed(frame->Initialize(frameProperties.Get()));
+
+        // If the file format supports extended range (JpegXR) then tell WIC to encode
+        // using the same pixel format that we are rasterizing the D2D image with.
+        if (FileFormatSupportsHdr(containerFormat))
+        {
+            auto wicPixelFormat = DxgiFormatToWic(parameters.PixelFormat.format);
+            ThrowIfFailed(frame->SetPixelFormat(&wicPixelFormat));
+        }
 
         ComPtr<IWICImageEncoder> imageEncoder;
         ThrowIfFailed(factory->CreateImageEncoder(device, &imageEncoder));

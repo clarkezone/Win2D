@@ -24,9 +24,9 @@ struct TestRecreatableDeviceManagerTraits
 
 typedef IRecreatableDeviceManager<TestRecreatableDeviceManagerTraits> ITestRecreatableDeviceManager;
 
-static std::unique_ptr<ITestRecreatableDeviceManager> MakeRecreatableDeviceManager(IActivationFactory* factory)
+static std::unique_ptr<ITestRecreatableDeviceManager> MakeRecreatableDeviceManager(IActivationFactory* factory, IInspectable* parentControl)
 {
-    return std::make_unique<RecreatableDeviceManager<TestRecreatableDeviceManagerTraits>>(factory);
+    return std::make_unique<RecreatableDeviceManager<TestRecreatableDeviceManagerTraits>>(factory, parentControl);
 }
 
 TEST_CLASS(RecreatableDeviceManagerTests)
@@ -44,6 +44,7 @@ public:
 
     public:
         IInspectable* AnySender;
+        ComPtr<IInspectable> ParentControl;
         ComPtr<MockCanvasDeviceActivationFactory> DeviceFactory;
         std::unique_ptr<ITestRecreatableDeviceManager> DeviceManager;
 
@@ -52,8 +53,9 @@ public:
 
         Fixture()
             : AnySender(reinterpret_cast<IInspectable*>(0x1234))
+            , ParentControl(Make<MockWindow>())
             , DeviceFactory(Make<MockCanvasDeviceActivationFactory>())
-            , DeviceManager(MakeRecreatableDeviceManager(DeviceFactory.Get()))
+            , DeviceManager(MakeRecreatableDeviceManager(DeviceFactory.Get(), ParentControl.Get()))
         {
             DeviceManager->SetChangedCallback(
                 [=] (ChangeReason reason)
@@ -1062,6 +1064,40 @@ public:
         Assert::IsTrue(called);
     }
 
+    TEST_METHOD_EX(RecreatableDeviceManager_WhenTrackAsyncActionIsAlreadyCompleted_CallbacksStillOccur)
+    {
+        Fixture f;
+
+        auto onCreateResources = Callback<CreateResourcesHandler>(
+            [&](IInspectable*, ICanvasCreateResourcesEventArgs* args)
+            {
+                return ExceptionBoundary(
+                    [&]
+                    {
+                        auto action = Make<MockAsyncAction>();
+
+                        // Mark the async action as complete before passing it to TrackAsyncAction.
+                        action->SetResultWithoutFireCompletion(S_OK);
+
+                        ThrowIfFailed(args->TrackAsyncAction(action.Get()));
+                    });
+            });
+
+        f.DeviceManager->AddCreateResources(f.AnySender, onCreateResources.Get());
+
+        f.DeviceFactory->ExpectToActivateOne();
+
+        f.ExpectChangedCallback(ChangeReason::Other);
+
+        Assert::IsFalse(f.DeviceManager->IsReadyToDraw());
+
+        f.CallRunWithDeviceExpectFlagsSet(RunWithDeviceFlags::NewlyCreatedDevice);
+
+        // RecreatableDeviceManager should have noticed that the async create resources
+        // action was already completed, which means it is now ready to start drawing.
+        Assert::IsTrue(f.DeviceManager->IsReadyToDraw());
+    }
+
     TEST_METHOD_EX(RecreatableDeviceManager_WhenDpiChangesDuringCreateResourcesAsync_ItIsDeferredUntilTheProperTime)
     {
         FixtureWithCreateResourcesAsync f;
@@ -1101,6 +1137,19 @@ public:
         f.OnCreateResources.SetExpectedCalls(1);
         f.CallRunWithDevice();
         Assert::AreEqual(2, createCount);
+    }
+
+    TEST_METHOD_EX(RecreatableDeviceManager_WhenControlDestroyedDuringCreateResourcesAsync_EverythingRemainsFineAndDandy)
+    {
+        FixtureWithCreateResourcesAsync f;
+        f.CreateDeviceAndTriggerCreateResourcesAsync();
+
+        // Unload the control.
+        f.ParentControl.Reset();
+        f.DeviceManager.reset();
+
+        // Nothing should blow up when we complete the async action after the control is gone.
+        f.Action->FireCompletion();
     }
 
     TEST_METHOD_EX(RecreatableDeviceManager_DeviceLost_CallsControlDeviceLostEventHandler)

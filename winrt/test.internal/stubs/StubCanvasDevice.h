@@ -8,6 +8,10 @@
 #include "mocks/MockD2DGeometryRealization.h"
 #include "mocks/MockD2DGradientMesh.h"
 
+#if WINVER > _WIN32_WINNT_WINBLUE
+#include "mocks/MockD2DSvgDocument.h"
+#endif
+
 namespace canvas
 {
     //
@@ -36,12 +40,6 @@ namespace canvas
                     ComPtr<ID2D1DeviceContext1> dc;
                     ThrowIfFailed(m_d2DDevice->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &dc));
                     return dc;
-                });
-
-            CreateRectangleGeometryMethod.AllowAnyCall(
-                [](D2D1_RECT_F const&)
-                {
-                    return Make<MockD2DRectangleGeometry>();
                 });
 
             CreateFilledGeometryRealizationMethod.AllowAnyCall(
@@ -100,6 +98,12 @@ namespace canvas
                 [=](D2D1_GRADIENT_MESH_PATCH const*, UINT32)
                 {
                     return Make<MockD2DGradientMesh>();
+                });
+
+            CreateSvgDocumentMethod.AllowAnyCall(
+                [=](IStream* stream)
+                {
+                    return Make<MockD2DSvgDocument>();
                 });
 #endif
         }

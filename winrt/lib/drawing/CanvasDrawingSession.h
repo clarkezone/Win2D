@@ -13,6 +13,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 #if WINVER > _WIN32_WINNT_WINBLUE
     using namespace ABI::Windows::UI::Input::Inking;
     using namespace ABI::Windows::UI::ViewManagement;
+    using namespace ABI::Microsoft::Graphics::Canvas::Svg;
 #endif
 
     using namespace ::Microsoft::WRL;
@@ -1180,6 +1181,13 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         IFACEMETHOD(DrawGradientMesh)(ICanvasGradientMesh* gradientMesh, Vector2 point) override;
 
         IFACEMETHOD(DrawGradientMeshAtCoords)(ICanvasGradientMesh* gradientMesh, float x, float y) override;
+
+        IFACEMETHOD(DrawSvgAtOrigin)(ICanvasSvgDocument *svgDocument, Size viewportSize) override;
+
+        IFACEMETHOD(DrawSvgAtPoint)(ICanvasSvgDocument *svgDocument, Size viewportSize, Vector2 point) override;
+
+        IFACEMETHOD(DrawSvgAtCoords)(ICanvasSvgDocument *svgDocument, Size viewportSize, float x, float y) override;
+
 #endif
 
         //

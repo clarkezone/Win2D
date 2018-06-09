@@ -724,7 +724,8 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
                 m_primaryOutput.Reset();
                 m_sharedState.reset();
                 m_histogramEffect.Reset();
-            });
+                m_atlasEffect.Reset();
+        });
     }
 
     ComPtr<ID2D1Device1> CanvasDevice::GetD2DDevice()
@@ -1193,66 +1194,6 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         return cl;
     }
 
-    ComPtr<ID2D1RectangleGeometry> CanvasDevice::CreateRectangleGeometry(D2D1_RECT_F const& rectangle)
-    {
-        auto factory = GetD2DFactory();
-
-        ComPtr<ID2D1RectangleGeometry> rectangleGeometry;
-        ThrowIfFailed(factory->CreateRectangleGeometry(rectangle, &rectangleGeometry));
-
-        return rectangleGeometry;
-    }
-
-    ComPtr<ID2D1EllipseGeometry> CanvasDevice::CreateEllipseGeometry(D2D1_ELLIPSE const& ellipse)
-    {
-        auto factory = GetD2DFactory();
-
-        ComPtr<ID2D1EllipseGeometry> ellipseGeometry;
-        ThrowIfFailed(factory->CreateEllipseGeometry(ellipse, &ellipseGeometry));
-
-        return ellipseGeometry;
-    }
-
-    ComPtr<ID2D1RoundedRectangleGeometry> CanvasDevice::CreateRoundedRectangleGeometry(D2D1_ROUNDED_RECT const& roundedRect)
-    {
-        auto factory = GetD2DFactory();
-
-        ComPtr<ID2D1RoundedRectangleGeometry> roundedRectangleGeometry;
-        ThrowIfFailed(factory->CreateRoundedRectangleGeometry(roundedRect, &roundedRectangleGeometry));
-
-        return roundedRectangleGeometry;
-    }
-
-    ComPtr<ID2D1PathGeometry1> CanvasDevice::CreatePathGeometry()
-    {
-        auto factory = GetD2DFactory();
-
-        ComPtr<ID2D1PathGeometry1> pathGeometry;
-        ThrowIfFailed(factory->CreatePathGeometry(&pathGeometry));
-
-        return pathGeometry;
-    }
-
-    ComPtr<ID2D1GeometryGroup> CanvasDevice::CreateGeometryGroup(D2D1_FILL_MODE fillMode, ID2D1Geometry** d2dGeometries, uint32_t geometryCount)
-    {
-        auto factory = GetD2DFactory();
-
-        ComPtr<ID2D1GeometryGroup> geometryGroup;
-        ThrowIfFailed(factory->CreateGeometryGroup(fillMode, d2dGeometries, geometryCount, &geometryGroup));
-
-        return geometryGroup;
-    }
-
-    ComPtr<ID2D1TransformedGeometry> CanvasDevice::CreateTransformedGeometry(ID2D1Geometry* d2dGeometry, D2D1_MATRIX_3X2_F* transform)
-    {
-        auto factory = GetD2DFactory();
-
-        ComPtr<ID2D1TransformedGeometry> transformedGeometry;
-        ThrowIfFailed(factory->CreateTransformedGeometry(d2dGeometry, transform, &transformedGeometry));
-
-        return transformedGeometry;
-    }
-
     ComPtr<ID2D1GeometryRealization> CanvasDevice::CreateFilledGeometryRealization(ID2D1Geometry* geometry, float flatteningTolerance)
     {
         auto deviceContext = GetResourceCreationDeviceContext();
@@ -1386,21 +1327,29 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         return result;
     }
 
-    ComPtr<ID2D1Effect> CanvasDevice::LeaseHistogramEffect(ID2D1DeviceContext* d2dContext)
+    CanvasDevice::HistogramAndAtlasEffects CanvasDevice::LeaseHistogramEffect(ID2D1DeviceContext* d2dContext)
     {
-        ComPtr<ID2D1Effect> effect = InterlockedExchangeComPtr(m_histogramEffect, nullptr);
+        ComPtr<ID2D1Effect> histogram = InterlockedExchangeComPtr(m_histogramEffect, nullptr);
 
-        if (!effect)
+        if (!histogram)
         {
-            ThrowIfFailed(d2dContext->CreateEffect(CLSID_D2D1Histogram, &effect));
+            ThrowIfFailed(d2dContext->CreateEffect(CLSID_D2D1Histogram, &histogram));
         }
 
-        return effect;
+        ComPtr<ID2D1Effect> atlas = InterlockedExchangeComPtr(m_atlasEffect, nullptr);
+
+        if (!atlas)
+        {
+            ThrowIfFailed(d2dContext->CreateEffect(CLSID_D2D1Atlas, &atlas));
+        }
+
+        return HistogramAndAtlasEffects{ histogram, atlas };
     }
 
-    void CanvasDevice::ReleaseHistogramEffect(ComPtr<ID2D1Effect>&& effect)
+    void CanvasDevice::ReleaseHistogramEffect(HistogramAndAtlasEffects&& effects)
     {
-        InterlockedExchangeComPtr(m_histogramEffect, std::move(effect));
+        InterlockedExchangeComPtr(m_histogramEffect, std::move(effects.HistogramEffect));
+        InterlockedExchangeComPtr(m_atlasEffect, std::move(effects.AtlasEffect));
     }
 
 #if WINVER > _WIN32_WINNT_WINBLUE
@@ -1474,6 +1423,29 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         }
 
         return false;
+    }
+
+    ComPtr<ID2D1SvgDocument> CanvasDevice::CreateSvgDocument(IStream* inputXmlStream)
+    {
+        auto lease = GetResourceCreationDeviceContext();
+
+        ComPtr<ID2D1DeviceContext5> deviceContext5;
+        HRESULT hr = lease->QueryInterface(IID_PPV_ARGS(&deviceContext5));
+        if (hr == E_NOINTERFACE)
+        {
+            // Convention is to use E_NOTIMPL for features belonging to a newer OS.
+            ThrowHR(E_NOTIMPL, Strings::SvgNotAvailable);
+        }
+        else
+        {
+            ThrowIfFailed(hr);
+        }
+
+        D2D1_SIZE_F defaultViewportSize = D2D1::SizeF(1, 1);
+        ComPtr<ID2D1SvgDocument> d2dSvgDocument;
+        ThrowIfFailed(deviceContext5->CreateSvgDocument(inputXmlStream, defaultViewportSize, &d2dSvgDocument));
+
+        return d2dSvgDocument;
     }
 
 #endif

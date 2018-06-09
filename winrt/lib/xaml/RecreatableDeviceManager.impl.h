@@ -111,8 +111,14 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
     class RecreatableDeviceManager : public IRecreatableDeviceManager<TRAITS>,
                                      private LifespanTracker<RecreatableDeviceManager<TRAITS>>
     {
+    public:
+        typedef IRecreatableDeviceManager<TRAITS>::Sender                 Sender;
+        typedef IRecreatableDeviceManager<TRAITS>::CreateResourcesHandler CreateResourcesHandler;
+
+    private:
         std::function<void(ChangeReason)> m_changedCallback;
         ComPtr<IActivationFactory> m_canvasDeviceFactory;
+        IInspectable* m_parentControl;
         EventSource<CreateResourcesHandler, InvokeModeOptions<StopOnFirstError>> m_createResourcesEventSource;
 
         //
@@ -135,8 +141,9 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         bool m_dpiChanged;
 
     public:
-        RecreatableDeviceManager(IActivationFactory* canvasDeviceFactory)
+        RecreatableDeviceManager(IActivationFactory* canvasDeviceFactory, IInspectable* parentControl)
             : m_canvasDeviceFactory(canvasDeviceFactory)
+            , m_parentControl(parentControl)
             , m_currentOperationIsPending(false)
             , m_dpiChanged(false)
         {
@@ -524,11 +531,35 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             if (m_currentOperation)
                 ThrowHR(E_FAIL, Strings::MultipleAsyncCreateResourcesNotSupported);
 
-            auto onCompleted = Callback<IAsyncActionCompletedHandler>(this, &RecreatableDeviceManager::OnAsynchronousCreateResourcesCompleted);
+            // The async completion handler closes over a weak reference to the parent control,
+            // so it can detect if the control gets destroyed while the async create resources
+            // operation is in progress. In that case we just discard the completion notification.
+
+            auto weakParent = AsWeak(m_parentControl);
+
+            auto completedHandler = [weakParent, this](IAsyncAction* action, AsyncStatus status) mutable
+            {
+                if (auto strongParent = LockWeakRef<IInspectable>(weakParent))
+                {
+                    return OnAsynchronousCreateResourcesCompleted(action, status);
+                }
+                else
+                {
+                    return S_OK;
+                }
+            };
+
+            auto onCompleted = Callback<IAsyncActionCompletedHandler>(completedHandler);
             CheckMakeResult(onCompleted);
-            ThrowIfFailed(action->put_Completed(onCompleted.Get()));
             m_currentOperation = As<IAsyncInfo>(action);                
             m_currentOperationIsPending = true;
+
+            // Release the lock before setting the completed handler, because if the action has already
+            // completed this could result in an immediate call to OnAsynchronousCreateResourcesCompleted,
+            // which in turn calls out to m_changedCallback.
+            lock.unlock();
+
+            ThrowIfFailed(action->put_Completed(onCompleted.Get()));
         }
 
         HRESULT OnAsynchronousCreateResourcesCompleted(IAsyncAction*, AsyncStatus)

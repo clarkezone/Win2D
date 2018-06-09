@@ -14,7 +14,7 @@ namespace exportsample
     public enum NuGetProjectType
     {
         PackagesConfig,
-        ProjectJson
+        Csproj
     }
 
     public enum TargetPlatformIdentifier
@@ -38,26 +38,24 @@ namespace exportsample
         public string SourceDirectory { get; private set; }
         public string DestinationDirectory { get; private set; }
         string relativePackagesDirectory;
-        bool isSingletonProject;
 
         Configuration config;
         SampleDirectory sample;
         XDocument doc;
 
-        public static ProjectProcessor Export(string projectFileName, bool isSingletonProject, Configuration config, SampleDirectory sample, string destination)
+        public static ProjectProcessor Export(string projectFileName, Configuration config, SampleDirectory sample, string destination)
         {
-            var project = new ProjectProcessor(projectFileName, isSingletonProject, config, sample);
+            var project = new ProjectProcessor(projectFileName, config, sample);
             project.Process();
             project.Save(destination);
             return project;
         }
 
-        ProjectProcessor(string projectFileName, bool isSingletonProject, Configuration config, SampleDirectory sample)
+        ProjectProcessor(string projectFileName, Configuration config, SampleDirectory sample)
         {
             this.fileName = projectFileName;
             this.SourceDirectory = Path.GetDirectoryName(fileName);
             this.DestinationDirectory = config.GetDestination(SourceDirectory);
-            this.isSingletonProject = isSingletonProject;
             this.config = config;
             this.sample = sample;
 
@@ -72,7 +70,7 @@ namespace exportsample
             bool isUap = (GetTargetPlatformIdentifier() == TargetPlatformIdentifier.UAP);
 
             if (isUap && !this.IsNative)
-                this.NuGetType = NuGetProjectType.ProjectJson;
+                this.NuGetType = NuGetProjectType.Csproj;
             else
                 this.NuGetType = NuGetProjectType.PackagesConfig;
 
@@ -287,11 +285,6 @@ namespace exportsample
                 {
                     var value = entry.Value;
 
-                    // If there is only one variant of this project (eg. CompositionExample, which only targets UAP)
-                    // then redirect files that would normally go in the Shared folder to the main project directory.
-                    if (isSingletonProject)
-                        value = value.Replace("Shared", "$(ProjectDir)");
-
                     var dest = Path.GetFullPath(fullPath.Replace(entry.Key, Path.Combine(sample.Destination, Expand(value))));
                     FilesToCopy[fullPath] = dest;
 
@@ -363,8 +356,8 @@ namespace exportsample
                     AddWin2DNuGetPackage();
                     break;
 
-                case NuGetProjectType.ProjectJson:
-                    // nothing - project.json projects don't modify the project file (yay)
+                case NuGetProjectType.Csproj:
+                    AddWin2DPackageReference();
                     break;
 
                 default:
@@ -419,6 +412,7 @@ namespace exportsample
             return true;
         }
         
+        // Old style (still used for .vcxproj): Win2D imports are added directly to the project.
         void AddWin2DNuGetPackage()
         {
             var framework = GetFramework();
@@ -434,6 +428,20 @@ namespace exportsample
 
             var importsTarget = GetEnsureNuGetPackageBuildImportsTarget();
             importsTarget.Add(MakeCheckImport(targetsImport));
+        }
+
+        // New style: use a <PackageReference> MSBuild item.
+        void AddWin2DPackageReference()
+        {
+            var newReference = new XElement(NS + "PackageReference");
+            newReference.SetAttributeValue("Include", "Win2D.uwp");
+
+            var version = new XElement(NS + "Version");
+            version.Value = config.Options.Win2DVersion;
+            newReference.Add(version);
+
+            var existingPackageReference = doc.Descendants(NS + "PackageReference").First();
+            existingPackageReference.AddAfterSelf(newReference);
         }
 
         public string GetFramework()

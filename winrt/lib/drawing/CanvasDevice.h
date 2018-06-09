@@ -141,13 +141,6 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
         virtual ComPtr<ID2D1CommandList> CreateCommandList() = 0;
 
-        virtual ComPtr<ID2D1RectangleGeometry> CreateRectangleGeometry(D2D1_RECT_F const& rectangle) = 0;
-        virtual ComPtr<ID2D1EllipseGeometry> CreateEllipseGeometry(D2D1_ELLIPSE const& ellipse) = 0;
-        virtual ComPtr<ID2D1RoundedRectangleGeometry> CreateRoundedRectangleGeometry(D2D1_ROUNDED_RECT const& roundedRect) = 0;
-        virtual ComPtr<ID2D1PathGeometry1> CreatePathGeometry() = 0;
-        virtual ComPtr<ID2D1GeometryGroup> CreateGeometryGroup(D2D1_FILL_MODE fillMode, ID2D1Geometry** d2dGeometries, uint32_t geometryCount) = 0;
-        virtual ComPtr<ID2D1TransformedGeometry> CreateTransformedGeometry(ID2D1Geometry* d2dGeometry, D2D1_MATRIX_3X2_F* transform) = 0;
-
         virtual ComPtr<ID2D1GeometryRealization> CreateFilledGeometryRealization(ID2D1Geometry* geometry, float flatteningTolerance) = 0;
         virtual ComPtr<ID2D1GeometryRealization> CreateStrokedGeometryRealization(
             ID2D1Geometry* geometry, 
@@ -163,13 +156,21 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
         virtual void ThrowIfCreateSurfaceFailed(HRESULT hr, wchar_t const* typeName, uint32_t width, uint32_t height) = 0;
 
-        virtual ComPtr<ID2D1Effect> LeaseHistogramEffect(ID2D1DeviceContext* d2dContext) = 0;
-        virtual void ReleaseHistogramEffect(ComPtr<ID2D1Effect>&& effect) = 0;
+        struct HistogramAndAtlasEffects
+        {
+            ComPtr<ID2D1Effect> HistogramEffect;
+            ComPtr<ID2D1Effect> AtlasEffect;
+        };
+
+        virtual HistogramAndAtlasEffects LeaseHistogramEffect(ID2D1DeviceContext* d2dContext) = 0;
+        virtual void ReleaseHistogramEffect(HistogramAndAtlasEffects&& effects) = 0;
 
 #if WINVER > _WIN32_WINNT_WINBLUE
         virtual ComPtr<ID2D1GradientMesh> CreateGradientMesh(D2D1_GRADIENT_MESH_PATCH const* patches, uint32_t patchCount) = 0;
 
         virtual bool IsSpriteBatchQuirkRequired() = 0;
+
+        virtual ComPtr<ID2D1SvgDocument> CreateSvgDocument(IStream* inputXmlStream) = 0;
 #endif
     };
 
@@ -208,6 +209,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
         DeviceContextPool m_deviceContextPool;
 
         ComPtr<ID2D1Effect> m_histogramEffect;
+        ComPtr<ID2D1Effect> m_atlasEffect;
 
 #if WINVER > _WIN32_WINNT_WINBLUE
         std::mutex m_quirkMutex;
@@ -342,13 +344,6 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
         virtual ComPtr<ID2D1CommandList> CreateCommandList() override;
 
-        virtual ComPtr<ID2D1RectangleGeometry> CreateRectangleGeometry(D2D1_RECT_F const& rectangle) override;
-        virtual ComPtr<ID2D1EllipseGeometry> CreateEllipseGeometry(D2D1_ELLIPSE const& ellipse) override;
-        virtual ComPtr<ID2D1RoundedRectangleGeometry> CreateRoundedRectangleGeometry(D2D1_ROUNDED_RECT const& roundedRect) override;
-        virtual ComPtr<ID2D1PathGeometry1> CreatePathGeometry() override;
-        virtual ComPtr<ID2D1GeometryGroup> CreateGeometryGroup(D2D1_FILL_MODE fillMode, ID2D1Geometry** d2dGeometries, uint32_t geometryCount) override;
-        virtual ComPtr<ID2D1TransformedGeometry> CreateTransformedGeometry(ID2D1Geometry* d2dGeometry, D2D1_MATRIX_3X2_F* transform) override;
-
         virtual ComPtr<ID2D1GeometryRealization> CreateFilledGeometryRealization(ID2D1Geometry* geometry, float flatteningTolerance) override;
         virtual ComPtr<ID2D1GeometryRealization> CreateStrokedGeometryRealization(
             ID2D1Geometry* geometry,
@@ -366,13 +361,15 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas
 
         virtual void ThrowIfCreateSurfaceFailed(HRESULT hr, wchar_t const* typeName, uint32_t width, uint32_t height) override;
 
-        virtual ComPtr<ID2D1Effect> LeaseHistogramEffect(ID2D1DeviceContext* d2dContext) override;
-        virtual void ReleaseHistogramEffect(ComPtr<ID2D1Effect>&& effect) override;
+        virtual HistogramAndAtlasEffects LeaseHistogramEffect(ID2D1DeviceContext* d2dContext) override;
+        virtual void ReleaseHistogramEffect(HistogramAndAtlasEffects&& effects) override;
 
 #if WINVER > _WIN32_WINNT_WINBLUE
         virtual ComPtr<ID2D1GradientMesh> CreateGradientMesh(D2D1_GRADIENT_MESH_PATCH const* patches, uint32_t patchCount) override;
 
         virtual bool IsSpriteBatchQuirkRequired() override;
+
+        virtual ComPtr<ID2D1SvgDocument> CreateSvgDocument(IStream* inputXmlStream) override;
 #endif
 
         //

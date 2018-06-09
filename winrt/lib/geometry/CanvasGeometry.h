@@ -11,15 +11,82 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
     using namespace ::Microsoft::WRL;
     using namespace Numerics;
 
+    class GeometryAdapter;
+    class DefaultGeometryAdapter;
+
+
+    // When geometry is used without an associated CanvasDevice, this singleton provides
+    // the necessary D2D factory. Thus all deviceless geometry will share the same factory.
+    class StandaloneGeometryFactory : public Singleton<StandaloneGeometryFactory>
+    {
+        ComPtr<ID2D1Factory2> m_d2dFactory;
+
+    public:
+        StandaloneGeometryFactory();
+
+        ComPtr<ID2D1Factory2> GetD2DFactory() const { return m_d2dFactory; }
+    };
+
+
+    // Abstracts the details of how CanvasGeometry and CanvasPathBuilder track which device they
+    // are associated with. This can be either a ComPtr to a CanvasDevice, or a StandaloneGeometryFactory
+    // if the Win2D geometry objects were created without an associated device.
+    class GeometryDevicePtr
+    {
+        // These fields are alternatives: one or the other of them will always be null.
+        ComPtr<ICanvasDevice> m_canvasDevice;
+        std::shared_ptr<StandaloneGeometryFactory> m_standaloneFactory;
+
+    public:
+        explicit GeometryDevicePtr(ICanvasResourceCreator* resourceCreator);
+        explicit GeometryDevicePtr(ICanvasDevice* canvasDevice);
+
+        void Close();
+        GeometryDevicePtr const& EnsureNotClosed();
+
+        ComPtr<ICanvasDevice> GetCanvasDevice() const;
+        ComPtr<ID2D1Factory2> GetD2DFactory() const;
+    };
+
+
+    // Adapter allows unit tests to intercept how D2D geometry objects are created (for inserting mocks).
+    class GeometryAdapter : public Singleton<GeometryAdapter, DefaultGeometryAdapter>
+    {
+    public:
+        virtual ~GeometryAdapter() = default;
+
+        virtual ComPtr<ID2D1RectangleGeometry> CreateRectangleGeometry(GeometryDevicePtr const& device, D2D1_RECT_F const& rectangle) = 0;
+        virtual ComPtr<ID2D1EllipseGeometry> CreateEllipseGeometry(GeometryDevicePtr const& device, D2D1_ELLIPSE const& ellipse) = 0;
+        virtual ComPtr<ID2D1RoundedRectangleGeometry> CreateRoundedRectangleGeometry(GeometryDevicePtr const& device, D2D1_ROUNDED_RECT const& roundedRect) = 0;
+        virtual ComPtr<ID2D1PathGeometry1> CreatePathGeometry(GeometryDevicePtr const& device) = 0;
+        virtual ComPtr<ID2D1GeometryGroup> CreateGeometryGroup(GeometryDevicePtr const& device, D2D1_FILL_MODE fillMode, ID2D1Geometry** d2dGeometries, uint32_t geometryCount) = 0;
+        virtual ComPtr<ID2D1TransformedGeometry> CreateTransformedGeometry(GeometryDevicePtr const& device, ID2D1Geometry* d2dGeometry, D2D1_MATRIX_3X2_F* transform) = 0;
+    };
+
+
+    class DefaultGeometryAdapter : public GeometryAdapter
+    {
+    public:
+        virtual ComPtr<ID2D1RectangleGeometry> CreateRectangleGeometry(GeometryDevicePtr const& device, D2D1_RECT_F const& rectangle) override;
+        virtual ComPtr<ID2D1EllipseGeometry> CreateEllipseGeometry(GeometryDevicePtr const& device, D2D1_ELLIPSE const& ellipse) override;
+        virtual ComPtr<ID2D1RoundedRectangleGeometry> CreateRoundedRectangleGeometry(GeometryDevicePtr const& device, D2D1_ROUNDED_RECT const& roundedRect) override;
+        virtual ComPtr<ID2D1PathGeometry1> CreatePathGeometry(GeometryDevicePtr const& device) override;
+        virtual ComPtr<ID2D1GeometryGroup> CreateGeometryGroup(GeometryDevicePtr const& device, D2D1_FILL_MODE fillMode, ID2D1Geometry** d2dGeometries, uint32_t geometryCount) override;
+        virtual ComPtr<ID2D1TransformedGeometry> CreateTransformedGeometry(GeometryDevicePtr const& device, ID2D1Geometry* d2dGeometry, D2D1_MATRIX_3X2_F* transform) override;
+    };
+
+
     class CanvasGeometry : RESOURCE_WRAPPER_RUNTIME_CLASS(
         ID2D1Geometry,
         CanvasGeometry,
         ICanvasGeometry,
+        ABI::Windows::Graphics::IGeometrySource2D,
+        ABI::Windows::Graphics::IGeometrySource2DInterop,
         CloakedIid<ICanvasResourceWrapperWithDevice>)
     {
         InspectableClass(RuntimeClass_Microsoft_Graphics_Canvas_Geometry_CanvasGeometry, BaseTrust);
 
-        ClosablePtr<ICanvasDevice> m_canvasDevice;
+        GeometryDevicePtr m_device;
 
     public:
         static ComPtr<CanvasGeometry> CreateNew(
@@ -75,9 +142,8 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             float flatteningTolerance);
 #endif
 
-        CanvasGeometry(
-            ICanvasDevice* canvasDevice,
-            ID2D1Geometry* d2dGeometry);
+        CanvasGeometry(GeometryDevicePtr const& device, ID2D1Geometry* d2dGeometry);
+        CanvasGeometry(ICanvasDevice* device, ID2D1Geometry* d2dGeometry);
 
         IFACEMETHOD(Close)();
 
@@ -240,6 +306,14 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
 
         IFACEMETHOD(SendPathTo)(
             ICanvasPathReceiver* streamReader) override;
+
+        // IGeometrySource2DInterop
+        IFACEMETHOD(GetGeometry)(
+            ID2D1Geometry** geometry) override;
+
+        IFACEMETHOD(TryGetGeometryUsingFactory)(
+            ID2D1Factory* factory,
+            ID2D1Geometry** geometry) override;
 
     private:
         void StrokeImpl(

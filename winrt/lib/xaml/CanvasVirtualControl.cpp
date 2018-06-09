@@ -408,6 +408,10 @@ void CanvasVirtualControl::WindowVisibilityChanged()
         {
             ThrowIfFailed(imageSource->RaiseRegionsInvalidatedIfAny());
         }
+        else
+        {
+            Changed(ChangeReason::Other);
+        }
     }
 }
 
@@ -420,7 +424,7 @@ HRESULT CanvasVirtualControl::OnRegionsInvalidated(ICanvasVirtualImageSource* se
 
 void CanvasVirtualControl::OnRegionsInvalidatedImpl(ICanvasVirtualImageSource*, ICanvasRegionsInvalidatedEventArgs* args)
 {
-    if (!IsWindowVisible())
+    if (!IsVisible())
         return;
     
     RunWithCurrentRenderTarget(

@@ -33,7 +33,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         virtual bool IsDesignModeEnabled() = 0;
 
         virtual ComPtr<IInspectable> CreateUserControl(IInspectable* canvasControl) = 0;
-        virtual std::unique_ptr<IRecreatableDeviceManager<TRAITS>> CreateRecreatableDeviceManager() = 0;
+        virtual std::unique_ptr<IRecreatableDeviceManager<TRAITS>> CreateRecreatableDeviceManager(IInspectable* parentControl) = 0;
         virtual RegisteredEvent AddApplicationSuspendingCallback(IEventHandler<SuspendingEventArgs*>*) = 0;
         virtual RegisteredEvent AddApplicationResumingCallback(IEventHandler<IInspectable*>*) = 0;
         virtual float GetLogicalDpi() = 0;
@@ -132,7 +132,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
     public:
         BaseControl(std::shared_ptr<adapter_t> adapter, bool useSharedDevice)
             : m_adapter(adapter)
-            , m_recreatableDeviceManager(adapter->CreateRecreatableDeviceManager())
+            , m_recreatableDeviceManager(adapter->CreateRecreatableDeviceManager(GetControlInterface()))
             , m_loadedCount(0)
             , m_isLoaded(false)
             , m_isSuspended(false)
@@ -444,6 +444,11 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
             return static_cast<TRAITS::control_t*>(this);
         }
 
+        typename TRAITS::controlInterface_t* GetControlInterface()
+        {
+            return this;    // Narrowing conversion disambiguates between multiple possible IInspectable implementations.
+        }
+
         void CheckIsOnUIThread()
         {
             // 
@@ -478,25 +483,6 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
         IWindow* GetWindow()
         { 
             return m_window.Get(); 
-        }
-
-        bool IsWindowVisible() const
-        {
-            boolean visible;
-
-            HRESULT hr = m_window->get_Visible(&visible);
-
-            if (hr == E_FAIL)
-            {
-                // In design mode get_Visible will return E_FAIL.  In this case we
-                // just treat the window as visible.
-                return true;
-            }
-            else
-            {
-                ThrowIfFailed(hr);
-                return !!visible;
-            }
         }
 
         bool IsReadyToDraw() const
@@ -740,7 +726,6 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
 
             RegisterEventHandlerOnSelf(frameworkElement, &IFrameworkElement::add_SizeChanged, &BaseControl::OnSizeChanged);
 
-
             m_recreatableDeviceManager->SetChangedCallback(
                 [=] (ChangeReason reason)
                 {
@@ -806,6 +791,7 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
                     if (++m_loadedCount == 1)
                     {
                         RegisterEventHandlers();
+                        UpdateIsVisible();
                         UpdateLastSeenParent();
                         Loaded();
 
@@ -816,6 +802,17 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
                         Changed(ChangeReason::Other);
                     }
                 });
+        }
+
+        void UpdateIsVisible()
+        {
+            boolean isVisible;
+
+            // get_Visible fails when running in the designer, in which case we leave m_isVisible set to true.
+            if (SUCCEEDED(m_window->get_Visible(&isVisible)))
+            {
+                m_isVisible = !!isVisible;
+            }
         }
 
         void UpdateLastSeenParent()
@@ -925,7 +922,6 @@ namespace ABI { namespace Microsoft { namespace Graphics { namespace Canvas { na
                     
                     WindowVisibilityChanged();
                 });
-
         }
     };
 

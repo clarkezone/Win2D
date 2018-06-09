@@ -2,8 +2,6 @@
 //
 // Licensed under the MIT License. See LICENSE.txt in the project root for license information.
 
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -39,8 +37,8 @@ namespace exportsample
 
         void CleanDestinationDirectory()
         {
-            // Delete all the directories under the sample (leaving any files in the root).  This is to allow
-            // us to catch (re)moved files.
+            // Delete all the directories and files under the sample (except for the .sln, which is
+            // unique to the exported samples repro).  This is to allow us to catch (re)moved files.
             if (!Directory.Exists(sample.Destination))
                 return;
 
@@ -48,14 +46,20 @@ namespace exportsample
             {
                 Directory.Delete(dir, true);
             }
+
+            foreach (var file in Directory.EnumerateFiles(sample.Destination))
+            {
+                if (Path.GetExtension(file) != ".sln")
+                {
+                    File.Delete(file);
+                }
+            }
         }
 
         void ExportSampleProjects()
         {
             // Process all the projects.  Any files referenced by a project will be exported.
             var projects = FindProjects();
-
-            bool isSingletonProject = (projects.Length == 1);
 
             remainingProjects = new HashSet<string>(from project in projects select project.FullName);
             copiedFiles = new HashSet<string>();
@@ -67,7 +71,7 @@ namespace exportsample
 
                 if (!copiedFiles.Contains(destination) && File.Exists(project))
                 {
-                    ExportProject(project, destination, isSingletonProject);
+                    ExportProject(project, destination);
                     copiedFiles.Add(destination);
                 }
 
@@ -101,15 +105,15 @@ namespace exportsample
             return new DirectoryInfo(sourceDir).GetFiles("*proj", SearchOption.AllDirectories);
         }
 
-        void ExportProject(string source, string destination, bool isSingletonProject)
+        void ExportProject(string source, string destination)
         {
-            ProcessAndCopyProject(source, destination, isSingletonProject);
+            ProcessAndCopyProject(source, destination);
             CopyProjectFilters(source);
         }
 
-        void ProcessAndCopyProject(string source, string destination, bool isSingletonProject)
+        void ProcessAndCopyProject(string source, string destination)
         {
-            var project = ProjectProcessor.Export(source, isSingletonProject, config, sample, destination);
+            var project = ProjectProcessor.Export(source, config, sample, destination);
 
             remainingProjects.UnionWith(project.FindImportedProjectsThatNeedExporting());
 
@@ -121,8 +125,8 @@ namespace exportsample
                         CopyPackagesConfigWithAddedWin2DReference(project);
                         break;
 
-                    case NuGetProjectType.ProjectJson:
-                        CopyProjectJsonWithAddedWin2DReference(project);
+                    case NuGetProjectType.Csproj:
+                        // nothing - .csproj <PackageReference> doesn't require any external files
                         break;
 
                     default:
@@ -196,37 +200,6 @@ namespace exportsample
             existingReferences.ToList().ForEach(e => e.Remove());
         }
 
-        void CopyProjectJsonWithAddedWin2DReference(ProjectProcessor project)
-        {
-            var source = Path.Combine(project.SourceDirectory, "project.json");
-            var destination = Path.Combine(project.DestinationDirectory, "project.json");
-
-            if (!File.Exists(source))
-            {
-                // We're not going to try and create new ones of these from scratch; we'll just
-                // update the existing one.
-                throw new Exception(string.Format("Could not find existing {0}", source));
-            }
-
-            using (var reader = File.OpenText(source))
-            {
-                var projectJson = JObject.Load(new JsonTextReader(reader));
-                projectJson["dependencies"].Children().Last().AddAfterSelf(
-                    new JProperty(project.Win2DPackage, config.Options.Win2DVersion));
-
-                using (var writer = File.CreateText(destination))
-                {
-                    var jsonWriter = new JsonTextWriter(writer)
-                    {
-                        Formatting = Formatting.Indented
-                    };
-
-                    projectJson.WriteTo(jsonWriter);
-                    copiedFiles.Add(destination);
-                }
-            }
-        }
-
         void CopyReferencedFiles(ProjectProcessor project)
         {
             foreach (var srcDst in project.FilesToCopy)
@@ -234,7 +207,7 @@ namespace exportsample
                 var source = srcDst.Key;
                 var destination = srcDst.Value;
 
-                if (!copiedFiles.Contains(destination))
+                if (!copiedFiles.Contains(destination) && !destination.EndsWith("proj"))
                 {
                     CopyFile(source, destination);
                     copiedFiles.Add(destination);
