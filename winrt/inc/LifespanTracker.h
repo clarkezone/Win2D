@@ -116,13 +116,13 @@ public:
 
         if (!liveObjects.empty())
         {
-            OutputDebugString(L"Live Win2D objects (may indicate leaks):\n");
+            //OutputDebugString(L"Live Win2D objects (may indicate leaks):\n");
 
             for (auto& typeAndCount : liveObjects)
             {
                 WinStringBuilder string;
                 string.Format(L"    %hs (%Iu)\n", typeAndCount.first.name(), typeAndCount.second);
-                OutputDebugString((wchar_t const*)string.Get());
+                //OutputDebugString((wchar_t const*)string.Get());
              
                 totalLiveObjects += typeAndCount.second;
             }
@@ -150,7 +150,7 @@ private:
         {
             WinStringBuilder string;
             string.Format(L"LifespanTracker: %s %hs (%Iu)\n", isNew ? L"new" : L"delete", type.name(), objectCount);
-            OutputDebugString((wchar_t const*)string.Get());
+            //OutputDebugString((wchar_t const*)string.Get());
         }
 
         // Optional debug break for alloc and free of selected types.
